@@ -3,6 +3,7 @@
   "version": "0.0.0",
   "description": "Runner-agnostic core for covsel: Observer, Mapper, Store, Selector, Policy, and the versioned map schema",
   "license": "MIT",
+  "author": "WAVIISoft, LLC",
   "type": "module",
   "main": "./dist/index.cjs",
   "module": "./dist/index.js",

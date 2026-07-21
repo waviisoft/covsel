@@ -70,6 +70,10 @@ can't be sure, we run it.**
 | `@covsel/adapter-generic` | Level-0 wrap-any-command adapter                                         |
 | `@covsel/adapter-*`       | Per-runner adapters (community contribution lane)                        |
 
+## Documentation
+
+Full docs: **https://waviisoft.github.io/covsel/** (source in [`docs/`](./docs)).
+
 ## Development
 
 ```bash
@@ -77,6 +81,7 @@ pnpm install
 pnpm build
 pnpm test
 pnpm lint && pnpm typecheck
+pnpm docs:dev      # run the docs site locally
 ```
 
 Node ≥ 20 required. See [CONTRIBUTING.md](./CONTRIBUTING.md).

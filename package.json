@@ -4,6 +4,7 @@
   "version": "0.0.0",
   "description": "Runtime-coverage test impact analysis for any JS/TS runner",
   "license": "MIT",
+  "author": "WAVIISoft, LLC",
   "packageManager": "pnpm@11.15.1",
   "engines": {
     "node": ">=20"
@@ -17,7 +18,10 @@
     "format:check": "prettier --check .",
     "changeset": "changeset",
     "release": "pnpm build && changeset publish",
-    "spike:observer": "node spikes/observer/run-spike.mjs"
+    "spike:observer": "node spikes/observer/run-spike.mjs",
+    "docs:dev": "pnpm --filter covsel-docs docs:dev",
+    "docs:build": "pnpm --filter covsel-docs docs:build",
+    "docs:preview": "pnpm --filter covsel-docs docs:preview"
   },
   "devDependencies": {
     "@changesets/cli": "^2.27.0",

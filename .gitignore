@@ -5,3 +5,7 @@ coverage/
 .covsel/
 *.tsbuildinfo
 .DS_Store
+
+# VitePress
+docs/.vitepress/cache/
+docs/.vitepress/dist/

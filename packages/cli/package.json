@@ -3,6 +3,7 @@
   "version": "0.0.0",
   "description": "Runtime-coverage test impact analysis for any JS/TS runner — run only the tests your diff can affect",
   "license": "MIT",
+  "author": "WAVIISoft, LLC",
   "type": "module",
   "bin": {
     "covsel": "./dist/bin.js"
