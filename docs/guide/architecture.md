@@ -24,8 +24,9 @@ Adapters depend on `core` only.
 
 - **Level 0 — zero-integration, per-_file_.** Run each test file in its own
   process with `NODE_V8_COVERAGE`; get a per-file map with **no runner
-  integration**. The adapter is just "wrap the command." This is the MVP, and
-  it's already de-risked by the [observer spike](https://github.com/waviisoft/covsel/tree/main/spikes/observer).
+  integration**. The adapter is just "wrap the command." This is the first
+  target, and the mechanism is guarded by an integration test in `@covsel/core`
+  that asserts a test file maps to exactly the sources it executes.
 - **Level 1 — per-_test_.** Snapshot V8 coverage before/after each test via the
   inspector and diff. Selects individual tests/scenarios. Needs one thin
   lifecycle shim per runner.

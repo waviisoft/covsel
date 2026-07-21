@@ -1,9 +1,9 @@
 # Getting started
 
-::: warning Status: pre-alpha (Milestone 0)
+::: warning Status: pre-alpha
 Selection commands are not available yet. Today the CLI ships only `--help` and
-`--version`; the record/affected/run loop below is the **target UX** for
-Milestone 1. Follow the [roadmap](/guide/roadmap) for progress.
+`--version`; the record/affected/run loop below is the **target UX**. Follow the
+[roadmap](/guide/roadmap) for progress.
 :::
 
 ## Requirements
@@ -18,7 +18,7 @@ npx covsel --help
 npx covsel --version
 ```
 
-## Target UX (Milestone 1)
+## Target UX
 
 Once selection lands, the loop is zero-config to start:
 

@@ -30,8 +30,6 @@ jobs:
       - run: pnpm build
       - run: pnpm test
       - run: pnpm format:check
-      - name: Observer spike (de-risks the Level-0 MVP)
-        run: pnpm spike:observer
 
   docs:
     name: Build docs

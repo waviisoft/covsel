@@ -1,26 +1,58 @@
 name: Adapter request
-description: Request (or volunteer to build) support for a test runner
-labels: [adapter, good-first-issue]
+description: Request (or volunteer to build) covsel support for a test runner
+title: 'adapter: '
+labels: [adapter, good first issue]
 body:
+  - type: markdown
+    attributes:
+      value: |
+        Adapters are covsel's **primary community contribution lane** — core
+        stays small and stable while runner support grows on the outside. A
+        covsel adapter does two things: it lets code run around each test (so we
+        can observe coverage per test), and it translates a selection into the
+        runner's native input (a file list, tags, `feature:line`, …).
+
+        The details below are exactly what someone needs to build the adapter,
+        so the more you can fill in, the faster it can happen — and you don't
+        have to be the one to build it. See
+        [CONTRIBUTING.md](https://github.com/waviisoft/covsel/blob/main/CONTRIBUTING.md#writing-an-adapter)
+        for the how-to, and search
+        [existing issues](https://github.com/waviisoft/covsel/issues) first.
+
+        > ⚠️ **No secrets or personal data.** Keep tokens, internal URLs, and
+        > private code out of the examples below. This issue is public.
   - type: input
     id: runner
     attributes:
       label: Runner name + link
+      description: The test runner and a link to its docs.
+      placeholder: 'AVA — https://github.com/avajs/ava'
     validations:
       required: true
   - type: textarea
     id: lifecycle
     attributes:
       label: Lifecycle hooks
-      description: How can code run before/after each test? (reporter API, hooks, plugins…)
+      description: >-
+        How can code run before/after each test? Point at the reporter API,
+        hooks, or plugin surface (with doc links) if you know them.
   - type: textarea
     id: selection
     attributes:
       label: Native selection syntax
-      description: How does one tell this runner to run a subset? (file list, tags, grep, feature:line…)
+      description: >-
+        How do you tell this runner to run a subset? File list, tags, grep,
+        `feature:line`, a config option? Link the docs.
+  - type: textarea
+    id: notes
+    attributes:
+      label: Anything else
+      description: Transpile setup, parallelism/workers, source-map quirks, or prior art worth knowing.
   - type: checkboxes
     id: volunteer
     attributes:
       label: Contribution
       options:
-        - label: I'd like to build this adapter myself
+        - label: I'd like to build this adapter myself.
+        - label: This request contains no secrets or personal data.
+          required: true

@@ -18,7 +18,6 @@
     "format:check": "prettier --check .",
     "changeset": "changeset",
     "release": "pnpm build && changeset publish",
-    "spike:observer": "node spikes/observer/run-spike.mjs",
     "docs:dev": "pnpm --filter covsel-docs docs:dev",
     "docs:build": "pnpm --filter covsel-docs docs:build",
     "docs:preview": "pnpm --filter covsel-docs docs:preview"

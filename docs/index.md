@@ -37,7 +37,7 @@ features:
       sentinel changes trigger a full run, a stale map means a full run.
 ---
 
-::: warning Status: pre-alpha (Milestone 0)
-The map schema, layer interfaces, and CLI shell exist. Selection lands in
-Milestone 1 — see the [roadmap](/guide/roadmap).
+::: warning Status: pre-alpha
+The map schema, layer interfaces, and CLI shell exist; selection is in progress.
+See the [roadmap](/guide/roadmap).
 :::

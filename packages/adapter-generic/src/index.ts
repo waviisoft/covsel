@@ -3,7 +3,7 @@
  *
  * Wraps any runner command: each test *file* runs in its own process with
  * NODE_V8_COVERAGE set, yielding a per-file map with no runner integration.
- * Implementation lands in Milestone 1 (Issue #14).
+ * Only selection formatting is implemented so far; coverage recording follows.
  */
 import type { Adapter, TestId } from '@covsel/core';
 

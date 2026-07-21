@@ -1,39 +1,44 @@
 # Roadmap
 
-covsel ships in milestones. The full plan — including the seed issue backlog —
-is in [DESIGN.md](https://github.com/waviisoft/covsel/blob/main/DESIGN.md).
+Work is tracked in the open on GitHub. For live status — what's in progress and
+what's up for grabs — see the
+[issue tracker](https://github.com/waviisoft/covsel/issues). This page is the
+high-level shape; [`DESIGN.md`](https://github.com/waviisoft/covsel/blob/main/DESIGN.md)
+has the full architecture.
 
-## Milestone 0 — Repo bootstrap ✅
+## Now — foundations
 
-Repo exists, CI is green, the OSS scaffolding is complete, and a contributor can
-clone, `pnpm install`, `pnpm test`, and `pnpm build` with zero manual steps. The
-CLI shell (`--help` / `--version`) and the versioned map schema are in place.
+The repo, toolchain, and CI are in place. The map schema is defined and
+versioned, the layer interfaces are published from `@covsel/core`, and the CLI
+shell (`--help` / `--version`) ships. An integration test proves the Level-0
+coverage-observation mechanism.
 
-## Milestone 1 — MVP: Level-0 file-level selection
+## Next — file-level selection (the MVP)
 
-- `core`: Observer (`NODE_V8_COVERAGE` process mode), Mapper (source-map →
-  `sourceGlobs`), local Store, file-level Selector, Policy (fail-open,
-  sentinels, new-test detection).
-- `adapter-generic` + `adapter-vitest`.
+The first end-to-end loop, at per-file granularity with zero runner integration:
+
+- Observer for `NODE_V8_COVERAGE` process mode, Mapper from coverage to your
+  source globs, a local Store, a file-level Selector, and the fail-open Policy
+  (sentinels, new-test detection).
+- The generic wrap-any-command adapter and a first Vitest adapter.
 - CLI: `record`, `affected`, `run`, `status`.
-- `examples/vitest-basic` proves the loop end-to-end in CI.
 
 **Done when:** editing one source file selects only the test files that execute
 it; editing a sentinel selects everything; a brand-new test always runs.
 
-## Milestone 2 — v1: per-test precision + real adapters
+## Later — per-test precision and real adapters
 
-- Inspector snapshot-diff Observer (per-test granularity).
-- **Block-hash** granularity in the Mapper.
-- Adapters: `jest`, `mocha`, `node:test`, **`cucumber`**, `playwright`.
-- CI story: publish-map-on-main, fetch-merge-base-map-on-PR, shard-merge; Stores
-  for GitHub Actions cache + S3/GCS.
+- Inspector snapshot-diff observation for per-test granularity.
+- Block-hash granularity so the map survives reformatting and line shifts.
+- Adapters for Jest, Mocha, node:test, cucumber-js, and Playwright.
+- CI story: publish the map on the default branch, fetch the merge-base map on a
+  PR, and merge shard maps; Stores for the GitHub Actions cache and S3/GCS.
 - `covsel watch`.
 
-## Milestone 3 — v2: bundlers, monorepo, ecosystem
+## Beyond — bundlers, monorepos, ecosystem
 
-- Bundler source-map plugins (Turbopack/webpack/esbuild/vite) for browser
+- Bundler source-map plugins (Turbopack/webpack/esbuild/Vite) for browser
   coverage.
 - Compose with Nx/Turbo project graphs.
 - fs-read tracking for non-JS dependencies.
-- Optional remote map service.
+- An optional remote map service.

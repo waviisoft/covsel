@@ -1,14 +1,61 @@
 name: Feature request
-description: Propose an improvement
+description: Propose an improvement or new capability
+title: 'feat: '
 labels: [enhancement]
 body:
+  - type: markdown
+    attributes:
+      value: |
+        Have an idea for covsel? Tell us the **problem** first — the concrete
+        situation you're stuck in — and let the solution follow. That helps us
+        find the best fit, which sometimes isn't the feature originally imagined.
+
+        Good to know:
+        - Requests for a new **test runner** belong in the *Adapter request*
+          template instead.
+        - Search [existing issues](https://github.com/waviisoft/covsel/issues)
+          first — a 👍 on an existing request helps us prioritize.
+        - Keep covsel's north star in mind: it must never skip a test your change
+          could affect. Proposals are weighed against that guarantee.
+
+        > ⚠️ **Do not include secrets or personal data.** Scrub tokens,
+        > credentials, internal URLs, and customer data from any example. This
+        > issue is public.
   - type: textarea
     id: problem
     attributes:
-      label: Problem
+      label: Problem / motivation
+      description: >-
+        What are you trying to do, and where does covsel get in the way today?
+        Concrete scenarios beat abstract asks.
     validations:
       required: true
   - type: textarea
     id: proposal
     attributes:
       label: Proposed solution
+      description: What would you like covsel to do? Sketch the CLI/config/API shape if you can.
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives considered
+      description: Other approaches or workarounds you've tried or thought about.
+  - type: dropdown
+    id: contribute
+    attributes:
+      label: Would you like to help build this?
+      options:
+        - "I'm just requesting"
+        - "I'd be willing to help"
+        - "I'd like to own it"
+    validations:
+      required: false
+  - type: checkboxes
+    id: hygiene
+    attributes:
+      label: Before submitting
+      options:
+        - label: I searched existing issues and this is not a duplicate.
+          required: true
+        - label: This request contains no secrets or personal data.
+          required: true

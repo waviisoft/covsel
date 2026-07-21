@@ -35,15 +35,18 @@ it's opt-in. See [Architecture](/guide/architecture) for the layered design.
 
 ## Supported runners
 
-| Runner                     | Level 0 (per-file) | Level 1 (per-test)  |
-| -------------------------- | ------------------ | ------------------- |
-| Any command (generic wrap) | M1                 | —                   |
-| Vitest                     | M1                 | M2                  |
-| Jest                       | M1 (generic)       | M2                  |
-| Mocha                      | M1 (generic)       | M2                  |
-| node:test                  | M1 (generic)       | M2                  |
-| cucumber-js                | M1 (generic)       | M2 (scenario-level) |
-| Playwright                 | M1 (generic)       | M2                  |
+Every runner is supported at the file level through the generic wrap; per-test
+precision is planned per runner.
+
+| Runner                     | Per-file (Level 0) | Per-test (Level 1) |
+| -------------------------- | ------------------ | ------------------ |
+| Any command (generic wrap) | planned            | —                  |
+| Vitest                     | planned            | later              |
+| Jest                       | planned (generic)  | later              |
+| Mocha                      | planned (generic)  | later              |
+| node:test                  | planned (generic)  | later              |
+| cucumber-js                | planned (generic)  | later (scenario)   |
+| Playwright                 | planned (generic)  | later              |
 
 ## Prior art & credits
 

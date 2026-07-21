@@ -4,8 +4,10 @@
 > static import-graph selection lies, and the only option for runners that have
 > no selection at all.
 
-**Status: pre-alpha (Milestone 0).** The map schema, layer interfaces, and CLI
-surface exist; selection lands in Milestone 1. See [`DESIGN.md`](./DESIGN.md).
+**Status: pre-alpha.** The map schema, layer interfaces, and CLI shell exist;
+selection is in progress. Track the work in the
+[issues](https://github.com/waviisoft/covsel/issues), and see
+[`DESIGN.md`](./DESIGN.md) for the architecture.
 
 ## The problem
 
@@ -20,7 +22,11 @@ Ekstazi/STARTS, and Ruby's Crystalball: **watch what code each test actually
 executes** (via V8 coverage), persist a test → covered-code map, and — given a
 git diff — run only the tests whose covered code changed.
 
-## Quickstart (target UX — Milestone 1)
+## Quickstart (target UX)
+
+> The selection commands below are the target UX and are not available yet; the
+> CLI currently ships `--help` and `--version`. Follow the
+> [issues](https://github.com/waviisoft/covsel/issues) for progress.
 
 ```bash
 # Record a full run and build the map
@@ -51,15 +57,18 @@ can't be sure, we run it.**
 
 ## Supported runners
 
-| Runner                     | Level 0 (per-file) | Level 1 (per-test)  |
-| -------------------------- | ------------------ | ------------------- |
-| Any command (generic wrap) | M1                 | —                   |
-| Vitest                     | M1                 | M2                  |
-| Jest                       | M1 (generic)       | M2                  |
-| Mocha                      | M1 (generic)       | M2                  |
-| node:test                  | M1 (generic)       | M2                  |
-| cucumber-js                | M1 (generic)       | M2 (scenario-level) |
-| Playwright                 | M1 (generic)       | M2                  |
+All runners are supported at the file level through the generic wrap; per-test
+precision is planned per runner.
+
+| Runner                     | Per-file (Level 0) | Per-test (Level 1) |
+| -------------------------- | ------------------ | ------------------ |
+| Any command (generic wrap) | planned            | —                  |
+| Vitest                     | planned            | later              |
+| Jest                       | planned (generic)  | later              |
+| Mocha                      | planned (generic)  | later              |
+| node:test                  | planned (generic)  | later              |
+| cucumber-js                | planned (generic)  | later (scenario)   |
+| Playwright                 | planned (generic)  | later              |
 
 ## Packages
 

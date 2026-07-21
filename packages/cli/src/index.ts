@@ -1,17 +1,17 @@
 import { MAP_SCHEMA_VERSION } from '@covsel/core';
 
 /**
- * Commands are added here only as they become usable. Until selection lands
- * (Milestone 1, see DESIGN.md §7) the CLI ships nothing it cannot actually do:
- * it prints help and its version, and nothing else. The planned surface —
- * record / affected / run / watch / explain / status — is documented in the
- * README's "target UX" section, not advertised here as if it worked.
+ * Commands are added here only as they become usable. While covsel is
+ * pre-alpha the CLI ships nothing it cannot actually do: it prints help and
+ * its version, and nothing else. The planned command surface — record /
+ * affected / run / watch / explain / status — is documented in the README's
+ * "target UX" section, not advertised here as if it worked.
  */
 const HELP = `covsel — runtime-coverage test impact analysis for any JS/TS runner
 
-Status: pre-alpha (Milestone 0). No selection commands are available yet; the
-map schema, layer interfaces, and this CLI shell exist, and selection lands in
-Milestone 1. See DESIGN.md and the README for the planned command surface.
+Status: pre-alpha. No selection commands are available yet; the map schema,
+layer interfaces, and this CLI shell exist. See the README for the planned
+command surface and how to follow along.
 
 Usage:
   covsel --help       Show this help
@@ -34,8 +34,6 @@ export function main(argv: string[] = process.argv.slice(2)): number {
     process.stdout.write(`${VERSION}\n`);
     return 0;
   }
-  process.stderr.write(
-    `covsel: no commands are available yet (Milestone 0). Run covsel --help.\n`,
-  );
+  process.stderr.write(`covsel: no commands are available yet. Run covsel --help.\n`);
   return 1;
 }
