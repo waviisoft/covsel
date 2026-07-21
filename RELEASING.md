@@ -51,6 +51,23 @@ summary (it becomes the changelog entry). Commit the generated file under
 `.changeset/` as part of your PR. Changes that are purely internal (refactors,
 test-only, CI) don't need one.
 
+## Publishing is deferred (pre-alpha)
+
+While covsel is pre-alpha, **nothing is published to npm.** The Release
+workflow's publish step is guarded by `if: env.NPM_TOKEN != ''`, so with no
+`NPM_TOKEN` secret configured the job is a green no-op — it will not push the
+placeholder `0.0.0` packages.
+
+To turn on releases when there's something tangible to ship:
+
+1. Create the `@covsel` org (and reserve the bare `covsel` name) on npm, with
+   2FA enabled.
+2. Add an `NPM_TOKEN` repository secret (an automation token with publish
+   rights).
+3. Land a changeset that versions the packages off `0.0.0`.
+
+Once the secret exists, the flow below activates automatically.
+
 ## How a release happens
 
 1. PRs merge to `main`, each carrying its changeset(s).
