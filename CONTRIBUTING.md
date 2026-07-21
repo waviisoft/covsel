@@ -16,7 +16,7 @@ pnpm install
 pnpm build && pnpm test
 ```
 
-Requires Node ≥ 20 and pnpm (via `corepack enable`).
+Requires Node ≥ 22 and pnpm (via `corepack enable`).
 
 ## Repo layout
 
@@ -43,7 +43,7 @@ Requires Node ≥ 20 and pnpm (via `corepack enable`).
   (`pnpm changeset`) for anything user-facing. See [`RELEASING.md`](./RELEASING.md)
   for how versions and publishing work.
 - CI must pass: lint, typecheck, build, tests, and format check on Node
-  20/22/24.
+  22/24.
 - Adapter packages list their maintainer in `CODEOWNERS`.
 - Never include secrets, tokens, or personal data in code, tests, fixtures, or
   PR text.

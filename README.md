@@ -93,7 +93,7 @@ pnpm lint && pnpm typecheck
 pnpm docs:dev      # run the docs site locally
 ```
 
-Node ≥ 20 required. See [CONTRIBUTING.md](./CONTRIBUTING.md).
+Node ≥ 22 required. See [CONTRIBUTING.md](./CONTRIBUTING.md).
 
 ## Prior art & credits
 

@@ -8,7 +8,7 @@ Selection commands are not available yet. Today the CLI ships only `--help` and
 
 ## Requirements
 
-- Node ≥ 20 (the V8 inspector and `NODE_V8_COVERAGE` are stable there)
+- Node ≥ 22 (the V8 inspector and `NODE_V8_COVERAGE` are stable there)
 - pnpm (via `corepack enable`) if you are working on covsel itself
 
 ## Try the CLI today

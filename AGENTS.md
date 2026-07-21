@@ -37,7 +37,7 @@ docs/                       VitePress site (private package, deployed to GitHub 
 ## Toolchain
 
 pnpm workspaces, TypeScript (ESM-first with a dual CJS build via tsup), Vitest,
-ESLint (flat) + Prettier, Changesets. Node ≥ 20.
+ESLint (flat) + Prettier, Changesets. Node ≥ 22.
 
 ```bash
 pnpm install
@@ -53,7 +53,7 @@ pnpm docs:build       # build the docs site
 
 Before pushing, the full green bar is: `pnpm lint && pnpm typecheck && pnpm build
 && pnpm test && pnpm format:check` (and `pnpm docs:build` if you touched docs).
-CI runs these across Node 20/22/24.
+CI runs these across Node 22/24.
 
 ## Code conventions
 

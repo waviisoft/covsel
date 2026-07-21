@@ -177,7 +177,7 @@ covsel status                         # map age, coverage %, sentinel triggers
 | Concern              | Choice                                    | Rationale                                                      |
 | -------------------- | ----------------------------------------- | -------------------------------------------------------------- |
 | Language             | **TypeScript**, ESM-first, dual CJS build | Ecosystem default; adapters import runner types                |
-| Node support         | 20 LTS + 22 + current                     | Inspector + `NODE_V8_COVERAGE` stable; state minimum in README |
+| Node support         | 22 LTS + 24 + current                     | Inspector + `NODE_V8_COVERAGE` stable; state minimum in README |
 | Monorepo             | **pnpm workspaces**                       | Many small packages (core + adapters); fast, strict            |
 | Build                | **tsup** (esbuild)                        | Zero-config dual ESM/CJS + `.d.ts`                             |
 | The tool's own tests | **Vitest**                                | Also the first-class adapter target — dogfood                  |
