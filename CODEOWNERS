@@ -1,0 +1,8 @@
+# Core and release infrastructure
+/packages/core/    @waviisoft
+/packages/cli/     @waviisoft
+/.github/          @waviisoft
+
+# Adapters are the community contribution lane — each adapter lists its
+# maintainer here once it has one.
+/packages/adapter-generic/ @waviisoft

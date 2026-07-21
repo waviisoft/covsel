@@ -1,0 +1,10 @@
+node_modules/
+dist/
+coverage/
+.covsel/
+*.tsbuildinfo
+.DS_Store
+
+# VitePress
+docs/.vitepress/cache/
+docs/.vitepress/dist/

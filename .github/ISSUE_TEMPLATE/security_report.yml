@@ -1,0 +1,53 @@
+name: Security report
+description: Report a security concern (read the private-disclosure note first)
+title: 'security: '
+labels: [security]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        ## 🔒 Stop — is this an exploitable vulnerability?
+
+        **If disclosing the details here could put users at risk, do NOT use
+        this public form.** Report it privately instead via GitHub Security
+        Advisories on this repo — the
+        [**"Report a vulnerability"** page](https://github.com/waviisoft/covsel/security/advisories/new)
+        — so we can fix it before it's public. See
+        [SECURITY.md](https://github.com/waviisoft/covsel/blob/main/SECURITY.md).
+        We aim to acknowledge within 72 hours.
+
+        Use **this public template only** for non-sensitive, hardening-type
+        security concerns where open discussion is safe — for example: a
+        dependency with a known advisory, a supply-chain or CI hardening
+        suggestion, or a question about covsel's security posture (it reads your
+        source and git and runs your test commands, and makes no network calls
+        unless you configure a remote Store).
+
+        > ⚠️ **Never paste secrets, proof-of-concept exploits against real
+        > systems, tokens, or personal data here.** This issue is public.
+  - type: checkboxes
+    id: confirm
+    attributes:
+      label: Confirm before filing publicly
+      options:
+        - label: This is NOT an undisclosed, exploitable vulnerability (those go through the private advisory).
+          required: true
+        - label: This report contains no secrets, working exploits, or personal data.
+          required: true
+  - type: textarea
+    id: concern
+    attributes:
+      label: The concern
+      description: What's the security issue, and what's the potential impact?
+    validations:
+      required: true
+  - type: textarea
+    id: details
+    attributes:
+      label: Details / references
+      description: Affected component or dependency, advisory links (e.g. CVE/GHSA), and any suggested mitigation.
+  - type: input
+    id: versions
+    attributes:
+      label: Affected version(s)
+      placeholder: 'covsel x.y.z (and dependency + version, if applicable)'

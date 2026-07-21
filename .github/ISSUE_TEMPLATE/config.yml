@@ -1,0 +1,10 @@
+blank_issues_enabled: true
+contact_links:
+  - name: 🔒 Report a security vulnerability (private)
+    url: https://github.com/waviisoft/covsel/security/advisories/new
+    about: >-
+      For exploitable vulnerabilities, please disclose privately via GitHub
+      Security Advisories rather than a public issue. See SECURITY.md.
+  - name: 📖 Documentation
+    url: https://waviisoft.github.io/covsel/
+    about: Guides, architecture, and the roadmap.

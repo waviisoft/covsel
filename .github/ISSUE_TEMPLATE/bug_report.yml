@@ -1,0 +1,70 @@
+name: Bug report
+description: Report something that misbehaves — especially anything that could skip a needed test
+title: 'bug: '
+labels: [bug]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for helping make covsel trustworthy. covsel's whole promise is
+        that it never skips a test your change could affect, so **a skipped test
+        that should have run is our highest-severity bug** — if that's what you
+        saw, say so up front and we'll treat it accordingly.
+
+        Before filing, please:
+        - Search [existing issues](https://github.com/waviisoft/covsel/issues) for a duplicate.
+        - Reduce the problem to the smallest reproduction you can.
+
+        > ⚠️ **Do not paste secrets or personal data.** Redact tokens, API keys,
+        > internal hostnames, `.env` contents, customer data, and anything else
+        > private from logs, paths, and snippets. Everything here is public. If
+        > this is a security vulnerability, do not file it here — see the
+        > security advisory link on the "New issue" page instead.
+  - type: textarea
+    id: what
+    attributes:
+      label: What happened?
+      description: >-
+        Describe the actual behavior. If covsel skipped a test it should have
+        run, state that explicitly — it's the bug class we care about most.
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: What did you expect?
+      description: What should have happened instead?
+    validations:
+      required: true
+  - type: textarea
+    id: repro
+    attributes:
+      label: Reproduction
+      description: >-
+        Runner, exact command, and a minimal repo or step-by-step instructions.
+        A link to a minimal reproduction repository is the fastest path to a fix.
+    validations:
+      required: true
+  - type: textarea
+    id: logs
+    attributes:
+      label: Relevant output
+      description: Command output, errors, or `covsel status` — redacted. Rendered as code, so no backticks needed.
+      render: shell
+  - type: input
+    id: versions
+    attributes:
+      label: Versions
+      description: covsel, Node, your test runner, and OS.
+      placeholder: 'covsel x.y.z, node 22.x, vitest 3.x, macOS 15'
+    validations:
+      required: true
+  - type: checkboxes
+    id: hygiene
+    attributes:
+      label: Before submitting
+      options:
+        - label: I searched existing issues and this is not a duplicate.
+          required: true
+        - label: I removed any secrets, tokens, and personal data from this report.
+          required: true
