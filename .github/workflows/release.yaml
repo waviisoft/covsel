@@ -12,6 +12,14 @@ permissions:
 jobs:
   release:
     runs-on: ubuntu-latest
+    # Publishing is deferred while covsel is pre-alpha. The changesets step runs
+    # only once an NPM_TOKEN secret is configured, so until then this job is a
+    # green no-op instead of trying to publish placeholder 0.0.0 packages. When
+    # you're ready for the first release, create the @covsel npm org, add the
+    # NPM_TOKEN secret, and version the packages via a changeset — see
+    # RELEASING.md.
+    env:
+      NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
     steps:
       - uses: actions/checkout@v7
       - uses: pnpm/action-setup@v6
@@ -22,6 +30,7 @@ jobs:
           registry-url: 'https://registry.npmjs.org'
       - run: pnpm install --frozen-lockfile
       - name: Create release PR or publish
+        if: ${{ env.NPM_TOKEN != '' }}
         uses: changesets/action@v1
         with:
           publish: pnpm release
