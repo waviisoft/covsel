@@ -1,0 +1,25 @@
+name: Bug report
+description: Something misbehaves — especially anything that could skip a needed test
+labels: [bug]
+body:
+  - type: textarea
+    id: what
+    attributes:
+      label: What happened?
+      description: If covsel skipped a test it should have run, say so explicitly — that's our highest-severity bug class.
+    validations:
+      required: true
+  - type: textarea
+    id: repro
+    attributes:
+      label: Reproduction
+      description: Runner, command, minimal repo or steps.
+    validations:
+      required: true
+  - type: input
+    id: versions
+    attributes:
+      label: Versions
+      placeholder: 'covsel x.y.z, node 22.x, runner + version, OS'
+    validations:
+      required: true

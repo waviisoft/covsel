@@ -1,0 +1,26 @@
+name: Adapter request
+description: Request (or volunteer to build) support for a test runner
+labels: [adapter, good-first-issue]
+body:
+  - type: input
+    id: runner
+    attributes:
+      label: Runner name + link
+    validations:
+      required: true
+  - type: textarea
+    id: lifecycle
+    attributes:
+      label: Lifecycle hooks
+      description: How can code run before/after each test? (reporter API, hooks, plugins…)
+  - type: textarea
+    id: selection
+    attributes:
+      label: Native selection syntax
+      description: How does one tell this runner to run a subset? (file list, tags, grep, feature:line…)
+  - type: checkboxes
+    id: volunteer
+    attributes:
+      label: Contribution
+      options:
+        - label: I'd like to build this adapter myself

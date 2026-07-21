@@ -1,0 +1,48 @@
+{
+  "name": "covsel",
+  "version": "0.0.0",
+  "description": "Runtime-coverage test impact analysis for any JS/TS runner — run only the tests your diff can affect",
+  "license": "MIT",
+  "type": "module",
+  "bin": {
+    "covsel": "./dist/bin.js"
+  },
+  "main": "./dist/index.cjs",
+  "module": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js",
+      "require": "./dist/index.cjs"
+    }
+  },
+  "files": [
+    "dist"
+  ],
+  "scripts": {
+    "build": "tsup src/index.ts src/bin.ts --format esm,cjs --dts --sourcemap --clean",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@covsel/core": "workspace:*"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/waviisoft/covsel.git",
+    "directory": "packages/cli"
+  },
+  "keywords": [
+    "test-impact-analysis",
+    "tia",
+    "coverage",
+    "test-selection",
+    "cli"
+  ],
+  "devDependencies": {
+    "@types/node": "^22.20.1"
+  }
+}
