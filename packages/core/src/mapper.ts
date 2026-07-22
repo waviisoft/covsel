@@ -71,12 +71,22 @@ export class V8FileMapper implements Mapper {
       .sort((a, b) => (a.file < b.file ? -1 : a.file > b.file ? 1 : 0));
   }
 
+  /**
+   * Block-level coverage for direct-execution runners. V8 range offsets index
+   * the source *as executed*, matched here against the on-disk file — sound only
+   * when they are the same bytes (plain JS, or position-preserving type
+   * stripping). Runners that transform sources before executing them (Vitest,
+   * Jest, ts-node/tsx) must record blocks through their own adapter, which reads
+   * the runner's source-mapped coverage instead.
+   */
   async toBlocks(raw: RawCoverage): Promise<CoveredBlock[]> {
     const out: CoveredBlock[] = [];
     const seen = new Set<string>();
     for (const script of raw.scripts as ScriptCoverage[]) {
       const resolved = this.sourcePath(script.url);
       if (!resolved) continue;
+      const executed = script.functions.some((fn) => fn.ranges.some((r) => r.count > 0));
+      if (!executed) continue;
       let source: string;
       try {
         source = readFileSync(resolved.abs, 'utf8');

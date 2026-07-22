@@ -24,9 +24,6 @@ in CI.
 
 ## Next — per-test precision and real adapters
 
-- **Block-hash granularity (shipped)** — the map records which functions each
-  test executed, fingerprinted by content hash, so editing one function selects
-  only the tests that ran it and reformatting selects nothing.
 - Inspector snapshot-diff observation for per-test granularity.
 - Adapters for Jest, Mocha, node:test, cucumber-js, and Playwright.
 - CI story: publish the map on the default branch, fetch the merge-base map on a

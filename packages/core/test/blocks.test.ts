@@ -52,6 +52,32 @@ describe('extractBlocks', () => {
   });
 });
 
+describe('extractBlocks literal sensitivity', () => {
+  it('treats whitespace inside a string literal as significant', () => {
+    const a = 'export function f() { return "a  b"; }';
+    const b = 'export function f() { return "a b"; }';
+    expect(block(a, 'f')).not.toBe(block(b, 'f'));
+  });
+
+  it('treats whitespace inside a template literal as significant', () => {
+    const a = 'export const f = () => `a  b`;';
+    const b = 'export const f = () => `a b`;';
+    expect(block(a, 'f')).not.toBe(block(b, 'f'));
+  });
+
+  it('still ignores reformatting (indentation and line breaks)', () => {
+    const a = 'export function f() { return 1 + 2; }';
+    const b = 'export function f() {\n\n    return 1 + 2;\n\n}\n';
+    expect(block(a, 'f')).toBe(block(b, 'f'));
+  });
+
+  it('treats a top-level string-literal whitespace change as a module change', () => {
+    const a = 'const MSG = "a  b";\nexport function f() {}\n';
+    const b = 'const MSG = "a b";\nexport function f() {}\n';
+    expect(block(a, '<module>')).not.toBe(block(b, '<module>'));
+  });
+});
+
 describe('changedBlockHashes', () => {
   it('is empty for a pure reformat', () => {
     const reformatted = SRC.replace(/\n/g, '\n\n');

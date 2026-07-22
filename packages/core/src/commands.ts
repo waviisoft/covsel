@@ -31,9 +31,9 @@ export interface RecordedTest {
 }
 
 /**
- * A recorder observes one test file and returns the sources it executed. The
- * generic recorder uses NODE_V8_COVERAGE; per-runner adapters can provide their
- * own (e.g. for runners that transform sources before executing them).
+ * A recorder observes one test file and returns the sources it executed. Each
+ * recorder obtains that coverage from its own tool — the runner's built-in
+ * coverage, or Node's built-in V8 engine via `NODE_V8_COVERAGE`.
  */
 export interface Recorder {
   record(testFile: string): Promise<RecordedTest>;
