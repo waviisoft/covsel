@@ -1,30 +1,48 @@
 import { spawnSync } from 'node:child_process';
+import { readFileSync } from 'node:fs';
+import { join } from 'node:path';
 
+import { blockHashesOf } from './blocks.js';
 import type { CovselConfig } from './config.js';
 import { discoverTestFiles } from './discover.js';
 import { diffChanges, gitHeadCommit } from './git.js';
+import type { Change } from './interfaces.js';
 import { makeMatcher, matchesAny } from './match.js';
 import { V8FileMapper } from './mapper.js';
 import { ProcessObserver } from './observer.js';
 import { hashFileContents, walkFiles } from './paths.js';
 import { FailOpenPolicy, fullRunReason } from './policy.js';
-import { type CoverageMap, MAP_SCHEMA_VERSION, type MapEntry } from './schema.js';
+import {
+  type CoverageMap,
+  type CoveredBlock,
+  type CoveredFile,
+  type Granularity,
+  MAP_SCHEMA_VERSION,
+  type MapEntry,
+} from './schema.js';
 import { FileSelector } from './selector.js';
 import { LocalStore } from './store.js';
 
+/** What one recorder run learned about a test file: its covered files and blocks. */
+export interface RecordedTest {
+  files: CoveredFile[];
+  /** Executed function/module blocks, when recording at block granularity. */
+  blocks: CoveredBlock[];
+}
+
 /**
- * A recorder observes one test file and returns the source files it executed.
- * The generic recorder uses NODE_V8_COVERAGE; per-runner adapters can provide
- * their own (e.g. for runners that transform sources before executing them).
+ * A recorder observes one test file and returns the sources it executed. The
+ * generic recorder uses NODE_V8_COVERAGE; per-runner adapters can provide their
+ * own (e.g. for runners that transform sources before executing them).
  */
 export interface Recorder {
-  record(testFile: string): Promise<import('./schema.js').CoveredFile[]>;
+  record(testFile: string): Promise<RecordedTest>;
 }
 
 export interface GenericRecorderInit {
   command: string[];
   cwd: string;
-  config: Pick<CovselConfig, 'sourceGlobs' | 'testGlobs'>;
+  config: Pick<CovselConfig, 'sourceGlobs' | 'testGlobs' | 'granularity'>;
   env?: NodeJS.ProcessEnv;
 }
 
@@ -36,11 +54,14 @@ export function createGenericRecorder(init: GenericRecorderInit): Recorder {
     ...(init.env ? { env: init.env } : {}),
   });
   const mapper = new V8FileMapper({ cwd: init.cwd, config: init.config });
+  const wantBlocks = init.config.granularity !== 'file';
   return {
     async record(testFile: string) {
       await observer.startTest({ file: testFile });
       const raw = await observer.endTest({ file: testFile });
-      return mapper.toFiles(raw);
+      const files = await mapper.toFiles(raw);
+      const blocks = wantBlocks ? await mapper.toBlocks(raw) : [];
+      return { files, blocks };
     },
   };
 }
@@ -58,13 +79,14 @@ function hashSentinels(cwd: string, sentinels: string[]): Record<string, string>
 function assembleMap(
   entries: MapEntry[],
   cwd: string,
-  config: Pick<CovselConfig, 'sentinels'>,
+  config: Pick<CovselConfig, 'sentinels' | 'granularity'>,
   recordedAt: string,
 ): CoverageMap {
   const commit = gitHeadCommit(cwd);
+  const granularity: Granularity = config.granularity === 'file' ? 'file' : 'block';
   return {
     schemaVersion: MAP_SCHEMA_VERSION,
-    granularity: 'file',
+    granularity,
     ...(commit ? { commit } : {}),
     recordedAt,
     sentinelHashes: hashSentinels(cwd, config.sentinels),
@@ -109,11 +131,16 @@ export async function recordMap(init: RecordInit): Promise<RecordResult> {
   const entries: MapEntry[] = [];
   const failures: { file: string; reason: string }[] = [];
 
+  const wantBlocks = config.granularity !== 'file';
   for (const file of testFiles) {
     try {
-      const files = await recorder.record(file);
-      entries.push({ test: { file }, files });
-      init.onEvent?.({ kind: 'recorded', file, sources: files.length });
+      const recorded = await recorder.record(file);
+      entries.push({
+        test: { file },
+        files: recorded.files,
+        ...(wantBlocks && recorded.blocks.length > 0 ? { blocks: recorded.blocks } : {}),
+      });
+      init.onEvent?.({ kind: 'recorded', file, sources: recorded.files.length });
     } catch (err) {
       const reason = err instanceof Error ? err.message : String(err);
       failures.push({ file, reason });
@@ -142,6 +169,35 @@ export async function recordMap(init: RecordInit): Promise<RecordResult> {
     testFiles,
     map,
   };
+}
+
+/**
+ * Attach `changedBlockHashes` to each change to a file the map recorded blocks
+ * for: the recorded block hashes that are no longer present in the current file.
+ * A test is then affected only if a block it actually executed changed. Files we
+ * cannot read or parse are left unannotated (undefined), which the selector
+ * treats as a file-level change — fail-open.
+ */
+function annotateChangedBlocks(cwd: string, changes: Change[], map: CoverageMap): void {
+  const recordedByFile = new Map<string, Set<string>>();
+  for (const entry of map.entries) {
+    for (const block of entry.blocks ?? []) {
+      let set = recordedByFile.get(block.file);
+      if (!set) recordedByFile.set(block.file, (set = new Set()));
+      set.add(block.blockHash);
+    }
+  }
+  for (const change of changes) {
+    const recorded = recordedByFile.get(change.file);
+    if (!recorded) continue;
+    let current: Set<string>;
+    try {
+      current = blockHashesOf(readFileSync(join(cwd, change.file), 'utf8'), change.file);
+    } catch {
+      continue; // unreadable/deleted → leave undefined → file-level
+    }
+    change.changedBlockHashes = [...recorded].filter((h) => !current.has(h));
+  }
 }
 
 export interface AffectedResult {
@@ -184,6 +240,9 @@ export async function selectAffected(init: SelectInit): Promise<AffectedResult> 
     };
   }
 
+  if (map!.granularity === 'block' && config.granularity !== 'file') {
+    annotateChangedBlocks(cwd, changes, map!);
+  }
   const selected = await new FileSelector().affected(map!, changes);
   const mandatory = await policy.mandatory(changes);
   const alwaysRun = testFiles.filter((f) => matchesAny(f, config.alwaysRun));
@@ -227,6 +286,7 @@ export interface StatusResult {
   granularity?: string;
   entryCount?: number;
   coveredFileCount?: number;
+  coveredBlockCount?: number;
   changedSentinels: string[];
   nextIsFullRun: boolean;
   nextFullRunReason?: string;
@@ -255,7 +315,11 @@ export async function computeStatus(init: StatusInit): Promise<StatusResult> {
   }
 
   const coveredFiles = new Set<string>();
-  for (const entry of map.entries) for (const f of entry.files) coveredFiles.add(f.file);
+  const coveredBlocks = new Set<string>();
+  for (const entry of map.entries) {
+    for (const f of entry.files) coveredFiles.add(f.file);
+    for (const b of entry.blocks ?? []) coveredBlocks.add(`${b.file}\0${b.blockHash}`);
+  }
 
   const changedSentinels: string[] = [];
   for (const [rel, hash] of Object.entries(map.sentinelHashes)) {
@@ -287,6 +351,7 @@ export async function computeStatus(init: StatusInit): Promise<StatusResult> {
     granularity: map.granularity,
     entryCount: map.entries.length,
     coveredFileCount: coveredFiles.size,
+    ...(coveredBlocks.size > 0 ? { coveredBlockCount: coveredBlocks.size } : {}),
     changedSentinels,
     nextIsFullRun,
     ...(nextFullRunReason ? { nextFullRunReason } : {}),

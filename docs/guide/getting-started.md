@@ -65,12 +65,22 @@ Zero-config works out of the box. To refine, add a `.covsel.json` (or
   "sourceGlobs": ["**/*"], // repo minus node_modules/dist/coverage/.covsel and tests
   "alwaysRun": ["**/fixtures/**"], // test files that must always run
   "sentinels": ["package.json", "pnpm-lock.yaml", "tsconfig*.json"],
+  "granularity": "block", // "block" (function-level) | "file"
   "store": { "dir": ".covsel" },
 }
 ```
 
 Any change matching `sentinels` forces a full run; see
 [the fail-open guarantee](/guide/fail-open).
+
+### Granularity
+
+At the default `block` granularity, covsel records which **functions** each test
+executed (fingerprinted by content hash, so reformatting and line shifts don't
+matter). Editing one function then selects only the tests that actually ran it,
+even when several tests import the same file; a top-level edit, or anything
+covsel can't parse into blocks, falls back to selecting every test on that file.
+Set `"granularity": "file"` to record and select at whole-file granularity only.
 
 ## Working on covsel
 

@@ -15,11 +15,16 @@ import { join } from 'node:path';
 
 import {
   type Adapter,
+  type CoveredBlock,
   type CoveredFile,
   type CovselConfig,
+  type ExecRegion,
   hashFileContents,
   makeSourceFilter,
+  positionToOffset,
   type Recorder,
+  type RecordedTest,
+  selectExecutedBlocks,
   type TestId,
   toRepoRelative,
 } from '@covsel/core';
@@ -31,12 +36,18 @@ export const vitestAdapter: Adapter = {
   },
 };
 
+interface IstanbulPosition {
+  line: number;
+  column: number;
+}
+
 /** One file's entry in an istanbul-shaped `coverage-final.json`. */
 interface CoverageFinalEntry {
   path?: string;
   s?: Record<string, number>;
   f?: Record<string, number>;
   b?: Record<string, number[]>;
+  fnMap?: Record<string, { loc?: { start: IstanbulPosition; end: IstanbulPosition } }>;
 }
 
 function executed(entry: CoverageFinalEntry): boolean {
@@ -47,11 +58,35 @@ function executed(entry: CoverageFinalEntry): boolean {
   return anyCount(entry.s) || anyCount(entry.f) || anyBranch(entry.b);
 }
 
+/** Executed blocks of one source, from its istanbul function map + hit counts. */
+function blocksFor(entry: CoverageFinalEntry, rel: string, abs: string): CoveredBlock[] {
+  let source: string;
+  try {
+    source = readFileSync(abs, 'utf8');
+  } catch {
+    return [];
+  }
+  const toOffset = positionToOffset(source);
+  const regions: ExecRegion[] = [];
+  for (const [id, fn] of Object.entries(entry.fnMap ?? {})) {
+    if (!fn.loc) continue;
+    regions.push({
+      start: toOffset(fn.loc.start.line, fn.loc.start.column),
+      end: toOffset(fn.loc.end.line, fn.loc.end.column),
+      count: entry.f?.[id] ?? 0,
+    });
+  }
+  return selectExecutedBlocks(source, rel, regions).map((b) => ({
+    file: rel,
+    blockHash: b.hash,
+  }));
+}
+
 export interface VitestRecorderInit {
   /** Base command, e.g. `['vitest', 'run']`. */
   command: string[];
   cwd: string;
-  config: Pick<CovselConfig, 'sourceGlobs' | 'testGlobs'>;
+  config: Pick<CovselConfig, 'sourceGlobs' | 'testGlobs' | 'granularity'>;
   env?: NodeJS.ProcessEnv;
 }
 
@@ -62,8 +97,9 @@ export interface VitestRecorderInit {
  */
 export function createVitestRecorder(init: VitestRecorderInit): Recorder {
   const isSource = makeSourceFilter(init.config);
+  const wantBlocks = init.config.granularity !== 'file';
   return {
-    async record(testFile: string): Promise<CoveredFile[]> {
+    async record(testFile: string): Promise<RecordedTest> {
       const reportsDir = mkdtempSync(join(tmpdir(), 'covsel-vitest-'));
       const [bin, ...rest] = init.command;
       if (bin === undefined) throw new Error('empty command');
@@ -105,17 +141,20 @@ export function createVitestRecorder(init: VitestRecorderInit): Recorder {
           );
         }
 
-        const covered = new Map<string, string>();
+        const files: CoveredFile[] = [];
+        const blocks: CoveredBlock[] = [];
+        const seenFile = new Set<string>();
         for (const [key, entry] of Object.entries(report)) {
           const abs = entry.path ?? key;
           const rel = toRepoRelative(init.cwd, abs);
-          if (rel === undefined || !isSource(rel) || covered.has(rel)) continue;
+          if (rel === undefined || !isSource(rel) || seenFile.has(rel)) continue;
           if (!executed(entry)) continue;
-          covered.set(rel, hashFileContents(abs));
+          seenFile.add(rel);
+          files.push({ file: rel, fileHash: hashFileContents(abs) });
+          if (wantBlocks) blocks.push(...blocksFor(entry, rel, abs));
         }
-        return [...covered]
-          .map(([file, fileHash]) => ({ file, fileHash }))
-          .sort((a, b) => (a.file < b.file ? -1 : a.file > b.file ? 1 : 0));
+        files.sort((a, b) => (a.file < b.file ? -1 : a.file > b.file ? 1 : 0));
+        return { files, blocks };
       } finally {
         rmSync(reportsDir, { recursive: true, force: true });
       }

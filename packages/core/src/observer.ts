@@ -9,7 +9,10 @@ import type { TestId } from './schema.js';
 /** Minimal shape of a V8 ScriptCoverage entry from a NODE_V8_COVERAGE dump. */
 export interface ScriptCoverage {
   url: string;
-  functions: { ranges: { count: number }[] }[];
+  functions: {
+    functionName?: string;
+    ranges: { startOffset: number; endOffset: number; count: number }[];
+  }[];
 }
 
 export interface ProcessObserverInit {

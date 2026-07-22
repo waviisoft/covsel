@@ -8,6 +8,7 @@ export * from './observer.js';
 export * from './mapper.js';
 export * from './store.js';
 export * from './git.js';
+export * from './blocks.js';
 export * from './selector.js';
 export * from './policy.js';
 export * from './commands.js';
