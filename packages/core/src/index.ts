@@ -5,6 +5,7 @@ export * from './match.js';
 export * from './paths.js';
 export * from './discover.js';
 export * from './observer.js';
+export * from './inspector-observer.js';
 export * from './mapper.js';
 export * from './store.js';
 export * from './git.js';

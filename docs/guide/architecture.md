@@ -31,8 +31,10 @@ Adapters depend on `core` only.
   own loader, so process coverage can't see the originals — those adapters read
   the runner's own coverage report instead. See [Adapters](/guide/adapters/).
 - **Level 1 — per-_test_.** Snapshot V8 coverage before/after each test via the
-  inspector and diff. Selects individual tests/scenarios. Needs one thin
-  lifecycle shim per runner.
+  inspector and diff. Selects individual tests/scenarios. The `InspectorObserver`
+  primitive in `@covsel/core` implements this snapshot-diff and is guarded by an
+  integration test; a thin lifecycle shim per runner (calling
+  `startTest`/`endTest` around each test) and per-test selection build on it.
 
 ## The two decisions that determine quality
 
