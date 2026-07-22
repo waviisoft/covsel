@@ -57,12 +57,12 @@ function deltaScripts(
 }
 
 /**
- * Level-1 Observer: snapshot V8 precise coverage before and after each test via
+ * Per-test Observer: snapshot V8 precise coverage before and after each test via
  * the inspector and diff, attributing execution to the individual test rather
  * than the whole file. Runs in-process with the tests, so a runner adapter drives
  * it by calling `startTest(id)` / `endTest(id)` around each test (the only
  * per-runner code). The returned `RawCoverage` is V8 ScriptCoverage-shaped, so it
- * feeds the same `V8FileMapper` as the Level-0 process observer.
+ * feeds the same `V8FileMapper` as the whole-file process observer.
  */
 export class InspectorObserver implements Observer {
   private session: Session | undefined;

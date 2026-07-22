@@ -1,5 +1,5 @@
 // node:test preload shim. Loaded with `node --import`, it wraps every test with
-// the Level-1 InspectorObserver so each test's executed sources and blocks are
+// the per-test InspectorObserver so each test's executed sources and blocks are
 // recorded individually, then writes them to COVSEL_OUT on exit. The recorder
 // passes the test file, output path, and config through the environment. This is
 // the only per-runner code; the observer, mapper, and everything downstream are

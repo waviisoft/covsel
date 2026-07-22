@@ -25,7 +25,7 @@ export interface ProcessObserverInit {
 }
 
 /**
- * Level-0 Observer: run one test *file* in its own process with
+ * Whole-file Observer: run one test *file* in its own process with
  * `NODE_V8_COVERAGE` pointed at a temp dir, then return the raw V8 script
  * coverage the process produced. This is the mechanism the coverage-observation
  * integration test guards, promoted to a reusable API. It attributes coverage

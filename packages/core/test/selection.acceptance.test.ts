@@ -16,7 +16,7 @@ import {
 
 /**
  * The fail-open acceptance suite. It records a real map by running a `node
- * --test` fixture under NODE_V8_COVERAGE (the Level-0 mechanism), then asserts
+ * --test` fixture under NODE_V8_COVERAGE (whole-file process mode), then asserts
  * every rule that keeps covsel from ever skipping a test a change could break —
  * the mutation guard most of all.
  */

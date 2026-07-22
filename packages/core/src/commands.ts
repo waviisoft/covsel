@@ -38,10 +38,10 @@ export interface RecordedUnit extends RecordedTest {
 
 /**
  * A recorder observes one test file and returns one recorded unit per test it
- * saw — a single whole-file unit for file-level (Level-0) recorders, or one unit
- * per individual test for per-test (Level-1) recorders. Each recorder obtains
- * its coverage from its own tool — the runner's built-in coverage, or Node's
- * built-in V8 engine via `NODE_V8_COVERAGE`.
+ * saw — a single whole-file unit for whole-file recorders, or one unit per
+ * individual test for per-test recorders. Each recorder obtains its coverage
+ * from its own tool — the runner's built-in coverage, or Node's built-in V8
+ * engine via `NODE_V8_COVERAGE`.
  */
 export interface Recorder {
   record(testFile: string): Promise<RecordedUnit[]>;
@@ -54,7 +54,7 @@ export interface GenericRecorderInit {
   env?: NodeJS.ProcessEnv;
 }
 
-/** The Level-0 recorder: ProcessObserver (NODE_V8_COVERAGE) piped into the V8 mapper. */
+/** The whole-file recorder: ProcessObserver (NODE_V8_COVERAGE) piped into the V8 mapper. */
 export function createGenericRecorder(init: GenericRecorderInit): Recorder {
   const observer = new ProcessObserver({
     command: init.command,
