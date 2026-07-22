@@ -48,3 +48,5 @@ universal.
 - Discovery, source globs, and sentinels are controlled by
   [configuration](/guide/getting-started#configuration); zero-config works out
   of the box.
+- A runnable end-to-end example (zero dependencies) lives in
+  [`examples/node-test-basic`](https://github.com/waviisoft/covsel/tree/main/examples/node-test-basic).
