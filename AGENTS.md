@@ -98,6 +98,27 @@ Semver per package, automated with Changesets. Add a changeset (`pnpm
 changeset`) for any user-facing change. Bumping `MAP_SCHEMA_VERSION` is a
 breaking change to persisted state. Full process: [`RELEASING.md`](./RELEASING.md).
 
+## Agent tooling
+
+Project-scoped Claude Code documents live under [`.claude/`](./.claude) and
+apply to any session opened on this repo — see [`.claude/README.md`](./.claude/README.md)
+for the full list. In short: `code-reviewer`, `pr-author`, `project-setup`, and
+`tdd-engineer` subagents, plus a `pr-summary` skill. They defer to the
+conventions in this file; this file wins where they differ. Keep `.claude/`
+team-wide only — personal agents belong in your user-scope `~/.claude/`, never
+committed here.
+
+## Issues
+
+Issues are dual-purpose: a **plan of record** for a unit of work (use the _Plan_
+template) and a **defect record** (use the _Bug report_ template). Either way the
+**description is the living document** — the single, current source of truth.
+Edit it as understanding evolves so it always reflects the present intent, and
+add a **comment explaining what changed and why** each time you do. The
+description is the present state; comments are the audit trail. This mirrors the
+PR convention below: the description is the living summary, the comments carry
+the rationale.
+
 ## Git & PRs
 
 - Branch from `main`. Do not commit build artifacts — `dist/`, `node_modules/`,

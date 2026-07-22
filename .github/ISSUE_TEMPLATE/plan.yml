@@ -1,0 +1,74 @@
+name: Plan
+description: The plan of record for a unit of work, before and during implementation
+title: 'plan: '
+labels: [plan]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        A plan issue is the **living plan of record** for a unit of work. The
+        description is the single, current source of truth: edit it as
+        understanding evolves so it always reflects the present intent — a reader
+        should grasp the plan from the description alone, without reconstructing
+        it from the comment thread. Whenever you edit the description, add a
+        **comment explaining what changed and why**. Comments are the audit
+        trail; the description is the present state.
+
+        Keep covsel's north star in mind: it must never skip a test a change
+        could affect. Weigh the work against that guarantee, and prefer
+        over-selection to under-selection everywhere.
+
+        > ⚠️ **Do not include secrets or personal data.** Scrub tokens,
+        > credentials, internal URLs, and customer data from any example. This
+        > issue is public.
+  - type: textarea
+    id: intent
+    attributes:
+      label: Intent
+      description: >-
+        What this work delivers and why it matters, in a paragraph or two.
+        Describe the intended end state, not the steps taken to get there.
+    validations:
+      required: true
+  - type: textarea
+    id: scenarios
+    attributes:
+      label: Scenarios
+      description: >-
+        What "done" means, as concrete, testable behavior. Cover the happy path,
+        the boundaries, and the error paths. Each scenario maps to one or more
+        tests written first, before the production code — including the
+        anti-regression guard for anything that touches selection, policy, or the
+        map schema.
+      value: |
+        ```gherkin
+        Feature: <capability>
+
+          Scenario: <a specific, observable behavior>
+            Given <starting state>
+            When <action>
+            Then <expected, checkable outcome>
+        ```
+    validations:
+      required: true
+  - type: textarea
+    id: out-of-scope
+    attributes:
+      label: Out of scope
+      description: >-
+        What this work deliberately does not cover. If something here still needs
+        to happen, it gets its own issue.
+  - type: textarea
+    id: open-questions
+    attributes:
+      label: Open questions
+      description: >-
+        Unresolved decisions blocking or shaping the work. Resolve them in
+        comments, then fold the answers back into the sections above.
+  - type: checkboxes
+    id: hygiene
+    attributes:
+      label: Before submitting
+      options:
+        - label: This plan contains no secrets or personal data.
+          required: true
