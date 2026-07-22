@@ -29,6 +29,8 @@ jobs:
       - run: pnpm typecheck
       - run: pnpm build
       - run: pnpm test
+      - name: Golden example (record → affected → run) end-to-end
+        run: pnpm --filter @covsel/example-vitest-basic e2e
       - run: pnpm format:check
 
   docs:

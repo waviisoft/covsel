@@ -1,4 +1,6 @@
 #!/usr/bin/env node
 import { main } from './index.js';
 
-process.exitCode = main();
+main().then((code) => {
+  process.exitCode = code;
+});

@@ -1,13 +1,10 @@
 {
-  "name": "covsel",
+  "name": "@covsel/adapter-vitest",
   "version": "0.0.0",
-  "description": "Runtime-coverage test impact analysis for any JS/TS runner — run only the tests your diff can affect",
+  "description": "Vitest adapter for covsel: per-file selection recorded via Vitest's own V8 coverage",
   "license": "MIT",
   "author": "WAVIISoft, LLC",
   "type": "module",
-  "bin": {
-    "covsel": "./dist/bin.js"
-  },
   "main": "./dist/index.cjs",
   "module": "./dist/index.js",
   "types": "./dist/index.d.ts",
@@ -22,11 +19,10 @@
     "dist"
   ],
   "scripts": {
-    "build": "tsup src/index.ts src/bin.ts --format esm,cjs --dts --sourcemap --clean",
+    "build": "tsup src/index.ts --format esm,cjs --dts --sourcemap --clean",
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
-    "@covsel/adapter-vitest": "workspace:*",
     "@covsel/core": "workspace:*"
   },
   "engines": {
@@ -35,14 +31,13 @@
   "repository": {
     "type": "git",
     "url": "https://github.com/waviisoft/covsel.git",
-    "directory": "packages/cli"
+    "directory": "packages/adapter-vitest"
   },
   "keywords": [
     "test-impact-analysis",
-    "tia",
     "coverage",
-    "test-selection",
-    "cli"
+    "adapter",
+    "vitest"
   ],
   "devDependencies": {
     "@types/node": "^22.20.1"

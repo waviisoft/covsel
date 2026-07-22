@@ -8,6 +8,12 @@ export default defineConfig({
       '@covsel/core': fileURLToPath(
         new URL('./packages/core/src/index.ts', import.meta.url),
       ),
+      '@covsel/adapter-generic': fileURLToPath(
+        new URL('./packages/adapter-generic/src/index.ts', import.meta.url),
+      ),
+      '@covsel/adapter-vitest': fileURLToPath(
+        new URL('./packages/adapter-vitest/src/index.ts', import.meta.url),
+      ),
     },
   },
   test: {
