@@ -23,6 +23,13 @@ library and tuned for covsel's conventions in [`AGENTS.md`](../AGENTS.md).
 | ------------ | ----------------------------------------------------------------------------- |
 | `pr-summary` | You want a short, reviewer-friendly summary of what a branch changes and why. |
 
+## GitHub template examples — `examples/github/`
+
+Reference copies of the source library's issue and PR templates, in their
+generic form. They are **examples, not live config** — covsel's active
+templates under [`.github/`](../.github) already apply these conventions. See
+[`examples/github/README.md`](examples/github/README.md).
+
 ## Note
 
 These documents are **instructions** the model loads into context. Read one
