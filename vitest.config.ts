@@ -14,6 +14,9 @@ export default defineConfig({
       '@covsel/adapter-vitest': fileURLToPath(
         new URL('./packages/adapter-vitest/src/index.ts', import.meta.url),
       ),
+      '@covsel/adapter-node-test': fileURLToPath(
+        new URL('./packages/adapter-node-test/src/index.ts', import.meta.url),
+      ),
     },
   },
   test: {

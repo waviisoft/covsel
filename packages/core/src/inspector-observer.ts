@@ -13,6 +13,11 @@ function keyOf(id: TestId): string {
  * snapshots. Precise coverage counts are cumulative, so a function executed
  * during the window is one whose range count increased. Scripts and functions
  * compiled during the window (absent from `before`) are attributed in full.
+ *
+ * V8 reports only functions it has executed at least once, so an un-run function
+ * is simply absent from the result — the delta is a positive signal of what ran,
+ * not a per-function true/false. That is why per-test observation is used at
+ * source-file granularity: a covered file is one the test actually executed.
  */
 function deltaScripts(
   before: Map<string, ScriptCoverage>,

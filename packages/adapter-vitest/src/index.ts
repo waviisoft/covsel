@@ -23,7 +23,7 @@ import {
   makeSourceFilter,
   positionToOffset,
   type Recorder,
-  type RecordedTest,
+  type RecordedUnit,
   selectExecutedBlocks,
   type TestId,
   toRepoRelative,
@@ -99,7 +99,7 @@ export function createVitestRecorder(init: VitestRecorderInit): Recorder {
   const isSource = makeSourceFilter(init.config);
   const wantBlocks = init.config.granularity !== 'file';
   return {
-    async record(testFile: string): Promise<RecordedTest> {
+    async record(testFile: string): Promise<RecordedUnit[]> {
       const reportsDir = mkdtempSync(join(tmpdir(), 'covsel-vitest-'));
       const [bin, ...rest] = init.command;
       if (bin === undefined) throw new Error('empty command');
@@ -154,7 +154,7 @@ export function createVitestRecorder(init: VitestRecorderInit): Recorder {
           if (wantBlocks) blocks.push(...blocksFor(entry, rel, abs));
         }
         files.sort((a, b) => (a.file < b.file ? -1 : a.file > b.file ? 1 : 0));
-        return { files, blocks };
+        return [{ test: { file: testFile }, files, blocks }];
       } finally {
         rmSync(reportsDir, { recursive: true, force: true });
       }

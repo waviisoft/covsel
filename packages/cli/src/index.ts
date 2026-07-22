@@ -9,6 +9,7 @@ import {
   selectAffected,
 } from '@covsel/core';
 import { createVitestRecorder } from '@covsel/adapter-vitest';
+import { createNodeTestRecorder, runNodeTestSelection } from '@covsel/adapter-node-test';
 
 const HELP = `covsel — runtime-coverage test impact analysis for any JS/TS runner
 
@@ -72,11 +73,15 @@ async function cmdRecord(argv: string[]): Promise<number> {
   const recorder =
     adapter === 'vitest'
       ? createVitestRecorder({ command, cwd, config })
-      : adapter === 'generic'
-        ? createGenericRecorder({ command, cwd, config })
-        : undefined;
+      : adapter === 'node-test'
+        ? createNodeTestRecorder({ command, cwd, config })
+        : adapter === 'generic'
+          ? createGenericRecorder({ command, cwd, config })
+          : undefined;
   if (!recorder) {
-    err(`covsel record: unknown adapter '${adapter}' (expected 'generic' or 'vitest')\n`);
+    err(
+      `covsel record: unknown adapter '${adapter}' (expected 'generic', 'vitest', or 'node-test')\n`,
+    );
     return 1;
   }
 
@@ -126,9 +131,21 @@ async function cmdRun(argv: string[]): Promise<number> {
     );
     return 1;
   }
+  const adapter = flag(opts, 'adapter') ?? 'generic';
   const since = flag(opts, 'since');
   const cwd = process.cwd();
   const config = await loadConfig(cwd);
+
+  if (adapter === 'node-test') {
+    const selection = await selectAffected({ cwd, config, ...(since ? { since } : {}) });
+    reportSelection(selection);
+    if (selection.fullRun) {
+      return runAffected({ cwd, config, command, ...(since ? { since } : {}) });
+    }
+    if (selection.selected.length === 0) return 0;
+    return runNodeTestSelection({ selected: selection.selected, command, cwd });
+  }
+
   return runAffected(
     { cwd, config, command, ...(since ? { since } : {}) },
     reportSelection,

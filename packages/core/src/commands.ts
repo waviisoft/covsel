@@ -19,24 +19,32 @@ import {
   type Granularity,
   MAP_SCHEMA_VERSION,
   type MapEntry,
+  type TestId,
 } from './schema.js';
 import { FileSelector } from './selector.js';
 import { LocalStore } from './store.js';
 
-/** What one recorder run learned about a test file: its covered files and blocks. */
+/** The sources one observation window executed. */
 export interface RecordedTest {
   files: CoveredFile[];
   /** Executed function/module blocks, when recording at block granularity. */
   blocks: CoveredBlock[];
 }
 
+/** One recorded map entry: a test id and the sources that test executed. */
+export interface RecordedUnit extends RecordedTest {
+  test: TestId;
+}
+
 /**
- * A recorder observes one test file and returns the sources it executed. Each
- * recorder obtains that coverage from its own tool — the runner's built-in
- * coverage, or Node's built-in V8 engine via `NODE_V8_COVERAGE`.
+ * A recorder observes one test file and returns one recorded unit per test it
+ * saw — a single whole-file unit for file-level (Level-0) recorders, or one unit
+ * per individual test for per-test (Level-1) recorders. Each recorder obtains
+ * its coverage from its own tool — the runner's built-in coverage, or Node's
+ * built-in V8 engine via `NODE_V8_COVERAGE`.
  */
 export interface Recorder {
-  record(testFile: string): Promise<RecordedTest>;
+  record(testFile: string): Promise<RecordedUnit[]>;
 }
 
 export interface GenericRecorderInit {
@@ -61,7 +69,7 @@ export function createGenericRecorder(init: GenericRecorderInit): Recorder {
       const raw = await observer.endTest({ file: testFile });
       const files = await mapper.toFiles(raw);
       const blocks = wantBlocks ? await mapper.toBlocks(raw) : [];
-      return { files, blocks };
+      return [{ test: { file: testFile }, files, blocks }];
     },
   };
 }
@@ -134,13 +142,17 @@ export async function recordMap(init: RecordInit): Promise<RecordResult> {
   const wantBlocks = config.granularity !== 'file';
   for (const file of testFiles) {
     try {
-      const recorded = await recorder.record(file);
-      entries.push({
-        test: { file },
-        files: recorded.files,
-        ...(wantBlocks && recorded.blocks.length > 0 ? { blocks: recorded.blocks } : {}),
-      });
-      init.onEvent?.({ kind: 'recorded', file, sources: recorded.files.length });
+      const units = await recorder.record(file);
+      let sources = 0;
+      for (const unit of units) {
+        entries.push({
+          test: unit.test,
+          files: unit.files,
+          ...(wantBlocks && unit.blocks.length > 0 ? { blocks: unit.blocks } : {}),
+        });
+        sources += unit.files.length;
+      }
+      init.onEvent?.({ kind: 'recorded', file, sources });
     } catch (err) {
       const reason = err instanceof Error ? err.message : String(err);
       failures.push({ file, reason });
@@ -206,6 +218,12 @@ export interface AffectedResult {
   reason?: string;
   /** Selected test files, repo-relative, sorted, deduplicated. */
   tests: string[];
+  /**
+   * The selected test units. A unit with a `name` is an individual test (per-test
+   * granularity); a unit without one means the whole file. Adapters use these to
+   * format runner-native, per-test selection.
+   */
+  selected: TestId[];
 }
 
 export interface SelectInit {
@@ -224,34 +242,48 @@ export async function selectAffected(init: SelectInit): Promise<AffectedResult> 
   const store = new LocalStore({ cwd, dir: config.store.dir });
   const map = await store.read();
 
+  const fullRun = (reason: string): AffectedResult => ({
+    fullRun: true,
+    reason,
+    tests: testFiles,
+    selected: testFiles.map((file) => ({ file })),
+  });
+
   let changes;
   try {
     changes = diffChanges(cwd, init.since);
   } catch {
-    return { fullRun: true, reason: 'could not compute a git diff', tests: testFiles };
+    return fullRun('could not compute a git diff');
   }
 
   const policy = new FailOpenPolicy(config);
   if (policy.evaluate(map, changes) === 'full-run') {
-    return {
-      fullRun: true,
-      reason: fullRunReason(config, map, changes),
-      tests: testFiles,
-    };
+    return fullRun(fullRunReason(config, map, changes));
   }
 
   if (map!.granularity === 'block' && config.granularity !== 'file') {
     annotateChangedBlocks(cwd, changes, map!);
   }
-  const selected = await new FileSelector().affected(map!, changes);
+  const units = await new FileSelector().affected(map!, changes);
   const mandatory = await policy.mandatory(changes);
   const alwaysRun = testFiles.filter((f) => matchesAny(f, config.alwaysRun));
-  const tests = new Set<string>([
-    ...selected.map((t) => t.file),
-    ...mandatory.map((t) => t.file),
-    ...alwaysRun,
-  ]);
-  return { fullRun: false, tests: [...tests].sort() };
+
+  // Files that must run in full supersede any per-test selection for that file.
+  const wholeFile = new Set<string>([...mandatory.map((t) => t.file), ...alwaysRun]);
+  const selected: TestId[] = [...wholeFile].map((file) => ({ file }));
+  const seen = new Set<string>();
+  for (const u of units) {
+    if (wholeFile.has(u.file)) continue;
+    const key = `${u.file} ${u.name ?? ''}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    selected.push(
+      u.name !== undefined ? { file: u.file, name: u.name } : { file: u.file },
+    );
+  }
+
+  const tests = new Set<string>(selected.map((t) => t.file));
+  return { fullRun: false, tests: [...tests].sort(), selected };
 }
 
 export interface RunInit extends SelectInit {

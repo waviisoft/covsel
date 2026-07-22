@@ -44,13 +44,14 @@ Adapters depend on `core` only.
 
 ## Packages
 
-| Package                   | Purpose                                                                  |
-| ------------------------- | ------------------------------------------------------------------------ |
-| `covsel`                  | The CLI                                                                  |
-| `@covsel/core`            | Observer · Mapper · Store · Selector · Policy + the versioned map schema |
-| `@covsel/adapter-generic` | Level-0 wrap-any-command adapter                                         |
-| `@covsel/adapter-vitest`  | Vitest adapter (records via Vitest's own V8 coverage)                    |
-| `@covsel/adapter-*`       | Per-runner adapters (community contribution lane)                        |
+| Package                     | Purpose                                                                  |
+| --------------------------- | ------------------------------------------------------------------------ |
+| `covsel`                    | The CLI                                                                  |
+| `@covsel/core`              | Observer · Mapper · Store · Selector · Policy + the versioned map schema |
+| `@covsel/adapter-generic`   | Level-0 wrap-any-command adapter                                         |
+| `@covsel/adapter-vitest`    | Vitest adapter (records via Vitest's own V8 coverage)                    |
+| `@covsel/adapter-node-test` | node:test adapter (per-test selection via the inspector observer)        |
+| `@covsel/adapter-*`         | Per-runner adapters (community contribution lane)                        |
 
 The full founding plan lives in
 [DESIGN.md](https://github.com/waviisoft/covsel/blob/main/DESIGN.md).
