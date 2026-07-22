@@ -13,6 +13,11 @@ function keyOf(id: TestId): string {
  * snapshots. Precise coverage counts are cumulative, so a function executed
  * during the window is one whose range count increased. Scripts and functions
  * compiled during the window (absent from `before`) are attributed in full.
+ *
+ * V8 reports only functions it has executed at least once, so an un-run function
+ * is simply absent from the result — the delta is a positive signal of what ran,
+ * not a per-function true/false. That is why per-test observation is used at
+ * source-file granularity: a covered file is one the test actually executed.
  */
 function deltaScripts(
   before: Map<string, ScriptCoverage>,
@@ -26,6 +31,10 @@ function deltaScripts(
       const fn = script.functions[i]!;
       const base = baseline?.functions[i];
       const ranges = fn.ranges.map((r) => {
+        // The index lookup above is only a hint — a function first run during the
+        // window shifts indices. Matching ranges by offset is what keeps this
+        // correct: a miss yields the full count (over-attribution), never an
+        // under-count, so it stays fail-open.
         const br = base?.ranges.find(
           (x) => x.startOffset === r.startOffset && x.endOffset === r.endOffset,
         );
@@ -48,12 +57,12 @@ function deltaScripts(
 }
 
 /**
- * Level-1 Observer: snapshot V8 precise coverage before and after each test via
+ * Per-test Observer: snapshot V8 precise coverage before and after each test via
  * the inspector and diff, attributing execution to the individual test rather
  * than the whole file. Runs in-process with the tests, so a runner adapter drives
  * it by calling `startTest(id)` / `endTest(id)` around each test (the only
  * per-runner code). The returned `RawCoverage` is V8 ScriptCoverage-shaped, so it
- * feeds the same `V8FileMapper` as the Level-0 process observer.
+ * feeds the same `V8FileMapper` as the whole-file process observer.
  */
 export class InspectorObserver implements Observer {
   private session: Session | undefined;

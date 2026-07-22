@@ -37,6 +37,7 @@ export default defineConfig({
             { text: 'Overview', link: '/guide/adapters/' },
             { text: 'Generic (any command)', link: '/guide/adapters/generic' },
             { text: 'Vitest', link: '/guide/adapters/vitest' },
+            { text: 'node:test', link: '/guide/adapters/node-test' },
           ],
         },
         {

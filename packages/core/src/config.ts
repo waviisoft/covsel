@@ -4,7 +4,7 @@ import { pathToFileURL } from 'node:url';
 
 /**
  * User-facing configuration. Every field has a zero-config default, so a
- * project needs no config file to get sensible Level-0 selection.
+ * project needs no config file to get sensible zero-config selection.
  */
 export interface CovselConfig {
   /** Globs identifying test files. */

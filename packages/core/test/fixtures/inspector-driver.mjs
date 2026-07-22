@@ -1,4 +1,4 @@
-// Drives the Level-1 InspectorObserver around two individual tests that share a
+// Drives the per-test InspectorObserver around two individual tests that share a
 // module, and prints the sources each test executed. Run as a plain-node child
 // (not through Vitest) so script URLs are the real files. Imports the built core
 // by relative path because @covsel/core is not hoisted to the repo root.

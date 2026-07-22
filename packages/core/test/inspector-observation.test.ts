@@ -4,7 +4,7 @@ import { fileURLToPath } from 'node:url';
 import { beforeAll, describe, expect, it } from 'vitest';
 
 /**
- * The Level-1 bet: snapshot V8 precise coverage before and after each *test* via
+ * The per-test bet: snapshot V8 precise coverage before and after each *test* via
  * the inspector and diff, and you can attribute exactly which sources each test
  * executed — finer than the per-file process observer, in a single process. This
  * guards the mechanism: two tests share a module, yet neither is credited with
@@ -22,7 +22,7 @@ beforeAll(() => {
   }
 }, 120_000);
 
-describe('Level-1 inspector observation (per test)', () => {
+describe('per-test inspector observation', () => {
   it('attributes each test to exactly the sources it executes', () => {
     const res = spawnSync(process.execPath, [driver], {
       encoding: 'utf8',

@@ -19,7 +19,8 @@
     "paths": {
       "@covsel/core": ["packages/core/src/index.ts"],
       "@covsel/adapter-generic": ["packages/adapter-generic/src/index.ts"],
-      "@covsel/adapter-vitest": ["packages/adapter-vitest/src/index.ts"]
+      "@covsel/adapter-vitest": ["packages/adapter-vitest/src/index.ts"],
+      "@covsel/adapter-node-test": ["packages/adapter-node-test/src/index.ts"]
     }
   }
 }

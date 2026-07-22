@@ -1,5 +1,5 @@
 /**
- * @covsel/adapter-generic — Level 0, zero-integration adapter.
+ * @covsel/adapter-generic — the zero-integration, whole-file adapter.
  *
  * Wraps any runner command: each test *file* runs in its own process with
  * NODE_V8_COVERAGE set, yielding a per-file map with no runner integration.

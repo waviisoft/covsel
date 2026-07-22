@@ -6,7 +6,7 @@ import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
 
 /**
- * The Level-0 bet: run a test *file* in its own process with NODE_V8_COVERAGE
+ * The whole-file bet: run a test *file* in its own process with NODE_V8_COVERAGE
  * and you can attribute exactly which source files it executed, with zero
  * runner integration. This test guards that mechanism against regressions —
  * the shared helper must show up under both test files, and neither test file
@@ -53,7 +53,7 @@ function coveredSources(testFile: string): string[] {
   }
 }
 
-describe('Level-0 coverage observation (NODE_V8_COVERAGE)', () => {
+describe('whole-file coverage observation (NODE_V8_COVERAGE)', () => {
   it('maps a test file to exactly the sources it executes', () => {
     expect(coveredSources('suite/a.test.mjs')).toEqual(['src/a.mjs', 'src/shared.mjs']);
   }, 30_000);

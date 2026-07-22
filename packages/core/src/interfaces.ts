@@ -13,8 +13,8 @@ export interface RawCoverage {
 
 /**
  * Observer — turns "a test ran" into a set of executed source ranges.
- * Level 0: process mode via NODE_V8_COVERAGE (per test *file*).
- * Level 1: inspector snapshot-diff via Profiler.takePreciseCoverage (per test).
+ * Process mode via NODE_V8_COVERAGE observes a whole test *file*.
+ * Inspector snapshot-diff via Profiler.takePreciseCoverage observes each *test*.
  */
 export interface Observer {
   startTest(id: TestId): Promise<void>;

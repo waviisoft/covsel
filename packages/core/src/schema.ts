@@ -9,8 +9,8 @@ export const MAP_SCHEMA_VERSION = 1;
 
 /**
  * Identifies a test at the finest granularity we know about.
- * Level 0 (process mode): `file` only.
- * Level 1 (inspector mode): `file` + `name` (test title / scenario + line).
+ * Whole-file (process) mode: `file` only.
+ * Per-test (inspector) mode: `file` + `name` (test title / scenario + line).
  */
 export interface TestId {
   /** Test file path, repo-relative with forward slashes. */
@@ -31,7 +31,7 @@ export interface CoveredBlock {
   blockHash: string;
 }
 
-/** File-level entry used by Level 0 (granularity: "file"). */
+/** File-level entry (granularity: "file"). */
 export interface CoveredFile {
   file: string;
   /** Content hash of the whole file at record time. */

@@ -4,11 +4,10 @@
 > static import-graph selection lies, and the only option for runners that have
 > no selection at all.
 
-**Status: early.** File-level selection works today: `covsel record`,
-`affected`, `run`, and `status` ship, at per-file granularity with zero runner
-integration. Block-hash granularity, per-test precision, and the CI map-sharing
-story are next. Track the work in the
-[issues](https://github.com/waviisoft/covsel/issues), and see
+**Status: early.** The `covsel record`, `affected`, `run`, and `status` loop
+works today, with block-hash (function-level) selection and per-test selection
+for node:test. More runner adapters and the CI map-sharing story are next. Track
+the work in the [issues](https://github.com/waviisoft/covsel/issues), and see
 [`DESIGN.md`](./DESIGN.md) for the architecture.
 
 ## The problem
@@ -67,13 +66,13 @@ can't be sure, we run it.**
 
 Runners that execute source directly work today through the generic wrap.
 Runners that transform sources first (Vitest, Jest) need a per-runner recorder
-that reads the runner's own coverage; Vitest is done. Per-test precision is
-later.
+that reads the runner's own coverage; Vitest is done. Per-test (Level 1)
+selection ships for node:test.
 
 | Runner                     | Per-file (Level 0) | Per-test (Level 1) |
 | -------------------------- | ------------------ | ------------------ |
 | Any command (generic wrap) | yes (direct-exec)  | —                  |
-| node:test                  | yes (generic)      | later              |
+| node:test                  | yes (generic)      | yes (`--adapter`)  |
 | Mocha                      | yes (generic, JS)  | later              |
 | Vitest                     | yes (`--adapter`)  | later              |
 | Jest                       | planned (own cov.) | later              |
@@ -82,13 +81,14 @@ later.
 
 ## Packages
 
-| Package                   | Purpose                                                                  |
-| ------------------------- | ------------------------------------------------------------------------ |
-| `covsel`                  | The CLI                                                                  |
-| `@covsel/core`            | Observer · Mapper · Store · Selector · Policy + the versioned map schema |
-| `@covsel/adapter-generic` | Level-0 wrap-any-command adapter                                         |
-| `@covsel/adapter-vitest`  | Vitest adapter (records via Vitest's own V8 coverage)                    |
-| `@covsel/adapter-*`       | Per-runner adapters (community contribution lane)                        |
+| Package                     | Purpose                                                                  |
+| --------------------------- | ------------------------------------------------------------------------ |
+| `covsel`                    | The CLI                                                                  |
+| `@covsel/core`              | Observer · Mapper · Store · Selector · Policy + the versioned map schema |
+| `@covsel/adapter-generic`   | Level-0 wrap-any-command adapter                                         |
+| `@covsel/adapter-vitest`    | Vitest adapter (records via Vitest's own V8 coverage)                    |
+| `@covsel/adapter-node-test` | node:test adapter (per-test selection via the inspector observer)        |
+| `@covsel/adapter-*`         | Per-runner adapters (community contribution lane)                        |
 
 ## Documentation
 
