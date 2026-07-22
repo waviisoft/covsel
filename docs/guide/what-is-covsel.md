@@ -35,18 +35,20 @@ it's opt-in. See [Architecture](/guide/architecture) for the layered design.
 
 ## Supported runners
 
-Every runner is supported at the file level through the generic wrap; per-test
-precision is planned per runner.
+Runners that execute source directly work today through the generic wrap.
+Runners that transform sources first (Vitest, Jest) need a per-runner recorder
+that reads the runner's own coverage — Vitest is done. Per-test precision comes
+later. See [Adapters](/guide/adapters/) for how each is observed.
 
-| Runner                     | Per-file (Level 0) | Per-test (Level 1) |
-| -------------------------- | ------------------ | ------------------ |
-| Any command (generic wrap) | planned            | —                  |
-| Vitest                     | planned            | later              |
-| Jest                       | planned (generic)  | later              |
-| Mocha                      | planned (generic)  | later              |
-| node:test                  | planned (generic)  | later              |
-| cucumber-js                | planned (generic)  | later (scenario)   |
-| Playwright                 | planned (generic)  | later              |
+| Runner                     | Per-file (Level 0)     | Per-test (Level 1) |
+| -------------------------- | ---------------------- | ------------------ |
+| Any command (generic wrap) | yes (direct-exec)      | —                  |
+| node:test                  | yes (generic)          | later              |
+| Mocha                      | yes (generic, JS)      | later              |
+| Vitest                     | yes (`--adapter`)      | later              |
+| Jest                       | planned (own coverage) | later              |
+| cucumber-js                | planned (generic)      | later (scenario)   |
+| Playwright                 | planned (generic)      | later              |
 
 ## Prior art & credits
 

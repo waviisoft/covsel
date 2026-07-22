@@ -17,6 +17,7 @@ export default defineConfig({
   themeConfig: {
     nav: [
       { text: 'Guide', link: '/guide/what-is-covsel' },
+      { text: 'Adapters', link: '/guide/adapters/' },
       { text: 'Design', link: '/guide/architecture' },
       { text: 'Roadmap', link: '/guide/roadmap' },
     ],
@@ -28,6 +29,14 @@ export default defineConfig({
             { text: 'What is covsel?', link: '/guide/what-is-covsel' },
             { text: 'Getting started', link: '/guide/getting-started' },
             { text: 'The fail-open guarantee', link: '/guide/fail-open' },
+          ],
+        },
+        {
+          text: 'Adapters',
+          items: [
+            { text: 'Overview', link: '/guide/adapters/' },
+            { text: 'Generic (any command)', link: '/guide/adapters/generic' },
+            { text: 'Vitest', link: '/guide/adapters/vitest' },
           ],
         },
         {

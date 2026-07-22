@@ -1,40 +1,76 @@
 # Getting started
 
-::: warning Status: pre-alpha
-Selection commands are not available yet. Today the CLI ships only `--help` and
-`--version`; the record/affected/run loop below is the **target UX**. Follow the
-[roadmap](/guide/roadmap) for progress.
-:::
+File-level selection ships today: `covsel record`, `affected`, `run`, and
+`status`. Block-hash granularity and per-test precision are on the
+[roadmap](/guide/roadmap).
 
 ## Requirements
 
 - Node ≥ 22 (the V8 inspector and `NODE_V8_COVERAGE` are stable there)
 - pnpm (via `corepack enable`) if you are working on covsel itself
+- For Vitest, `@vitest/coverage-v8` in your project (see the
+  [Vitest adapter](/guide/adapters/vitest))
 
-## Try the CLI today
-
-```bash
-npx covsel --help
-npx covsel --version
-```
-
-## Target UX
-
-Once selection lands, the loop is zero-config to start:
+## The loop
 
 ```bash
-# Record a full run and build the map
-npx covsel record -- vitest run
+# 1. Record: build the test → covered-source map (one process per test file)
+covsel record -- node --test
+covsel record --adapter vitest -- vitest run   # needs @vitest/coverage-v8
 
-# Print the tests affected by your working-tree diff
-npx covsel affected
+# 2. Affected: print the test files your working-tree diff can affect
+covsel affected
+covsel affected --since origin/main
 
-# Or just run them
-npx covsel run -- vitest run
+# 3. Run: run only those tests by wrapping the runner
+covsel run -- node --test
 ```
 
-`covsel affected` prints; you pipe it. It works with any runner that accepts a
-list of test files — which is all of them.
+`covsel affected` prints a newline-separated file list, so you can also pipe it
+into any runner that accepts test files:
+
+```bash
+node --test $(covsel affected)
+```
+
+### Inspect the map
+
+```bash
+covsel status
+```
+
+shows the store path, the map's age and size, whether any sentinel changed since
+record, and whether the next `affected` would be a full run.
+
+## Which adapter?
+
+Selection is zero-config, but recording depends on how your runner executes
+code:
+
+- **Runners that execute source directly** (`node --test`, Mocha on plain JS)
+  use the [generic adapter](/guide/adapters/generic) — the default, nothing to
+  install.
+- **Runners that transform sources** (Vitest) need a runner-specific adapter,
+  because raw process coverage can't see transformed code. See
+  [Adapters](/guide/adapters/) for the full picture.
+
+## Configuration
+
+Zero-config works out of the box. To refine, add a `.covsel.json` (or
+`covsel.config.js`) at your repo root:
+
+```jsonc
+{
+  "testGlobs": ["**/*.{test,spec}.?(c|m)[jt]s?(x)"],
+  "sourceGlobs": ["**/*"], // repo minus node_modules/dist/coverage/.covsel and tests
+  "alwaysRun": ["**/fixtures/**"], // test files that must always run
+  "sentinels": ["package.json", "pnpm-lock.yaml", "tsconfig*.json"],
+  "store": { "dir": ".covsel" },
+}
+```
+
+Any change matching `sentinels` forces a full run; see
+[the fail-open guarantee](/guide/fail-open).
 
 ## Working on covsel
 

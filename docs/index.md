@@ -37,7 +37,8 @@ features:
       sentinel changes trigger a full run, a stale map means a full run.
 ---
 
-::: warning Status: pre-alpha
-The map schema, layer interfaces, and CLI shell exist; selection is in progress.
-See the [roadmap](/guide/roadmap).
+::: tip Status: early
+File-level selection ships now — `covsel record`, `affected`, `run`, and
+`status`. Block-hash granularity and per-test precision are next. See the
+[roadmap](/guide/roadmap).
 :::
