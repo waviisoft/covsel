@@ -90,8 +90,9 @@ async function cmdRecord(argv: string[]): Promise<number> {
     config,
     recorder,
     onEvent: (e) => {
-      if (e.kind === 'recorded') err(`  recorded ${e.file} (${e.sources} sources)\n`);
-      else err(`  FAILED   ${e.file}: ${e.reason}\n`);
+      if (e.kind === 'recorded') {
+        err(`  recorded ${e.file} (${e.tests} tests, ${e.sources} sources)\n`);
+      } else err(`  FAILED   ${e.file}: ${e.reason}\n`);
     },
   });
 

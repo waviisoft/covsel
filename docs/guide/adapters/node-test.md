@@ -36,9 +36,9 @@ covsel run --adapter node-test -- node --test
 ```
 
 When several tests live in one file but touch different sources, editing one
-source runs only the test that executed it. `covsel run` groups the affected
-tests by file and invokes node:test with a `--test-name-pattern` matching their
-names; a pattern built from a test's name runs that test even inside a
+source runs only the test that executed it. `covsel run` invokes node:test over
+the affected files with a single `--test-name-pattern` matching the affected
+test names; a pattern built from a test's name runs that test even inside a
 `describe`, and duplicate names only ever over-run — so selection stays
 fail-open. Files that must run in full (a new or changed test file) are run
 without a pattern.

@@ -91,7 +91,11 @@ function assembleMap(
   recordedAt: string,
 ): CoverageMap {
   const commit = gitHeadCommit(cwd);
-  const granularity: Granularity = config.granularity === 'file' ? 'file' : 'block';
+  // Reflect what was actually recorded: per-test (node:test) recorders capture
+  // no blocks, so the map is file-granular even when config asks for block.
+  const hasBlocks = entries.some((e) => (e.blocks?.length ?? 0) > 0);
+  const granularity: Granularity =
+    config.granularity !== 'file' && hasBlocks ? 'block' : 'file';
   return {
     schemaVersion: MAP_SCHEMA_VERSION,
     granularity,
@@ -105,6 +109,8 @@ function assembleMap(
 export interface RecordEvent {
   kind: 'recorded' | 'failed';
   file: string;
+  /** Number of test units recorded from this file (per-test recorders yield many). */
+  tests?: number;
   sources?: number;
   reason?: string;
 }
@@ -152,7 +158,7 @@ export async function recordMap(init: RecordInit): Promise<RecordResult> {
         });
         sources += unit.files.length;
       }
-      init.onEvent?.({ kind: 'recorded', file, sources });
+      init.onEvent?.({ kind: 'recorded', file, tests: units.length, sources });
     } catch (err) {
       const reason = err instanceof Error ? err.message : String(err);
       failures.push({ file, reason });

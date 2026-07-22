@@ -31,6 +31,10 @@ function deltaScripts(
       const fn = script.functions[i]!;
       const base = baseline?.functions[i];
       const ranges = fn.ranges.map((r) => {
+        // The index lookup above is only a hint — a function first run during the
+        // window shifts indices. Matching ranges by offset is what keeps this
+        // correct: a miss yields the full count (over-attribution), never an
+        // under-count, so it stays fail-open.
         const br = base?.ranges.find(
           (x) => x.startOffset === r.startOffset && x.endOffset === r.endOffset,
         );
