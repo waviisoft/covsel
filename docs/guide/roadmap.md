@@ -6,27 +6,23 @@ what's up for grabs — see the
 high-level shape; [`DESIGN.md`](https://github.com/waviisoft/covsel/blob/main/DESIGN.md)
 has the full architecture.
 
-## Now — foundations
-
-The repo, toolchain, and CI are in place. The map schema is defined and
-versioned, the layer interfaces are published from `@covsel/core`, and the CLI
-shell (`--help` / `--version`) ships. An integration test proves the Level-0
-coverage-observation mechanism.
-
-## Next — file-level selection (the MVP)
+## Now — file-level selection (shipped)
 
 The first end-to-end loop, at per-file granularity with zero runner integration:
 
 - Observer for `NODE_V8_COVERAGE` process mode, Mapper from coverage to your
-  source globs, a local Store, a file-level Selector, and the fail-open Policy
-  (sentinels, new-test detection).
-- The generic wrap-any-command adapter and a first Vitest adapter.
+  source globs, a local Store, a git diff helper, a file-level Selector, and the
+  fail-open Policy (sentinels, new-test detection).
+- The generic wrap-any-command adapter, and a Vitest adapter that records
+  through Vitest's own V8 coverage.
 - CLI: `record`, `affected`, `run`, `status`.
 
-**Done when:** editing one source file selects only the test files that execute
-it; editing a sentinel selects everything; a brand-new test always runs.
+Editing one source file selects only the test files that execute it; editing a
+sentinel selects everything; a brand-new test always runs — proven end-to-end by
+[`examples/vitest-basic`](https://github.com/waviisoft/covsel/tree/main/examples/vitest-basic)
+in CI.
 
-## Later — per-test precision and real adapters
+## Next — per-test precision and real adapters
 
 - Inspector snapshot-diff observation for per-test granularity.
 - Block-hash granularity so the map survives reformatting and line shifts.

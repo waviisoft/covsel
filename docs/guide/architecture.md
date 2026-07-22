@@ -23,10 +23,13 @@ Adapters depend on `core` only.
 ## Two granularity levels
 
 - **Level 0 — zero-integration, per-_file_.** Run each test file in its own
-  process with `NODE_V8_COVERAGE`; get a per-file map with **no runner
-  integration**. The adapter is just "wrap the command." This is the first
-  target, and the mechanism is guarded by an integration test in `@covsel/core`
-  that asserts a test file maps to exactly the sources it executes.
+  process and get a per-file map with **no runner integration**. For runners
+  that execute source directly, the adapter is just "wrap the command" under
+  `NODE_V8_COVERAGE`; this is guarded by an integration test in `@covsel/core`
+  that asserts a test file maps to exactly the sources it executes. Runners that
+  transform sources first (Vitest, Jest) evaluate transformed code through their
+  own loader, so process coverage can't see the originals — those adapters read
+  the runner's own coverage report instead. See [Adapters](/guide/adapters/).
 - **Level 1 — per-_test_.** Snapshot V8 coverage before/after each test via the
   inspector and diff. Selects individual tests/scenarios. Needs one thin
   lifecycle shim per runner.
@@ -44,6 +47,7 @@ Adapters depend on `core` only.
 | `covsel`                  | The CLI                                                                  |
 | `@covsel/core`            | Observer · Mapper · Store · Selector · Policy + the versioned map schema |
 | `@covsel/adapter-generic` | Level-0 wrap-any-command adapter                                         |
+| `@covsel/adapter-vitest`  | Vitest adapter (records via Vitest's own V8 coverage)                    |
 | `@covsel/adapter-*`       | Per-runner adapters (community contribution lane)                        |
 
 The full founding plan lives in

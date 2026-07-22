@@ -1,0 +1,18 @@
+{
+  "name": "@covsel/example-vitest-basic",
+  "version": "0.0.0",
+  "private": true,
+  "description": "End-to-end example: covsel record → affected driving a Vitest suite",
+  "license": "MIT",
+  "author": "WAVIISoft, LLC",
+  "type": "module",
+  "scripts": {
+    "test": "vitest run",
+    "e2e": "node ./e2e.mjs"
+  },
+  "devDependencies": {
+    "@vitest/coverage-v8": "^4.1.10",
+    "covsel": "workspace:*",
+    "vitest": "^4.1.10"
+  }
+}

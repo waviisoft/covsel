@@ -4,8 +4,10 @@
 > static import-graph selection lies, and the only option for runners that have
 > no selection at all.
 
-**Status: pre-alpha.** The map schema, layer interfaces, and CLI shell exist;
-selection is in progress. Track the work in the
+**Status: early.** File-level selection works today: `covsel record`,
+`affected`, `run`, and `status` ship, at per-file granularity with zero runner
+integration. Block-hash granularity, per-test precision, and the CI map-sharing
+story are next. Track the work in the
 [issues](https://github.com/waviisoft/covsel/issues), and see
 [`DESIGN.md`](./DESIGN.md) for the architecture.
 
@@ -22,25 +24,31 @@ Ekstazi/STARTS, and Ruby's Crystalball: **watch what code each test actually
 executes** (via V8 coverage), persist a test → covered-code map, and — given a
 git diff — run only the tests whose covered code changed.
 
-## Quickstart (target UX)
-
-> The selection commands below are the target UX and are not available yet; the
-> CLI currently ships `--help` and `--version`. Follow the
-> [issues](https://github.com/waviisoft/covsel/issues) for progress.
+## Quickstart
 
 ```bash
-# Record a full run and build the map
-npx covsel record -- vitest run
+# Record a run and build the map (one process per test file)
+npx covsel record -- node --test
+npx covsel record --adapter vitest -- vitest run   # needs @vitest/coverage-v8
 
-# Print the tests affected by your working-tree diff
-npx covsel affected
+# Print the tests your working-tree diff can affect
+npx covsel affected                 # newline-separated test files
+npx covsel affected --since origin/main
 
-# Or just run them
-npx covsel run -- vitest run
+# Run only those tests by wrapping the runner
+npx covsel run -- node --test
+
+# Inspect the map: age, size, sentinel drift, next action
+npx covsel status
 ```
 
-Zero config to start. Works with any runner that accepts a list of test files —
-which is all of them.
+Zero config to start. `covsel affected` prints a file list, so you can pipe it
+into any runner that accepts test files: `node --test $(covsel affected)`.
+
+Vitest transforms sources before executing them, so raw V8 process coverage
+can't see your `src/**`; `--adapter vitest` records through Vitest's own V8
+coverage provider instead. The generic wrap is for runners that execute source
+directly (e.g. `node --test`, Mocha on plain JS).
 
 ## The fail-open guarantee
 
@@ -57,16 +65,18 @@ can't be sure, we run it.**
 
 ## Supported runners
 
-All runners are supported at the file level through the generic wrap; per-test
-precision is planned per runner.
+Runners that execute source directly work today through the generic wrap.
+Runners that transform sources first (Vitest, Jest) need a per-runner recorder
+that reads the runner's own coverage; Vitest is done. Per-test precision is
+later.
 
 | Runner                     | Per-file (Level 0) | Per-test (Level 1) |
 | -------------------------- | ------------------ | ------------------ |
-| Any command (generic wrap) | planned            | —                  |
-| Vitest                     | planned            | later              |
-| Jest                       | planned (generic)  | later              |
-| Mocha                      | planned (generic)  | later              |
-| node:test                  | planned (generic)  | later              |
+| Any command (generic wrap) | yes (direct-exec)  | —                  |
+| node:test                  | yes (generic)      | later              |
+| Mocha                      | yes (generic, JS)  | later              |
+| Vitest                     | yes (`--adapter`)  | later              |
+| Jest                       | planned (own cov.) | later              |
 | cucumber-js                | planned (generic)  | later (scenario)   |
 | Playwright                 | planned (generic)  | later              |
 
@@ -77,6 +87,7 @@ precision is planned per runner.
 | `covsel`                  | The CLI                                                                  |
 | `@covsel/core`            | Observer · Mapper · Store · Selector · Policy + the versioned map schema |
 | `@covsel/adapter-generic` | Level-0 wrap-any-command adapter                                         |
+| `@covsel/adapter-vitest`  | Vitest adapter (records via Vitest's own V8 coverage)                    |
 | `@covsel/adapter-*`       | Per-runner adapters (community contribution lane)                        |
 
 ## Documentation
