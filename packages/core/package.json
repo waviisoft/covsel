@@ -38,7 +38,8 @@
     "v8"
   ],
   "dependencies": {
-    "picomatch": "^4.0.2"
+    "picomatch": "^4.0.2",
+    "typescript": "^5.9.3"
   },
   "devDependencies": {
     "@types/node": "^22.20.1",

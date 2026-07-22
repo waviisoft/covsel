@@ -25,7 +25,6 @@ in CI.
 ## Next — per-test precision and real adapters
 
 - Inspector snapshot-diff observation for per-test granularity.
-- Block-hash granularity so the map survives reformatting and line shifts.
 - Adapters for Jest, Mocha, node:test, cucumber-js, and Playwright.
 - CI story: publish the map on the default branch, fetch the merge-base map on a
   PR, and merge shard maps; Stores for the GitHub Actions cache and S3/GCS.

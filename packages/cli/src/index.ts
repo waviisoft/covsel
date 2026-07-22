@@ -149,6 +149,7 @@ async function cmdStatus(): Promise<number> {
     out(`granularity:${s.granularity ?? 'unknown'}\n`);
     out(`entries:    ${s.entryCount ?? 0}\n`);
     out(`sources:    ${s.coveredFileCount ?? 0}\n`);
+    if (s.coveredBlockCount !== undefined) out(`blocks:     ${s.coveredBlockCount}\n`);
     out(
       `sentinels:  ${
         s.changedSentinels.length === 0

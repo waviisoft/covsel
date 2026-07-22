@@ -42,6 +42,11 @@ export function hashFileContents(absPath: string): string {
   return `sha256:${createHash('sha256').update(readFileSync(absPath)).digest('hex')}`;
 }
 
+/** Content fingerprint of an in-memory string, prefixed with the algorithm. */
+export function hashString(text: string): string {
+  return `sha256:${createHash('sha256').update(text).digest('hex')}`;
+}
+
 /**
  * Recursively list every file under `cwd` as repo-relative, forward-slashed
  * paths, skipping the excluded directories. Unreadable directories are skipped

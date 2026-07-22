@@ -15,6 +15,8 @@ export interface CovselConfig {
   alwaysRun: string[];
   /** Files whose change invalidates the map and forces a full run. */
   sentinels: string[];
+  /** Recording granularity: 'block' (function-level) narrows selection further. */
+  granularity: 'block' | 'file';
   /** Where the local map is stored. */
   store: { dir: string };
 }
@@ -30,6 +32,7 @@ export const DEFAULT_CONFIG: CovselConfig = {
     'yarn.lock',
     'tsconfig*.json',
   ],
+  granularity: 'block',
   store: { dir: '.covsel' },
 };
 
@@ -40,6 +43,7 @@ export function resolveConfig(partial?: Partial<CovselConfig>): CovselConfig {
     sourceGlobs: partial?.sourceGlobs ?? DEFAULT_CONFIG.sourceGlobs,
     alwaysRun: partial?.alwaysRun ?? DEFAULT_CONFIG.alwaysRun,
     sentinels: partial?.sentinels ?? DEFAULT_CONFIG.sentinels,
+    granularity: partial?.granularity ?? DEFAULT_CONFIG.granularity,
     store: { ...DEFAULT_CONFIG.store, ...partial?.store },
   };
 }
