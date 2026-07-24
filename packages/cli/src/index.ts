@@ -1,15 +1,23 @@
 import {
   type AffectedResult,
   computeStatus,
+  type CovselConfig,
   createGenericRecorder,
   loadConfig,
+  loadRawConfig,
   MAP_SCHEMA_VERSION,
   recordMap,
+  resolveConfig,
   runAffected,
   selectAffected,
 } from '@covsel/core';
 import { createVitestRecorder } from '@covsel/adapter-vitest';
 import { createNodeTestRecorder, runNodeTestSelection } from '@covsel/adapter-node-test';
+import {
+  createCucumberRecorder,
+  CUCUMBER_TEST_GLOBS,
+  runCucumberSelection,
+} from '@covsel/adapter-cucumber';
 
 const HELP = `covsel — runtime-coverage test impact analysis for any JS/TS runner
 
@@ -50,6 +58,19 @@ function flag(opts: string[], name: string): string | undefined {
   return undefined;
 }
 
+/**
+ * Load config, letting the chosen adapter supply the test globs when the project
+ * has not set them — cucumber's tests are `.feature` files, not the default
+ * `*.test.*` sources, so its adapter must be able to find them zero-config.
+ */
+async function loadConfigFor(cwd: string, adapter: string): Promise<CovselConfig> {
+  const raw = await loadRawConfig(cwd);
+  if (adapter === 'cucumber' && raw.testGlobs === undefined) {
+    return resolveConfig({ ...raw, testGlobs: CUCUMBER_TEST_GLOBS });
+  }
+  return resolveConfig(raw);
+}
+
 function reportSelection(result: AffectedResult): void {
   if (result.fullRun) {
     err(`covsel: full run — ${result.reason ?? 'map cannot be trusted for this diff'}\n`);
@@ -68,19 +89,22 @@ async function cmdRecord(argv: string[]): Promise<number> {
   }
   const adapter = flag(opts, 'adapter') ?? 'generic';
   const cwd = process.cwd();
-  const config = await loadConfig(cwd);
+  const config = await loadConfigFor(cwd, adapter);
 
   const recorder =
     adapter === 'vitest'
       ? createVitestRecorder({ command, cwd, config })
       : adapter === 'node-test'
         ? createNodeTestRecorder({ command, cwd, config })
-        : adapter === 'generic'
-          ? createGenericRecorder({ command, cwd, config })
-          : undefined;
+        : adapter === 'cucumber'
+          ? createCucumberRecorder({ command, cwd, config })
+          : adapter === 'generic'
+            ? createGenericRecorder({ command, cwd, config })
+            : undefined;
   if (!recorder) {
     err(
-      `covsel record: unknown adapter '${adapter}' (expected 'generic', 'vitest', or 'node-test')\n`,
+      `covsel record: unknown adapter '${adapter}' ` +
+        `(expected 'generic', 'vitest', 'node-test', or 'cucumber')\n`,
     );
     return 1;
   }
@@ -117,7 +141,7 @@ async function cmdAffected(argv: string[]): Promise<number> {
   }
   const since = flag(argv, 'since');
   const cwd = process.cwd();
-  const config = await loadConfig(cwd);
+  const config = await loadConfigFor(cwd, flag(argv, 'adapter') ?? 'generic');
   const result = await selectAffected({ cwd, config, ...(since ? { since } : {}) });
   reportSelection(result);
   if (result.tests.length > 0) out(`${result.tests.join('\n')}\n`);
@@ -135,16 +159,18 @@ async function cmdRun(argv: string[]): Promise<number> {
   const adapter = flag(opts, 'adapter') ?? 'generic';
   const since = flag(opts, 'since');
   const cwd = process.cwd();
-  const config = await loadConfig(cwd);
+  const config = await loadConfigFor(cwd, adapter);
 
-  if (adapter === 'node-test') {
+  if (adapter === 'node-test' || adapter === 'cucumber') {
     const selection = await selectAffected({ cwd, config, ...(since ? { since } : {}) });
     reportSelection(selection);
     if (selection.fullRun) {
       return runAffected({ cwd, config, command, ...(since ? { since } : {}) });
     }
     if (selection.selected.length === 0) return 0;
-    return runNodeTestSelection({ selected: selection.selected, command, cwd });
+    const runSelection =
+      adapter === 'cucumber' ? runCucumberSelection : runNodeTestSelection;
+    return runSelection({ selected: selection.selected, command, cwd });
   }
 
   return runAffected(
