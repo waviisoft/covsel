@@ -17,6 +17,9 @@ export default defineConfig({
       '@covsel/adapter-node-test': fileURLToPath(
         new URL('./packages/adapter-node-test/src/index.ts', import.meta.url),
       ),
+      '@covsel/adapter-cucumber': fileURLToPath(
+        new URL('./packages/adapter-cucumber/src/index.ts', import.meta.url),
+      ),
     },
   },
   test: {

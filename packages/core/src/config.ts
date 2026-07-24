@@ -57,23 +57,30 @@ const CONFIG_FILES = [
 ] as const;
 
 /**
- * Load configuration from `cwd`, or fall back to defaults when no config file
- * is present. JSON is parsed directly; `.js` / `.mjs` / `.cjs` are imported and
- * their default (or module) export is used.
+ * Read the user's config file from `cwd` without applying defaults, so callers
+ * can tell which fields were actually set. Returns an empty object when no
+ * config file is present. JSON is parsed directly; `.js` / `.mjs` / `.cjs` are
+ * imported and their default (or module) export is used.
  */
-export async function loadConfig(cwd: string): Promise<CovselConfig> {
+export async function loadRawConfig(cwd: string): Promise<Partial<CovselConfig>> {
   for (const name of CONFIG_FILES) {
     const path = join(cwd, name);
     if (!existsSync(path)) continue;
     if (name.endsWith('.json')) {
-      return resolveConfig(
-        JSON.parse(readFileSync(path, 'utf8')) as Partial<CovselConfig>,
-      );
+      return JSON.parse(readFileSync(path, 'utf8')) as Partial<CovselConfig>;
     }
     const mod = (await import(pathToFileURL(path).href)) as {
       default?: Partial<CovselConfig>;
     } & Partial<CovselConfig>;
-    return resolveConfig(mod.default ?? mod);
+    return mod.default ?? mod;
   }
-  return resolveConfig();
+  return {};
+}
+
+/**
+ * Load configuration from `cwd`, or fall back to defaults when no config file
+ * is present.
+ */
+export async function loadConfig(cwd: string): Promise<CovselConfig> {
+  return resolveConfig(await loadRawConfig(cwd));
 }

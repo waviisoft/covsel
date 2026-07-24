@@ -46,11 +46,13 @@ of covsel is identical regardless of which path recorded the map.
 | `@covsel/adapter-generic`   | any direct-exec command | `NODE_V8_COVERAGE` process         | shipped |
 | `@covsel/adapter-vitest`    | Vitest                  | Vitest's own V8 coverage           | shipped |
 | `@covsel/adapter-node-test` | node:test               | inspector snapshot-diff (per-test) | shipped |
+| `@covsel/adapter-cucumber`  | cucumber-js             | inspector snapshot-diff (scenario) | shipped |
 | _(planned)_                 | Jest                    | Jest's own coverage                | later   |
-| _(planned)_                 | Mocha · cucumber-js · … | generic wrap / lifecycle shim      | later   |
+| _(planned)_                 | Mocha · Playwright · …  | generic wrap / lifecycle shim      | later   |
 
-The generic and Vitest adapters record at whole-file granularity; the node:test
-adapter records each **test** individually and runs only the affected tests.
+The generic and Vitest adapters record at whole-file granularity. The node:test
+and cucumber-js adapters record each **test** or **scenario** individually and
+run only the affected ones — which is the only selection cucumber-js has.
 
 ## Writing an adapter
 
