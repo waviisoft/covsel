@@ -238,7 +238,9 @@ export interface SelectInit {
   since?: string;
 }
 
-type DiffBase = { kind: 'base'; since?: string } | { kind: 'untrusted'; reason: string };
+type DiffBase =
+  | { kind: 'base'; since?: string; exact?: boolean }
+  | { kind: 'untrusted'; reason: string };
 
 /**
  * Decide what to diff against. A map describes the repository as it was at the
@@ -248,7 +250,15 @@ type DiffBase = { kind: 'base'; since?: string } | { kind: 'untrusted'; reason: 
  * the default branch is restored onto a later commit; diffing only from the
  * merge-base would silently ignore everything committed in between.
  *
- * An explicit `--since` always wins. When the map records a commit this checkout
+ * The comparison against that commit is exact — its tree against what is on disk
+ * now — rather than routed through a merge-base. A merge-base only answers
+ * "where did these branches part", which hides every file the recorded commit
+ * carries that HEAD's history does not: checking out an older commit, resetting
+ * history back, or restoring a map published on a branch tip onto a commit that
+ * branched earlier would all leave the map describing code that is not there.
+ *
+ * An explicit `--since` always wins, and keeps merge-base semantics — it names a
+ * branch point, not a recorded state. When the map records a commit this checkout
  * does not have (a shallow clone, a rebased or pruned history), or records none
  * at all inside a git work tree, the staleness window cannot be established and
  * the map is not trusted.
@@ -268,13 +278,21 @@ function diffBase(
         }
       : { kind: 'base' };
   }
+  // The commit arrives from a JSON file, which in CI came out of a restored
+  // cache. It is passed to git as an argument, so require it to look like one.
+  if (!/^[0-9a-f]{7,40}$/.test(map.commit)) {
+    return {
+      kind: 'untrusted',
+      reason: 'map records a commit that is not a valid object name',
+    };
+  }
   if (!commitExists(cwd, map.commit)) {
     return {
       kind: 'untrusted',
       reason: `map was recorded at ${map.commit.slice(0, 12)}, which this checkout does not have`,
     };
   }
-  return { kind: 'base', since: map.commit };
+  return { kind: 'base', since: map.commit, exact: true };
 }
 
 /**
@@ -299,7 +317,7 @@ export async function selectAffected(init: SelectInit): Promise<AffectedResult> 
 
   let changes;
   try {
-    changes = diffChanges(cwd, base.since);
+    changes = diffChanges(cwd, base.since, { exact: base.exact === true });
   } catch {
     return fullRun('could not compute a git diff');
   }
@@ -316,8 +334,19 @@ export async function selectAffected(init: SelectInit): Promise<AffectedResult> 
   const mandatory = await policy.mandatory(changes);
   const alwaysRun = testFiles.filter((f) => matchesAny(f, config.alwaysRun));
 
+  // A test file the map says nothing about is a test whose coverage is unknown,
+  // not a test that covers nothing. That happens when a recorder yielded no
+  // units for it, or when a merged map is missing a shard — neither of which may
+  // quietly deselect it.
+  const mapped = new Set(map!.entries.map((e) => e.test.file));
+  const unmapped = testFiles.filter((f) => !mapped.has(f));
+
   // Files that must run in full supersede any per-test selection for that file.
-  const wholeFile = new Set<string>([...mandatory.map((t) => t.file), ...alwaysRun]);
+  const wholeFile = new Set<string>([
+    ...mandatory.map((t) => t.file),
+    ...alwaysRun,
+    ...unmapped,
+  ]);
   const selected: TestId[] = [...wholeFile].map((file) => ({ file }));
   const seen = new Set<string>();
   for (const u of units) {
@@ -419,7 +448,7 @@ export async function computeStatus(init: StatusInit): Promise<StatusResult> {
     nextFullRunReason = base.reason;
   } else {
     try {
-      const changes = diffChanges(cwd, base.since);
+      const changes = diffChanges(cwd, base.since, { exact: base.exact === true });
       const decision = new FailOpenPolicy(config).evaluate(map, changes);
       nextIsFullRun = decision === 'full-run';
       if (nextIsFullRun) nextFullRunReason = fullRunReason(config, map, changes);

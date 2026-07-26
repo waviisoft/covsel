@@ -75,6 +75,26 @@ describe('mergeMaps', () => {
     ]);
   });
 
+  it('drops blocks for a test when one shard recorded none, so merging cannot narrow selection', () => {
+    // The shard without blocks knows nothing at block level for this test;
+    // keeping only the other shard's blocks would filter out changes it covers.
+    const withBlocks = shard({
+      granularity: 'block',
+      entries: [
+        {
+          ...entry('a.test.ts', ['src/x.ts']),
+          blocks: [{ file: 'src/x.ts', blockHash: 'b1' }],
+        },
+      ],
+    });
+    const withoutBlocks = shard({
+      granularity: 'block',
+      entries: [entry('a.test.ts', ['src/x.ts'])],
+    });
+    expect(mergeMaps([withBlocks, withoutBlocks]).entries[0]!.blocks).toBeUndefined();
+    expect(mergeMaps([withoutBlocks, withBlocks]).entries[0]!.blocks).toBeUndefined();
+  });
+
   it('reports the oldest recordedAt, since the result is only as fresh as its stalest shard', () => {
     const merged = mergeMaps([
       shard({ recordedAt: '2026-02-02T00:00:00.000Z' }),

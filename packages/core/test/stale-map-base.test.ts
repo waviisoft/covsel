@@ -103,6 +103,69 @@ describe('diff base anchored to the recorded commit', () => {
     expect(result.tests).toEqual(['test/a.test.mjs']);
   });
 
+  it('sees a file the map covers after history is reset back past the recording', async () => {
+    // The recorded commit is no longer an ancestor of HEAD, so a merge-base
+    // would land before it and hide the very change the map was recorded on.
+    write('src/a.mjs', `${ADD}// recorded with this\n`);
+    git(['add', '-A']);
+    git(['commit', '-q', '-m', 'change a']);
+    const recorder = createGenericRecorder({ command: ['node', '--test'], cwd, config });
+    expect((await recordMap({ cwd, config, recorder })).ok).toBe(true);
+    git(['reset', '--hard', '-q', 'HEAD~1']);
+
+    const result = await selectAffected({ cwd, config });
+    expect(result.tests).toEqual(['test/a.test.mjs']);
+  }, 60_000);
+
+  it('sees a file the map covers when HEAD is older than the recorded commit', async () => {
+    // A map published at a branch tip, restored onto an earlier checkout.
+    const original = git(['rev-parse', 'HEAD']);
+    write('src/a.mjs', `${ADD}// newer\n`);
+    git(['add', '-A']);
+    git(['commit', '-q', '-m', 'newer a']);
+    const recorder = createGenericRecorder({ command: ['node', '--test'], cwd, config });
+    expect((await recordMap({ cwd, config, recorder })).ok).toBe(true);
+    const map = readFileSync(mapPath(), 'utf8');
+    git(['checkout', '-q', original]);
+    mkdirSync(join(cwd, config.store.dir), { recursive: true });
+    writeFileSync(mapPath(), map);
+
+    const result = await selectAffected({ cwd, config });
+    expect(result.tests).toEqual(['test/a.test.mjs']);
+  }, 60_000);
+
+  it('sees changes the default branch made between the branch point and the recorded commit', async () => {
+    // The CI shape: a map published on the default branch, restored onto a pull
+    // request that branched before it and does not touch the changed file.
+    git(['branch', '-q', 'feature']);
+    write('src/a.mjs', `${ADD}// landed on main\n`);
+    git(['add', '-A']);
+    git(['commit', '-q', '-m', 'main moves on']);
+    const recorder = createGenericRecorder({ command: ['node', '--test'], cwd, config });
+    expect((await recordMap({ cwd, config, recorder })).ok).toBe(true);
+    const map = readFileSync(mapPath(), 'utf8');
+
+    git(['checkout', '-q', 'feature']);
+    mkdirSync(join(cwd, config.store.dir), { recursive: true });
+    writeFileSync(mapPath(), map);
+
+    const result = await selectAffected({ cwd, config });
+    expect(result.tests).toEqual(['test/a.test.mjs']);
+  }, 60_000);
+
+  it('runs a discovered test the map says nothing about', async () => {
+    // A recorder that yielded no units, or a merged map missing a shard: unknown
+    // coverage must never read as "covers nothing".
+    const map = JSON.parse(readFileSync(mapPath(), 'utf8')) as {
+      entries: { test: { file: string } }[];
+    };
+    map.entries = [];
+    writeFileSync(mapPath(), JSON.stringify(map));
+
+    const result = await selectAffected({ cwd, config });
+    expect(result.tests).toEqual(['test/a.test.mjs']);
+  });
+
   it('honours an explicit --since over the recorded commit', async () => {
     const base = git(['rev-parse', 'HEAD']);
     write('src/a.mjs', `${ADD}// changed\n`);

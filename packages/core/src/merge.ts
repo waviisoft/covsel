@@ -50,10 +50,16 @@ export function mergeMaps(maps: CoverageMap[]): CoverageMap {
       existing.files = [...files.values()].sort((a, b) =>
         a.file < b.file ? -1 : a.file > b.file ? 1 : 0,
       );
-      const merged = [...(existing.blocks ?? []), ...(entry.blocks ?? [])];
-      if (merged.length > 0) {
+      // Blocks narrow selection, so they may only survive when both sides know
+      // them. If either shard recorded none for this test, its coverage of the
+      // test is unknown at block level and the entry falls back to file level.
+      if (existing.blocks === undefined || entry.blocks === undefined) {
+        delete existing.blocks;
+      } else {
         const blocks = new Map<string, CoveredBlock>();
-        for (const b of merged) blocks.set(`${b.file}\0${b.blockHash}`, b);
+        for (const b of [...existing.blocks, ...entry.blocks]) {
+          blocks.set(`${b.file}\0${b.blockHash}`, b);
+        }
         existing.blocks = [...blocks.values()];
       }
     }
@@ -66,11 +72,17 @@ export function mergeMaps(maps: CoverageMap[]): CoverageMap {
   const allBlocks = usable.every((m) => m.granularity === 'block');
   const commits = new Set(usable.map((m) => m.commit));
   const commit = commits.size === 1 ? [...commits][0] : undefined;
-  const recordedAt = usable
+  // Compare as instants, not strings: `recordedAt` is only conventionally an
+  // ISO-8601 UTC stamp, and an offset form would sort wrong lexicographically.
+  const stamps = usable
     .map((m) => m.recordedAt)
-    .sort()
-    .at(0)!;
+    .filter((s): s is string => typeof s === 'string' && !Number.isNaN(Date.parse(s)))
+    .sort((a, b) => Date.parse(a) - Date.parse(b));
+  const recordedAt = stamps[0] ?? new Date().toISOString();
 
+  // Sentinel hashes only feed the drift report in `status`; the full-run trigger
+  // is a sentinel path showing up in the diff, so a conflict here cannot affect
+  // selection. Later shards win.
   const sentinelHashes: Record<string, string> = {};
   for (const map of usable) Object.assign(sentinelHashes, map.sentinelHashes);
 

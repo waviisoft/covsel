@@ -3,11 +3,15 @@
 The catastrophic failure for a tool like covsel is _skipping a test that should
 have run_. So every design tension resolves toward **over-selection**:
 
-- New or changed test files with no map entry **always run**.
+- New or changed test files **always run**, and so does any discovered test the
+  map says nothing about — unknown coverage never reads as "covers nothing".
 - Changes to **sentinel files** (`package.json`, tsconfig, lockfile, test setup)
   invalidate the map and trigger a **full run**.
 - A stale, unreadable, or wrong-schema map means a **full run**, never a skipped
   one.
+- A map whose recorded commit this checkout does not have, or that records no
+  commit at all, means a **full run**: without that anchor there is no way to
+  tell what changed since the map was recorded.
 - Non-JS dependencies coverage can't see (fixtures, snapshots, templates) are
   handled by user-declared `alwaysRun` globs — and, later, by tracking fs reads.
 

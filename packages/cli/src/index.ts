@@ -220,6 +220,10 @@ async function cmdStatus(): Promise<number> {
 }
 
 async function cmdMerge(argv: string[]): Promise<number> {
+  if (argv.at(-1) === '--out') {
+    err('covsel merge: --out needs a file path\n');
+    return 1;
+  }
   const outPath = flag(argv, 'out');
   const inputs = argv.filter((a, i) => {
     if (a.startsWith('--')) return false;
@@ -259,8 +263,15 @@ async function cmdMerge(argv: string[]): Promise<number> {
   const cwd = process.cwd();
   const config = await loadConfig(cwd);
   const target = outPath ?? join(cwd, config.store.dir, 'map.json');
-  mkdirSync(dirname(target), { recursive: true });
-  writeFileSync(target, `${JSON.stringify(merged, null, 2)}\n`);
+  try {
+    mkdirSync(dirname(target), { recursive: true });
+    writeFileSync(target, `${JSON.stringify(merged, null, 2)}\n`);
+  } catch (e) {
+    err(
+      `covsel merge: cannot write ${target}: ${e instanceof Error ? e.message : String(e)}\n`,
+    );
+    return 1;
+  }
   err(
     `covsel merge: merged ${maps.length} maps into ${target} ` +
       `(${merged.entries.length} entries, granularity ${merged.granularity})\n`,
