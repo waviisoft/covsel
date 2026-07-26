@@ -33,6 +33,8 @@ jobs:
         run: pnpm --filter @covsel/example-vitest-basic e2e
       - name: Golden example — node:test / generic NODE_V8_COVERAGE end-to-end
         run: pnpm --filter @covsel/example-node-test-basic e2e
+      - name: Golden example — cucumber-js scenario-level selection end-to-end
+        run: pnpm --filter @covsel/example-cucumber-basic e2e
       - run: pnpm format:check
 
   docs:
