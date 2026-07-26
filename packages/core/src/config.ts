@@ -2,11 +2,26 @@ import { existsSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { pathToFileURL } from 'node:url';
 
+/** The recorders that exist today. */
+export const ADAPTERS = ['generic', 'vitest', 'node-test'] as const;
+
+export type AdapterName = (typeof ADAPTERS)[number];
+
+export function isAdapterName(value: string): value is AdapterName {
+  return (ADAPTERS as readonly string[]).includes(value);
+}
+
 /**
  * User-facing configuration. Every field has a zero-config default, so a
  * project needs no config file to get sensible zero-config selection.
  */
 export interface CovselConfig {
+  /**
+   * Which recorder observes this project. Persisted so the decision is made
+   * once rather than repeated as a flag on every invocation; `--adapter` still
+   * overrides it.
+   */
+  adapter: AdapterName;
   /** Globs identifying test files. */
   testGlobs: string[];
   /** Globs identifying source files whose changes can affect tests. */
@@ -22,6 +37,7 @@ export interface CovselConfig {
 }
 
 export const DEFAULT_CONFIG: CovselConfig = {
+  adapter: 'generic',
   testGlobs: ['**/*.{test,spec}.?(c|m)[jt]s?(x)'],
   sourceGlobs: ['**/*'],
   alwaysRun: [],
@@ -39,6 +55,7 @@ export const DEFAULT_CONFIG: CovselConfig = {
 /** Merge a partial config over the defaults (arrays replace; store merges). */
 export function resolveConfig(partial?: Partial<CovselConfig>): CovselConfig {
   return {
+    adapter: partial?.adapter ?? DEFAULT_CONFIG.adapter,
     testGlobs: partial?.testGlobs ?? DEFAULT_CONFIG.testGlobs,
     sourceGlobs: partial?.sourceGlobs ?? DEFAULT_CONFIG.sourceGlobs,
     alwaysRun: partial?.alwaysRun ?? DEFAULT_CONFIG.alwaysRun,
@@ -49,12 +66,21 @@ export function resolveConfig(partial?: Partial<CovselConfig>): CovselConfig {
 }
 
 /** Config file names looked up, in priority order. */
-const CONFIG_FILES = [
+export const CONFIG_FILES = [
   '.covsel.json',
   'covsel.config.js',
   'covsel.config.mjs',
   'covsel.config.cjs',
 ] as const;
+
+/** The config file `loadConfig` would read from `cwd`, if any exists. */
+export function findConfigFile(cwd: string): string | undefined {
+  for (const name of CONFIG_FILES) {
+    const path = join(cwd, name);
+    if (existsSync(path)) return path;
+  }
+  return undefined;
+}
 
 /**
  * Load configuration from `cwd`, or fall back to defaults when no config file

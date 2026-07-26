@@ -1,6 +1,7 @@
 export * from './schema.js';
 export * from './interfaces.js';
 export * from './config.js';
+export * from './init.js';
 export * from './match.js';
 export * from './paths.js';
 export * from './discover.js';

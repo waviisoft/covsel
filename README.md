@@ -26,6 +26,9 @@ git diff — run only the tests whose covered code changed.
 ## Quickstart
 
 ```bash
+# Detect the runner, record which adapter observes this project, ignore the map
+npx covsel init
+
 # Record a run and build the map (one process per test file)
 npx covsel record -- node --test
 npx covsel record --adapter vitest -- vitest run   # needs @vitest/coverage-v8
@@ -41,8 +44,10 @@ npx covsel run -- node --test
 npx covsel status
 ```
 
-Zero config to start. `covsel affected` prints a file list, so you can pipe it
-into any runner that accepts test files: `node --test $(covsel affected)`.
+Zero config to start — `covsel init` is optional, and only records the adapter
+choice so later commands need no flag. `covsel affected` prints a file list, so
+you can pipe it into any runner that accepts test files:
+`node --test $(covsel affected)`.
 
 Vitest transforms sources before executing them, so raw V8 process coverage
 can't see your `src/**`; `--adapter vitest` records through Vitest's own V8

@@ -11,6 +11,25 @@ File-level selection ships today: `covsel record`, `affected`, `run`, and
 - For Vitest, `@vitest/coverage-v8` in your project (see the
   [Vitest adapter](/guide/adapters/vitest))
 
+## Set up
+
+```bash
+covsel init
+```
+
+detects your runner, writes a `.covsel.json` recording which adapter observes
+the project, and adds the map directory to `.gitignore`. `record` and `run`
+then need no `--adapter` flag.
+
+If covsel doesn't recognise your runner it writes nothing and says so, with a
+link for requesting an adapter — pass `covsel init --adapter <name>` to
+configure it yourself anyway.
+
+Runners that transform sources before executing them (Jest today) are never
+configured automatically: process coverage can't see through the transform, so
+the recorded map would say no test covers your sources, and a change to them
+would select nothing. Keep those suites running in full.
+
 ## The loop
 
 ```bash
@@ -61,6 +80,7 @@ Zero-config works out of the box. To refine, add a `.covsel.json` (or
 
 ```jsonc
 {
+  "adapter": "vitest", // "generic" | "vitest" | "node-test"; --adapter overrides
   "testGlobs": ["**/*.{test,spec}.?(c|m)[jt]s?(x)"],
   "sourceGlobs": ["**/*"], // repo minus node_modules/dist/coverage/.covsel and tests
   "alwaysRun": ["**/fixtures/**"], // test files that must always run
