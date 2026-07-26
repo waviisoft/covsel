@@ -2,6 +2,7 @@ import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 
 import type { Store } from './interfaces.js';
+import { mergeMaps } from './merge.js';
 import { type CoverageMap, isUsableMap } from './schema.js';
 
 export interface LocalStoreInit {
@@ -43,7 +44,7 @@ export class LocalStore implements Store {
     writeFileSync(this.file, `${JSON.stringify(map, null, 2)}\n`);
   }
 
-  async merge(): Promise<CoverageMap> {
-    throw new Error('map merge is not implemented in this release');
+  async merge(maps: CoverageMap[]): Promise<CoverageMap> {
+    return mergeMaps(maps);
   }
 }

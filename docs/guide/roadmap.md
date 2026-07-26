@@ -18,17 +18,18 @@ The end-to-end loop works, from whole-file down to individual tests:
 - Per-test selection via inspector snapshot-diff observation: individual tests
   for node:test, individual **scenarios** for cucumber-js.
 - Adapters: the generic wrap-any-command adapter, Vitest, node:test, cucumber-js.
-- CLI: `record`, `affected`, `run`, `status`.
+- A CI story: publish the map on the default branch, restore it on pull requests,
+  and merge the maps from a sharded suite — see [Using covsel in CI](/guide/ci).
+- CLI: `record`, `affected`, `run`, `status`, `merge`.
 
 Editing one source selects only the tests that execute it; editing a sentinel
 selects everything; a brand-new test always runs — proven end-to-end in CI by
 the [examples](https://github.com/waviisoft/covsel/tree/main/examples).
 
-## Next — more adapters and the CI story
+## Next — more adapters and remote stores
 
 - Adapters for Jest, Mocha, and Playwright.
-- CI story: publish the map on the default branch, fetch the merge-base map on a
-  PR, and merge shard maps; Stores for the GitHub Actions cache and S3/GCS.
+- Remote Stores (S3/GCS) for teams that outgrow caching the store directory.
 - An adapter conformance kit so community adapters can prove themselves.
 - `covsel watch`.
 

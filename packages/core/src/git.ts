@@ -26,6 +26,20 @@ export function gitHeadCommit(cwd: string): string | undefined {
   }
 }
 
+/** True when this checkout actually has the given commit (or ref). */
+export function commitExists(cwd: string, ref: string): boolean {
+  return resolvable(cwd, ref);
+}
+
+/** True when `cwd` is inside a git work tree. */
+export function isGitWorkTree(cwd: string): boolean {
+  try {
+    return git(cwd, ['rev-parse', '--is-inside-work-tree']).ok;
+  } catch {
+    return false;
+  }
+}
+
 /** A ref that exists and can be resolved, or `undefined`. */
 function resolvable(cwd: string, ref: string): boolean {
   try {

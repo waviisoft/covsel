@@ -6,8 +6,8 @@
 
 **Status: early.** The `covsel record`, `affected`, `run`, and `status` loop
 works today, with block-hash (function-level) selection, per-test selection for
-node:test, and scenario-level selection for cucumber-js. More runner adapters and
-the CI map-sharing story are next. Track the work in the
+node:test, scenario-level selection for cucumber-js, and a CI story for
+publishing and merging maps. More runner adapters are next. Track the work in the
 [issues](https://github.com/waviisoft/covsel/issues), and see
 [`DESIGN.md`](./DESIGN.md) for the architecture.
 
@@ -44,6 +44,9 @@ npx covsel run --adapter cucumber -- cucumber-js
 
 # Inspect the map: age, size, sentinel drift, next action
 npx covsel status
+
+# In CI: merge the maps from a sharded suite before publishing
+npx covsel merge shard-*/map.json --out .covsel/map.json
 ```
 
 Zero config to start. `covsel affected` prints a file list, so you can pipe it
@@ -99,6 +102,9 @@ for node:test, and scenario-level selection for cucumber-js.
 ## Documentation
 
 Full docs: **https://waviisoft.github.io/covsel/** (source in [`docs/`](./docs)).
+Running covsel in CI — publishing the map on your default branch, restoring it on
+pull requests, and merging sharded runs — is covered in the
+[CI guide](https://waviisoft.github.io/covsel/guide/ci).
 
 ## Development
 

@@ -5,7 +5,7 @@ import { join } from 'node:path';
 import { blockHashesOf } from './blocks.js';
 import type { CovselConfig } from './config.js';
 import { discoverTestFiles } from './discover.js';
-import { diffChanges, gitHeadCommit } from './git.js';
+import { commitExists, diffChanges, gitHeadCommit, isGitWorkTree } from './git.js';
 import type { Change } from './interfaces.js';
 import { makeMatcher, matchesAny } from './match.js';
 import { V8FileMapper } from './mapper.js';
@@ -238,6 +238,45 @@ export interface SelectInit {
   since?: string;
 }
 
+type DiffBase = { kind: 'base'; since?: string } | { kind: 'untrusted'; reason: string };
+
+/**
+ * Decide what to diff against. A map describes the repository as it was at the
+ * commit it was recorded on, so that commit — not the merge-base with the
+ * default branch — is the honest starting point: anything changed since then is
+ * outside what the map knows. This matters most in CI, where a map published on
+ * the default branch is restored onto a later commit; diffing only from the
+ * merge-base would silently ignore everything committed in between.
+ *
+ * An explicit `--since` always wins. When the map records a commit this checkout
+ * does not have (a shallow clone, a rebased or pruned history), or records none
+ * at all inside a git work tree, the staleness window cannot be established and
+ * the map is not trusted.
+ */
+function diffBase(
+  cwd: string,
+  map: CoverageMap | undefined,
+  since: string | undefined,
+): DiffBase {
+  if (since !== undefined) return { kind: 'base', since };
+  if (map === undefined) return { kind: 'base' };
+  if (map.commit === undefined) {
+    return isGitWorkTree(cwd)
+      ? {
+          kind: 'untrusted',
+          reason: 'map records no commit, so changes since it was recorded are unknown',
+        }
+      : { kind: 'base' };
+  }
+  if (!commitExists(cwd, map.commit)) {
+    return {
+      kind: 'untrusted',
+      reason: `map was recorded at ${map.commit.slice(0, 12)}, which this checkout does not have`,
+    };
+  }
+  return { kind: 'base', since: map.commit };
+}
+
 /**
  * Compute the tests affected by the current diff. Falls open to a full run when
  * the map is unusable, a sentinel changed, or the diff cannot be computed.
@@ -255,9 +294,12 @@ export async function selectAffected(init: SelectInit): Promise<AffectedResult> 
     selected: testFiles.map((file) => ({ file })),
   });
 
+  const base = diffBase(cwd, map, init.since);
+  if (base.kind === 'untrusted') return fullRun(base.reason);
+
   let changes;
   try {
-    changes = diffChanges(cwd, init.since);
+    changes = diffChanges(cwd, base.since);
   } catch {
     return fullRun('could not compute a git diff');
   }
@@ -372,13 +414,18 @@ export async function computeStatus(init: StatusInit): Promise<StatusResult> {
 
   let nextIsFullRun = true;
   let nextFullRunReason: string | undefined;
-  try {
-    const changes = diffChanges(cwd);
-    const decision = new FailOpenPolicy(config).evaluate(map, changes);
-    nextIsFullRun = decision === 'full-run';
-    if (nextIsFullRun) nextFullRunReason = fullRunReason(config, map, changes);
-  } catch {
-    nextFullRunReason = 'could not compute a git diff';
+  const base = diffBase(cwd, map, undefined);
+  if (base.kind === 'untrusted') {
+    nextFullRunReason = base.reason;
+  } else {
+    try {
+      const changes = diffChanges(cwd, base.since);
+      const decision = new FailOpenPolicy(config).evaluate(map, changes);
+      nextIsFullRun = decision === 'full-run';
+      if (nextIsFullRun) nextFullRunReason = fullRunReason(config, map, changes);
+    } catch {
+      nextFullRunReason = 'could not compute a git diff';
+    }
   }
 
   return {

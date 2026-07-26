@@ -29,6 +29,7 @@ export default defineConfig({
             { text: 'What is covsel?', link: '/guide/what-is-covsel' },
             { text: 'Getting started', link: '/guide/getting-started' },
             { text: 'The fail-open guarantee', link: '/guide/fail-open' },
+            { text: 'Using covsel in CI', link: '/guide/ci' },
           ],
         },
         {
