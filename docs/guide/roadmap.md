@@ -40,6 +40,4 @@ the [examples](https://github.com/waviisoft/covsel/tree/main/examples).
 - Bundler source-map plugins (Turbopack/webpack/esbuild/Vite) for browser
   coverage.
 - Compose with Nx/Turbo project graphs.
-- Remote Stores (S3/GCS), if teams outgrow caching the store directory.
 - fs-read tracking for non-JS dependencies.
-- An optional remote map service.

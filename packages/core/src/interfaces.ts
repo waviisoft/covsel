@@ -30,7 +30,7 @@ export interface Mapper {
   toBlocks(raw: RawCoverage): Promise<CoveredBlock[]>;
 }
 
-/** Store — persists and retrieves maps (local .covsel/, GHA cache, S3/GCS). */
+/** Store — persists and retrieves maps; the local one is a `.covsel/` directory. */
 export interface Store {
   read(): Promise<CoverageMap | undefined>;
   write(map: CoverageMap): Promise<void>;

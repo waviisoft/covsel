@@ -10,7 +10,7 @@ Observer      V8 inspector snapshot-diff | NODE_V8_COVERAGE (process) | istanbul
    (shared — turns "a test ran" into a set of executed source ranges)
 Mapper        source-maps → original files · bundler awareness · block-hash granularity
    (shared — the hard part; maps transpiled/bundled execution back to src/**)
-Store         .covsel/ local · git-notes · GHA cache · S3/GCS
+Store         .covsel/ local (a directory, so a CI cache can carry it)
    (pluggable — publish map on main, fetch merge-base map on PR, merge shards)
 Selector      git diff → impacted test-ids → emit(file list | runner-native tags)
    + Policy:   fail-open · always-run globs · new-test detection · full-run sentinels
