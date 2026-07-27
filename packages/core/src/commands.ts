@@ -5,7 +5,7 @@ import { join } from 'node:path';
 import { blockHashesOf } from './blocks.js';
 import type { CovselConfig } from './config.js';
 import { discoverTestFiles } from './discover.js';
-import { diffChanges, gitHeadCommit } from './git.js';
+import { commitExists, diffChanges, gitHeadCommit, isGitWorkTree } from './git.js';
 import type { Change } from './interfaces.js';
 import { makeMatcher, matchesAny } from './match.js';
 import { V8FileMapper } from './mapper.js';
@@ -238,6 +238,63 @@ export interface SelectInit {
   since?: string;
 }
 
+type DiffBase =
+  | { kind: 'base'; since?: string; exact?: boolean }
+  | { kind: 'untrusted'; reason: string };
+
+/**
+ * Decide what to diff against. A map describes the repository as it was at the
+ * commit it was recorded on, so that commit — not the merge-base with the
+ * default branch — is the honest starting point: anything changed since then is
+ * outside what the map knows. This matters most in CI, where a map published on
+ * the default branch is restored onto a later commit; diffing only from the
+ * merge-base would silently ignore everything committed in between.
+ *
+ * The comparison against that commit is exact — its tree against what is on disk
+ * now — rather than routed through a merge-base. A merge-base only answers
+ * "where did these branches part", which hides every file the recorded commit
+ * carries that HEAD's history does not: checking out an older commit, resetting
+ * history back, or restoring a map published on a branch tip onto a commit that
+ * branched earlier would all leave the map describing code that is not there.
+ *
+ * An explicit `--since` always wins, and keeps merge-base semantics — it names a
+ * branch point, not a recorded state. When the map records a commit this checkout
+ * does not have (a shallow clone, a rebased or pruned history), or records none
+ * at all inside a git work tree, the staleness window cannot be established and
+ * the map is not trusted.
+ */
+function diffBase(
+  cwd: string,
+  map: CoverageMap | undefined,
+  since: string | undefined,
+): DiffBase {
+  if (since !== undefined) return { kind: 'base', since };
+  if (map === undefined) return { kind: 'base' };
+  if (map.commit === undefined) {
+    return isGitWorkTree(cwd)
+      ? {
+          kind: 'untrusted',
+          reason: 'map records no commit, so changes since it was recorded are unknown',
+        }
+      : { kind: 'base' };
+  }
+  // The commit arrives from a JSON file, which in CI came out of a restored
+  // cache. It is passed to git as an argument, so require it to look like one.
+  if (!/^[0-9a-f]{7,40}$/.test(map.commit)) {
+    return {
+      kind: 'untrusted',
+      reason: 'map records a commit that is not a valid object name',
+    };
+  }
+  if (!commitExists(cwd, map.commit)) {
+    return {
+      kind: 'untrusted',
+      reason: `map was recorded at ${map.commit.slice(0, 12)}, which this checkout does not have`,
+    };
+  }
+  return { kind: 'base', since: map.commit, exact: true };
+}
+
 /**
  * Compute the tests affected by the current diff. Falls open to a full run when
  * the map is unusable, a sentinel changed, or the diff cannot be computed.
@@ -255,9 +312,12 @@ export async function selectAffected(init: SelectInit): Promise<AffectedResult> 
     selected: testFiles.map((file) => ({ file })),
   });
 
+  const base = diffBase(cwd, map, init.since);
+  if (base.kind === 'untrusted') return fullRun(base.reason);
+
   let changes;
   try {
-    changes = diffChanges(cwd, init.since);
+    changes = diffChanges(cwd, base.since, { exact: base.exact === true });
   } catch {
     return fullRun('could not compute a git diff');
   }
@@ -274,8 +334,19 @@ export async function selectAffected(init: SelectInit): Promise<AffectedResult> 
   const mandatory = await policy.mandatory(changes);
   const alwaysRun = testFiles.filter((f) => matchesAny(f, config.alwaysRun));
 
+  // A test file the map says nothing about is a test whose coverage is unknown,
+  // not a test that covers nothing. That happens when a recorder yielded no
+  // units for it, or when a merged map is missing a shard — neither of which may
+  // quietly deselect it.
+  const mapped = new Set(map!.entries.map((e) => e.test.file));
+  const unmapped = testFiles.filter((f) => !mapped.has(f));
+
   // Files that must run in full supersede any per-test selection for that file.
-  const wholeFile = new Set<string>([...mandatory.map((t) => t.file), ...alwaysRun]);
+  const wholeFile = new Set<string>([
+    ...mandatory.map((t) => t.file),
+    ...alwaysRun,
+    ...unmapped,
+  ]);
   const selected: TestId[] = [...wholeFile].map((file) => ({ file }));
   const seen = new Set<string>();
   for (const u of units) {
@@ -372,13 +443,18 @@ export async function computeStatus(init: StatusInit): Promise<StatusResult> {
 
   let nextIsFullRun = true;
   let nextFullRunReason: string | undefined;
-  try {
-    const changes = diffChanges(cwd);
-    const decision = new FailOpenPolicy(config).evaluate(map, changes);
-    nextIsFullRun = decision === 'full-run';
-    if (nextIsFullRun) nextFullRunReason = fullRunReason(config, map, changes);
-  } catch {
-    nextFullRunReason = 'could not compute a git diff';
+  const base = diffBase(cwd, map, undefined);
+  if (base.kind === 'untrusted') {
+    nextFullRunReason = base.reason;
+  } else {
+    try {
+      const changes = diffChanges(cwd, base.since, { exact: base.exact === true });
+      const decision = new FailOpenPolicy(config).evaluate(map, changes);
+      nextIsFullRun = decision === 'full-run';
+      if (nextIsFullRun) nextFullRunReason = fullRunReason(config, map, changes);
+    } catch {
+      nextFullRunReason = 'could not compute a git diff';
+    }
   }
 
   return {

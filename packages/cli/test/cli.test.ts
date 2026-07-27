@@ -66,6 +66,26 @@ describe('covsel cli', () => {
     expect(err).toContain('expected a runner command after');
   });
 
+  it('merge without any shard files errors', async () => {
+    const { code, err } = await captureStderr(() => main(['merge']));
+    expect(code).toBe(1);
+    expect(err).toContain('expected shard map files');
+  });
+
+  it('merge rejects --out without a path rather than writing somewhere unexpected', async () => {
+    const { code, err } = await captureStderr(() => main(['merge', 'a.json', '--out']));
+    expect(code).toBe(1);
+    expect(err).toContain('--out needs a file path');
+  });
+
+  it('merge reports an unreadable shard instead of silently dropping it', async () => {
+    const { code, err } = await captureStderr(() =>
+      main(['merge', 'definitely-missing-map.json']),
+    );
+    expect(code).toBe(1);
+    expect(err).toContain('cannot read');
+  });
+
   it('affected rejects an unsupported --format', async () => {
     const { code, err } = await captureStderr(() =>
       main(['affected', '--format', 'vitest']),

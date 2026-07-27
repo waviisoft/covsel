@@ -1,8 +1,9 @@
 # Getting started
 
-File-level selection ships today: `covsel record`, `affected`, `run`, and
-`status`. Block-hash granularity and per-test precision are on the
-[roadmap](/guide/roadmap).
+Selection ships today: `covsel record`, `affected`, `run`, `status`, and
+`merge` — with function-level (block-hash) precision, per-test selection for
+node:test, and scenario-level selection for cucumber-js. Running covsel in CI is
+covered in the [CI guide](/guide/ci).
 
 ## Requirements
 

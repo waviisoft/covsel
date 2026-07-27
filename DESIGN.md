@@ -128,7 +128,7 @@ covsel record -- vitest run
 covsel record --adapter cucumber -- npm run test:cucumber:ui
 
 # Print the tests affected by the working-tree diff (or a range)
-covsel affected                       # vs. merge-base by default
+covsel affected                       # vs. the commit the map was recorded on
 covsel affected --since origin/main
 covsel affected --format files        # newline-separated test files (default)
 covsel affected --format vitest       # runner-native args

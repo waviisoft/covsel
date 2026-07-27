@@ -26,6 +26,24 @@ export function gitHeadCommit(cwd: string): string | undefined {
   }
 }
 
+/** True when this checkout actually has the given commit (or ref). */
+export function commitExists(cwd: string, ref: string): boolean {
+  return resolvable(cwd, ref);
+}
+
+/**
+ * True when `cwd` is inside a git work tree. The command also succeeds in a bare
+ * repository and inside `.git/`, printing `false`, so the output is what counts.
+ */
+export function isGitWorkTree(cwd: string): boolean {
+  try {
+    const res = git(cwd, ['rev-parse', '--is-inside-work-tree']);
+    return res.ok && res.stdout.trim() === 'true';
+  } catch {
+    return false;
+  }
+}
+
 /** A ref that exists and can be resolved, or `undefined`. */
 function resolvable(cwd: string, ref: string): boolean {
   try {
@@ -114,13 +132,32 @@ function parsePorcelain(acc: Map<string, Change>, out: string): void {
   }
 }
 
+export interface DiffOptions {
+  /**
+   * Compare the base's tree to HEAD directly instead of going through their
+   * merge-base. Use this when the base is a state the caller must account for in
+   * full — a map's recorded commit — rather than a branch point. Going through
+   * the merge-base would hide every file that differs between the base and HEAD's
+   * ancestor, which is exactly the coverage the map was recorded against.
+   */
+  exact?: boolean;
+}
+
 /**
- * Produce the set of changed files: committed changes since the merge-base of
- * HEAD and the default branch (or an explicit `since` ref), plus every
- * working-tree change (staged, unstaged, and untracked). Paths are
- * repo-relative with forward slashes.
+ * Produce the set of changed files: committed changes since `since` (by default
+ * the merge-base of HEAD and the default branch), plus every working-tree change
+ * (staged, unstaged, and untracked). Paths are repo-relative with forward
+ * slashes.
+ *
+ * With `exact`, the committed half is `git diff <since> HEAD`, so together with
+ * the working-tree half it covers every file whose content differs between the
+ * base's tree and what is on disk now — in either direction.
  */
-export function diffChanges(cwd: string, since?: string): Change[] {
+export function diffChanges(
+  cwd: string,
+  since?: string,
+  options: DiffOptions = {},
+): Change[] {
   if (!git(cwd, ['rev-parse', '--is-inside-work-tree']).ok) {
     throw new GitUnavailableError('not a git work tree');
   }
@@ -128,8 +165,8 @@ export function diffChanges(cwd: string, since?: string): Change[] {
 
   const base = since ?? defaultBase(cwd);
   if (base !== undefined) {
-    const mb = mergeBase(cwd, base, 'HEAD') ?? base;
-    const committed = git(cwd, ['diff', '--name-status', mb, 'HEAD']);
+    const from = options.exact ? base : (mergeBase(cwd, base, 'HEAD') ?? base);
+    const committed = git(cwd, ['diff', '--name-status', from, 'HEAD']);
     if (committed.ok) parseNameStatus(acc, committed.stdout);
   }
 

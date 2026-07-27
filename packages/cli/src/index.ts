@@ -1,11 +1,17 @@
+import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { dirname, join } from 'node:path';
+
 import {
   type AffectedResult,
   computeStatus,
+  type CoverageMap,
   type CovselConfig,
   createGenericRecorder,
   loadConfig,
+  isUsableMap,
   loadRawConfig,
   MAP_SCHEMA_VERSION,
+  mergeMaps,
   recordMap,
   resolveConfig,
   runAffected,
@@ -26,6 +32,7 @@ Usage:
   covsel affected [--since <ref>] [--format files] Print tests the diff can affect
   covsel run -- <command>                          Run only the affected tests
   covsel status                                    Show map age, size, and next action
+  covsel merge <maps...> [--out <file>]            Merge CI shard maps into one
   covsel --help                                    Show this help
   covsel --version                                 Show version
 
@@ -212,6 +219,72 @@ async function cmdStatus(): Promise<number> {
   return 0;
 }
 
+async function cmdMerge(argv: string[]): Promise<number> {
+  if (argv.at(-1) === '--out') {
+    err('covsel merge: --out needs a file path\n');
+    return 1;
+  }
+  const outPath = flag(argv, 'out');
+  const inputs = argv.filter((a, i) => {
+    if (a.startsWith('--')) return false;
+    return argv[i - 1] !== '--out';
+  });
+  if (inputs.length === 0) {
+    err(
+      'covsel merge: expected shard map files, e.g. covsel merge shard-*/map.json --out .covsel/map.json\n',
+    );
+    return 1;
+  }
+
+  const maps: CoverageMap[] = [];
+  for (const file of inputs) {
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(readFileSync(file, 'utf8'));
+    } catch {
+      err(`covsel merge: cannot read ${file}\n`);
+      return 1;
+    }
+    if (!isUsableMap(parsed)) {
+      err(`covsel merge: ${file} is not a usable map (wrong schema version?)\n`);
+      return 1;
+    }
+    maps.push(parsed);
+  }
+
+  let merged: CoverageMap;
+  try {
+    merged = mergeMaps(maps);
+  } catch (e) {
+    err(`covsel merge: ${e instanceof Error ? e.message : String(e)}\n`);
+    return 1;
+  }
+
+  const cwd = process.cwd();
+  const config = await loadConfig(cwd);
+  const target = outPath ?? join(cwd, config.store.dir, 'map.json');
+  try {
+    mkdirSync(dirname(target), { recursive: true });
+    writeFileSync(target, `${JSON.stringify(merged, null, 2)}\n`);
+  } catch (e) {
+    err(
+      `covsel merge: cannot write ${target}: ${e instanceof Error ? e.message : String(e)}\n`,
+    );
+    return 1;
+  }
+  err(
+    `covsel merge: merged ${maps.length} maps into ${target} ` +
+      `(${merged.entries.length} entries, granularity ${merged.granularity})\n`,
+  );
+  if (merged.commit === undefined) {
+    err(
+      'covsel merge: shards disagree on the recorded commit; the merged map ' +
+        'records none, so the next selection will be a full run\n',
+    );
+  }
+  return 0;
+}
+
 export async function main(argv: string[] = process.argv.slice(2)): Promise<number> {
   const [cmd, ...rest] = argv;
 
@@ -232,6 +305,8 @@ export async function main(argv: string[] = process.argv.slice(2)): Promise<numb
       return cmdRun(rest);
     case 'status':
       return cmdStatus();
+    case 'merge':
+      return cmdMerge(rest);
     default:
       err(`covsel: unknown command '${cmd}'. Run covsel --help.\n`);
       return 1;
