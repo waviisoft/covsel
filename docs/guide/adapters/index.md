@@ -57,7 +57,9 @@ run only the affected ones — which is the only selection cucumber-js has.
 ## Writing an adapter
 
 Adapters are the primary community contribution surface. Each implements the
-`Adapter` interface from `@covsel/core` and, for a transforming runner, a
-recorder that produces the executed source list. See
-[CONTRIBUTING.md](https://github.com/waviisoft/covsel/blob/main/CONTRIBUTING.md)
+`Adapter` interface from `@covsel/core` plus a recorder that produces the
+executed source list, and proves itself against the shared conformance suite in
+`@covsel/conformance` — the same suite every built-in adapter runs. See
+[Writing an adapter](/guide/adapters/writing-an-adapter),
+[CONTRIBUTING.md](https://github.com/waviisoft/covsel/blob/main/CONTRIBUTING.md),
 and the [architecture](/guide/architecture) page.

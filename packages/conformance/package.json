@@ -1,7 +1,7 @@
 {
-  "name": "@covsel/adapter-node-test",
+  "name": "@covsel/conformance",
   "version": "0.0.0",
-  "description": "node:test adapter for covsel: per-test selection via the inspector snapshot-diff observer",
+  "description": "The shared conformance suite every covsel adapter must pass",
   "license": "MIT",
   "author": "WAVIISoft, LLC",
   "type": "module",
@@ -14,17 +14,29 @@
       "import": "./dist/index.js",
       "require": "./dist/index.cjs"
     },
-    "./shim": "./dist/shim.js"
+    "./vitest": {
+      "types": "./dist/vitest.d.ts",
+      "import": "./dist/vitest.js",
+      "require": "./dist/vitest.cjs"
+    }
   },
   "files": [
     "dist"
   ],
   "scripts": {
-    "build": "tsup src/index.ts --format esm,cjs --dts --sourcemap --clean && cp src/shim.js dist/shim.js",
+    "build": "tsup src/index.ts src/vitest.ts --format esm,cjs --dts --sourcemap --clean",
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
     "@covsel/core": "workspace:*"
+  },
+  "peerDependencies": {
+    "vitest": ">=2"
+  },
+  "peerDependenciesMeta": {
+    "vitest": {
+      "optional": true
+    }
   },
   "engines": {
     "node": ">=22"
@@ -32,16 +44,15 @@
   "repository": {
     "type": "git",
     "url": "https://github.com/waviisoft/covsel.git",
-    "directory": "packages/adapter-node-test"
+    "directory": "packages/conformance"
   },
   "keywords": [
     "test-impact-analysis",
     "coverage",
     "adapter",
-    "node-test"
+    "conformance"
   ],
   "devDependencies": {
-    "@types/node": "^22.20.1",
-    "@covsel/conformance": "workspace:*"
+    "@types/node": "^22.20.1"
   }
 }

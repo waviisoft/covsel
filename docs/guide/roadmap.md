@@ -20,17 +20,19 @@ The end-to-end loop works, from whole-file down to individual tests:
 - Adapters: the generic wrap-any-command adapter, Vitest, node:test, cucumber-js.
 - A CI story: publish the map on the default branch, restore it on pull requests,
   and merge the maps from a sharded suite — see [Using covsel in CI](/guide/ci).
+  The store is a directory, so GitHub Actions caching covers it with no extra
+  moving parts.
+- An adapter conformance kit every adapter runs, so a community adapter can prove
+  itself — see [Writing an adapter](/guide/adapters/writing-an-adapter).
 - CLI: `record`, `affected`, `run`, `status`, `merge`.
 
 Editing one source selects only the tests that execute it; editing a sentinel
 selects everything; a brand-new test always runs — proven end-to-end in CI by
 the [examples](https://github.com/waviisoft/covsel/tree/main/examples).
 
-## Next — more adapters and remote stores
+## Next — more adapters
 
 - Adapters for Jest, Mocha, and Playwright.
-- Remote Stores (S3/GCS) for teams that outgrow caching the store directory.
-- An adapter conformance kit so community adapters can prove themselves.
 - `covsel watch`.
 
 ## Beyond — bundlers, monorepos, ecosystem
@@ -38,5 +40,6 @@ the [examples](https://github.com/waviisoft/covsel/tree/main/examples).
 - Bundler source-map plugins (Turbopack/webpack/esbuild/Vite) for browser
   coverage.
 - Compose with Nx/Turbo project graphs.
+- Remote Stores (S3/GCS), if teams outgrow caching the store directory.
 - fs-read tracking for non-JS dependencies.
 - An optional remote map service.
