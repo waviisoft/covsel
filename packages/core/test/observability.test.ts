@@ -182,6 +182,19 @@ describe('unobservedChange', () => {
     );
   });
 
+  it('reads the globs strictly, so a narrow scope cannot widen itself', () => {
+    // The shared matcher widens slash-less globs to match a basename anywhere,
+    // which is right everywhere else: matching more sentinels or more test globs
+    // runs more tests. Here it inverts — a path wrongly counted as observed
+    // suppresses the full run it should have caused. `*.mjs` means top-level
+    // only, and nothing nested may pass as covered by it.
+    const narrow = { ...map, observed: ['*.mjs'] };
+    expect(unobservedChange(narrow, [change('server/deep/logic.mjs')])).toBe(
+      'server/deep/logic.mjs',
+    );
+    expect(unobservedChange(narrow, [change('top.mjs')])).toBeUndefined();
+  });
+
   it('treats ** as observing every path, nested and dotted alike', () => {
     const everything = { ...map, observed: [...OBSERVES_EVERYTHING] };
     const paths = ['README.md', 'src/a.ts', 'a/b/c/d.ts', '.github/workflows/ci.yaml'];

@@ -17,6 +17,7 @@ import {
   type Granularity,
   MAP_SCHEMA_VERSION,
   type MapEntry,
+  OBSERVES_EVERYTHING,
   type TestId,
 } from './schema.js';
 import { FileSelector } from './selector.js';

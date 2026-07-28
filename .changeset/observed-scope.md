@@ -33,6 +33,12 @@ scope is not usable, because the only available guess — "it observed everythin
 maps recorded before this change fall open to a full run rather than being read
 under the new rule.
 
+The scope is matched strictly, unlike every other glob set in covsel. The shared
+matcher widens slash-less globs to match a basename anywhere, which is right for
+sentinels, test globs, and always-run globs, where a wider match runs more tests.
+The polarity inverts here: a path wrongly counted as observed suppresses the full
+run it should have caused, so `makeStrictMatcher` reads these globs as written.
+
 `mergeMaps` keeps the scope only when every shard agrees on it, and otherwise
 produces a map claiming nothing, which falls open on any change. Unioning would
 let one shard's coverage vouch for paths another shard was never watching. The

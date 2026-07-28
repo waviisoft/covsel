@@ -1,6 +1,6 @@
 import type { CovselConfig } from './config.js';
 import type { Change, Policy } from './interfaces.js';
-import { makeMatcher } from './match.js';
+import { makeMatcher, makeStrictMatcher } from './match.js';
 import { type CoverageMap, isUsableMap, type TestId } from './schema.js';
 
 /**
@@ -11,12 +11,17 @@ import { type CoverageMap, isUsableMap, type TestId } from './schema.js';
  * the recorder was watching and nothing ran. Outside them it is an artifact of
  * where the recorder was looking, and selecting on it skips tests the change can
  * break. So an unobserved change falls open instead.
+ *
+ * The globs are matched strictly. Every other glob set here is matched loosely,
+ * because matching more of them runs more tests; this one is the exception, and
+ * reading it loosely would let a path the recorder never covered pass as covered
+ * and suppress the full run it should have caused.
  */
 export function unobservedChange(
   map: CoverageMap,
   changes: Change[],
 ): string | undefined {
-  const isObserved = makeMatcher(map.observed);
+  const isObserved = makeStrictMatcher(map.observed);
   return changes.find((c) => !isObserved(c.file))?.file;
 }
 
