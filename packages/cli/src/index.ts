@@ -2,6 +2,7 @@ import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 
 import {
+  type Adapter,
   type AffectedResult,
   computeStatus,
   type CoverageMap,
@@ -12,19 +13,15 @@ import {
   MAP_SCHEMA_VERSION,
   mergeMaps,
   recordMap,
-  resolveConfig,
-  runSelectionCommand,
+  resolveConfigFor,
+  runAffected,
+  runAffectedSelection,
   selectAffected,
   watchAffected,
   type WatchEvent,
 } from '@covsel/core';
 
-import {
-  ADAPTERS,
-  type AdapterEntry,
-  adapterNameList,
-  DEFAULT_ADAPTER,
-} from './adapters.js';
+import { ADAPTERS, adapterNameList, DEFAULT_ADAPTER } from './adapters.js';
 
 const HELP = `covsel — runtime-coverage test impact analysis for any JS/TS runner
 
@@ -81,17 +78,27 @@ function hasFlag(opts: string[], name: string): boolean {
 }
 
 /**
+ * Resolve `--adapter` to the object every command reads its capabilities off.
+ * An unknown name is reported with the names covsel does know rather than
+ * quietly falling back to the default.
+ */
+function resolveAdapter(cmd: string, opts: string[]): Adapter | undefined {
+  const name = flag(opts, 'adapter') ?? DEFAULT_ADAPTER;
+  const adapter = ADAPTERS[name];
+  if (!adapter) {
+    err(`covsel ${cmd}: unknown adapter '${name}' (expected ${adapterNameList()})\n`);
+    return undefined;
+  }
+  return adapter;
+}
+
+/**
  * Load config, letting the chosen adapter supply the test globs when the project
  * has not set them, so a runner whose tests are not `*.test.*` sources still
  * works with no configuration.
  */
-async function loadConfigFor(cwd: string, adapter: string): Promise<CovselConfig> {
-  const raw = await loadRawConfig(cwd);
-  const globs = ADAPTERS[adapter]?.defaultTestGlobs;
-  if (globs !== undefined && raw.testGlobs === undefined) {
-    return resolveConfig({ ...raw, testGlobs: globs });
-  }
-  return resolveConfig(raw);
+async function loadConfigFor(cwd: string, adapter: Adapter): Promise<CovselConfig> {
+  return resolveConfigFor(adapter, await loadRawConfig(cwd));
 }
 
 function reportSelection(result: AffectedResult): void {
@@ -100,38 +107,6 @@ function reportSelection(result: AffectedResult): void {
   } else if (result.tests.length === 0) {
     err('covsel: no affected tests\n');
   }
-}
-
-/**
- * Hand a selection to the runner. Adapters that record individual tests narrow
- * below file level through the runner's own filtering; the rest get the file
- * list. A full run bypasses both — the runner is invoked with no filter, so its
- * own full suite is what runs.
- */
-function runSelected(
-  entry: AdapterEntry,
-  cwd: string,
-  command: string[],
-  selection: AffectedResult,
-): number {
-  if (!selection.fullRun && entry.runSelection && selection.selected.length > 0) {
-    return entry.runSelection({ selected: selection.selected, command, cwd });
-  }
-  return runSelectionCommand({ cwd, command, selection });
-}
-
-/** Resolve `--adapter`, reporting the valid names when it is not one of them. */
-function resolveAdapter(
-  cmd: string,
-  opts: string[],
-): { name: string; entry: AdapterEntry } | undefined {
-  const name = flag(opts, 'adapter') ?? DEFAULT_ADAPTER;
-  const entry = ADAPTERS[name];
-  if (!entry) {
-    err(`covsel ${cmd}: unknown adapter '${name}' (expected ${adapterNameList()})\n`);
-    return undefined;
-  }
-  return { name, entry };
 }
 
 async function cmdRecord(argv: string[]): Promise<number> {
@@ -145,8 +120,8 @@ async function cmdRecord(argv: string[]): Promise<number> {
   const adapter = resolveAdapter('record', opts);
   if (!adapter) return 1;
   const cwd = process.cwd();
-  const config = await loadConfigFor(cwd, adapter.name);
-  const recorder = adapter.entry.createRecorder({ command, cwd, config });
+  const config = await loadConfigFor(cwd, adapter);
+  const recorder = adapter.createRecorder({ command, cwd, config });
 
   const result = await recordMap({
     cwd,
@@ -178,12 +153,17 @@ async function cmdAffected(argv: string[]): Promise<number> {
     );
     return 1;
   }
+  const adapter = resolveAdapter('affected', argv);
+  if (!adapter) return 1;
   const since = flag(argv, 'since');
   const cwd = process.cwd();
-  const config = await loadConfigFor(cwd, flag(argv, 'adapter') ?? DEFAULT_ADAPTER);
+  const config = await loadConfigFor(cwd, adapter);
   const result = await selectAffected({ cwd, config, ...(since ? { since } : {}) });
   reportSelection(result);
-  if (result.tests.length > 0) out(`${result.tests.join('\n')}\n`);
+  // The same list the adapter would append to the runner's command line, so
+  // `<runner> $(covsel affected)` and `covsel run` agree by construction.
+  const files = adapter.formatSelection(result.selected);
+  if (files.length > 0) out(`${files.join('\n')}\n`);
   return 0;
 }
 
@@ -199,11 +179,12 @@ async function cmdRun(argv: string[]): Promise<number> {
   if (!adapter) return 1;
   const since = flag(opts, 'since');
   const cwd = process.cwd();
-  const config = await loadConfigFor(cwd, adapter.name);
+  const config = await loadConfigFor(cwd, adapter);
 
-  const selection = await selectAffected({ cwd, config, ...(since ? { since } : {}) });
-  reportSelection(selection);
-  return runSelected(adapter.entry, cwd, command, selection);
+  return runAffected(
+    { adapter, cwd, config, command, ...(since ? { since } : {}) },
+    reportSelection,
+  );
 }
 
 /** Render one watch-loop event as a line of status on stderr. */
@@ -271,7 +252,7 @@ async function cmdWatch(argv: string[]): Promise<number> {
 
   const since = flag(opts, 'since');
   const cwd = process.cwd();
-  const config = await loadConfigFor(cwd, adapter.name);
+  const config = await loadConfigFor(cwd, adapter);
 
   // Re-recording is opt-in: it re-runs the whole suite, and a map that only ages
   // over-selects, so the default trades precision for the latency watch exists
@@ -281,7 +262,7 @@ async function cmdWatch(argv: string[]): Promise<number> {
         const result = await recordMap({
           cwd,
           config,
-          recorder: adapter.entry.createRecorder({ command, cwd, config }),
+          recorder: adapter.createRecorder({ command, cwd, config }),
         });
         return result.ok
           ? { ok: true }
@@ -300,7 +281,8 @@ async function cmdWatch(argv: string[]): Promise<number> {
     return await watchAffected({
       cwd,
       config,
-      run: (selection) => runSelected(adapter.entry, cwd, command, selection),
+      run: (selection) =>
+        runAffectedSelection({ adapter, selection, command, cwd }).status,
       onEvent: reportWatchEvent,
       signal: controller.signal,
       ...(since !== undefined ? { since } : {}),
@@ -326,6 +308,13 @@ async function cmdStatus(): Promise<number> {
       `recorded:   ${s.recordedAt ?? 'unknown'}${ageMin !== undefined ? ` (${ageMin}m ago)` : ''}\n`,
     );
     out(`granularity:${s.granularity ?? 'unknown'}\n`);
+    out(
+      `observed:   ${
+        s.observed === undefined || s.observed.length === 0
+          ? 'nothing (every change forces a full run)'
+          : s.observed.join(', ')
+      }\n`,
+    );
     out(`entries:    ${s.entryCount ?? 0}\n`);
     out(`sources:    ${s.coveredFileCount ?? 0}\n`);
     if (s.coveredBlockCount !== undefined) out(`blocks:     ${s.coveredBlockCount}\n`);
@@ -408,6 +397,12 @@ async function cmdMerge(argv: string[]): Promise<number> {
     err(
       'covsel merge: shards disagree on the recorded commit; the merged map ' +
         'records none, so the next selection will be a full run\n',
+    );
+  }
+  if (merged.observed.length === 0) {
+    err(
+      'covsel merge: shards disagree on what they could observe; the merged map ' +
+        'claims nothing, so the next selection will be a full run\n',
     );
   }
   return 0;

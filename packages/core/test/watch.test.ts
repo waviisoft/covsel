@@ -10,6 +10,7 @@ import {
   type CovselConfig,
   hashFileContents,
   MAP_SCHEMA_VERSION,
+  OBSERVES_EVERYTHING,
   resolveConfig,
   type SelectInit,
   watchAffected,
@@ -366,6 +367,10 @@ describe('watchAffected', () => {
         commit,
         recordedAt: new Date().toISOString(),
         sentinelHashes: {},
+        // The fixture's recording saw the whole repo, so a change anywhere is a
+        // change the map has something to say about — these tests are about the
+        // watch loop, not about unobserved-scope fall-open.
+        observed: [...OBSERVES_EVERYTHING],
         entries: [
           {
             test: { file: 'test/a.test.mjs' },

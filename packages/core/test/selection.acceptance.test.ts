@@ -105,6 +105,17 @@ describe('fail-open acceptance', () => {
     expect(result.tests).toEqual(['test/a.test.mjs', 'test/b.test.mjs']);
   });
 
+  it('2b. the selected units collapse to exactly the sorted test list', async () => {
+    // What an adapter formats for the runner comes from `selected`, while
+    // `tests` is what `covsel affected` reported before it did. The two must
+    // stay the same list, or moving the CLI onto the adapter would quietly
+    // change which files the runner is handed.
+    write('src/shared.mjs', `${FILES['src/shared.mjs']}// touch\n`);
+    const result = await selectAffected({ cwd, config });
+    expect([...new Set(result.selected.map((t) => t.file))]).toEqual(result.tests);
+    expect(result.tests).toEqual([...result.tests].sort());
+  });
+
   it('3. sentinel change forces a full run over every test file', async () => {
     write('package.json', FILES['package.json']!.replace('fixture', 'fixture2'));
     const result = await selectAffected({ cwd, config });

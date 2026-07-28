@@ -11,16 +11,46 @@ runs what the selection names. Miss a source and covsel will confidently skip a
 test that needed to run — the one failure this project exists to prevent. That is
 what the conformance kit is for.
 
-## What an adapter provides
+## What an adapter is
 
-1. **An `Adapter`** — a name, and `formatSelection(tests)` turning selected test
-   ids into the runner's input. At file level that is a deduplicated file list.
-2. **A `Recorder`** — `record(testFile)` returning one `RecordedUnit` per test it
-   observed: a single whole-file unit, or one unit per individual test for
-   runners you can hook per test.
-3. **Optionally, a run plan** — if the runner can be told to run individual
-   tests (a name filter, a tag, a `file:line`), a function that turns a selection
-   into that invocation. Without one, covsel passes the file list.
+**One object satisfying `Adapter` from `@covsel/core`.** That object is the whole
+contract: covsel resolves `--adapter <name>` to it and asks it for everything it
+needs, so there is nothing else to register anywhere.
+
+```ts
+import type { Adapter, Recorder, RecorderInit, TestId } from '@covsel/core';
+
+export const myAdapter: Adapter = {
+  name: 'my-runner',
+  formatSelection: (tests: TestId[]): string[] => [...new Set(tests.map((t) => t.file))],
+  createRecorder: (init: RecorderInit): Recorder => createMyRecorder(init),
+};
+```
+
+Two capabilities are required:
+
+1. **`formatSelection(tests)`** — selected test ids as the runner's input. At
+   file level that is a deduplicated file list, which is what `covsel affected`
+   prints and what `covsel run` appends to your command.
+2. **`createRecorder({ command, cwd, config })`** — a `Recorder` whose
+   `record(testFile)` returns one `RecordedUnit` per test it observed: a single
+   whole-file unit, or one unit per individual test for runners you can hook per
+   test. It also declares `observes`, the globs it is able to see execution
+   within.
+
+Two more are optional, and omitting one means "covsel's default is right for my
+runner":
+
+3. **`runSelection({ selected, command, cwd })`** — if the runner can be told to
+   run individual tests (a name filter, a tag, a `file:line`), turn a selection
+   into that invocation and return its exit code. Without one, covsel appends
+   `formatSelection`'s file list to the command instead.
+4. **`defaultTestGlobs`** — how to discover tests when the project has not set
+   `testGlobs`. Only needed when your runner's tests are not `*.test.*` sources;
+   cucumber's are `.feature` files, so its adapter supplies `['**/*.feature']`.
+
+The compiler holds you to this: a missing required capability is an error in
+your own package's build, not something a reviewer has to spot.
 
 How you get coverage is your choice, and it is the only genuinely
 runner-specific decision:
@@ -30,6 +60,36 @@ runner-specific decision:
 - Runners that transform sources first (Vitest, Jest) must read the runner's own
   coverage, because process coverage never sees the original files.
 - Runners with lifecycle hooks can drive the `InspectorObserver` per test.
+
+## Say what you can see
+
+`observes` is the other half of what you record, and the half no shared layer can
+infer. It declares the repo paths where, had code run, your recorder would have
+seen it — so a change outside them falls open to a full run instead of trusting
+a silence that means nothing.
+
+All three mechanisms above watch the code under test in the process tree the
+recorder controls, so they declare `OBSERVES_EVERYTHING`:
+
+```ts
+return {
+  observes: OBSERVES_EVERYTHING,
+  async record(testFile) {
+    /* … */
+  },
+};
+```
+
+Declare something narrower the moment your recorder sees only part of a test's
+execution. A recorder that collects coverage from a browser sees the app's
+sources and nothing of the server the page talks to; claiming everything there
+would let a change to that server skip the tests it breaks. Under-claiming costs
+CI minutes, over-claiming costs correctness — so when in doubt, claim less.
+
+One boundary this cannot express: paths say _where in the repo_, not _in which
+process_. A recorder tied to a single isolate will not see a test that shells out
+to another one, and no glob describes that. If your runner works that way, say so
+in the adapter's docs.
 
 ## Prove it with the conformance kit
 
@@ -61,6 +121,11 @@ checks pass
 because core's policy holds regardless of what the adapter recorded, and the
 precision checks pass because under-recording is, if anything, _more_ precise.
 
+You hand it your adapter and a project to exercise it on — nothing else. The
+suite builds your recorder and runs every selection through the same core
+dispatch `covsel run` uses, so passing here means the invocation covsel really
+builds works, not one the suite assembled to look like it.
+
 With Vitest, one call registers each check as its own test:
 
 ```ts
@@ -68,11 +133,6 @@ import { describeAdapterConformance, RAN_MARKER_FILE } from '@covsel/conformance
 
 describeAdapterConformance({
   adapter: myAdapter,
-  createRecorder: ({ cwd, config }) =>
-    createMyRecorder({ command: ['my-runner'], cwd, config }),
-  // Only if your runner can narrow a run below file level.
-  runSelection: ({ selected, cwd }) =>
-    runMySelection({ command: ['my-runner'], selected, cwd }),
   fixture: {
     command: ['my-runner'],
     files: {/* see the four rules below */},
@@ -115,9 +175,10 @@ Four rules make it work, and the suite enforces the ones it can:
   the suite first selects _both_ units and requires both labels to appear.
 
 If both units live in the same file — scenarios in a feature, tests in a suite —
-give each a `name` and supply `runSelection`. The precision checks then hold the
-adapter to per-test selection instead of file level, and the suite verifies the
-runner really does narrow the run rather than reporting success on zero tests.
+give each a `name`, and give your adapter a `runSelection`. The precision checks
+then hold the adapter to per-test selection instead of file level, and the suite
+verifies the runner really does narrow the run rather than reporting success on
+zero tests.
 
 Not using Vitest? `runAdapterConformance(spec)` returns a plain report you can
 assert on from any framework:
@@ -129,8 +190,10 @@ const failures = results.filter((r) => !r.ok);
 
 Two more knobs cover real projects: `nodeModulesFrom` links an existing
 `node_modules` into the fixture when your runner needs dependencies, and
-`config` overrides covsel settings such as `testGlobs` when the runner's tests
-are not `*.test.*` files.
+`config` overrides covsel settings for the fixture project. Test discovery needs
+neither — an adapter's own `defaultTestGlobs` are applied here exactly as the CLI
+applies them, so a runner whose tests are `.feature` files is discovered with no
+fixture configuration at all.
 
 ## Conventions
 

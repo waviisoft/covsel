@@ -24,9 +24,11 @@ import {
   type ExecRegion,
   hashFileContents,
   makeSourceFilter,
+  OBSERVES_EVERYTHING,
   positionToOffset,
   type Recorder,
   type RecordedUnit,
+  type RecorderInit,
   selectExecutedBlocks,
   type TestId,
   toRepoRelative,
@@ -36,6 +38,9 @@ export const jestAdapter: Adapter = {
   name: 'jest',
   formatSelection(tests: TestId[]): string[] {
     return [...new Set(tests.map((t) => t.file))];
+  },
+  createRecorder(init: RecorderInit): Recorder {
+    return createJestRecorder(init);
   },
 };
 
@@ -102,6 +107,10 @@ export function createJestRecorder(init: JestRecorderInit): Recorder {
   const isSource = makeSourceFilter(init.config);
   const wantBlocks = init.config.granularity !== 'file';
   return {
+    // Jest's coverage reports every module its registry loaded, remapped to the
+    // original file, so any source under the repo that a test reaches shows up
+    // in the report regardless of where it lives.
+    observes: OBSERVES_EVERYTHING,
     async record(testFile: string): Promise<RecordedUnit[]> {
       const reportsDir = mkdtempSync(join(tmpdir(), 'covsel-jest-'));
       const [bin, ...rest] = init.command;

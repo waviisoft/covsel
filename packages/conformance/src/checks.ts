@@ -20,7 +20,8 @@ import {
   MAP_SCHEMA_VERSION,
   MODULE_BLOCK,
   recordMap,
-  resolveConfig,
+  resolveConfigFor,
+  runSelected as runSelectedThroughAdapter,
   selectAffected,
   type TestId,
 } from '@covsel/core';
@@ -168,7 +169,10 @@ function createProject(spec: AdapterConformanceSpec): Project {
     git(cwd, ['config', 'user.name', 'covsel conformance']);
     git(cwd, ['add', '.']);
     git(cwd, ['commit', '-q', '-m', 'fixture']);
-    return { cwd, config: resolveConfig(spec.fixture.config), dispose };
+    // Resolved the way the CLI resolves it, so an adapter that supplies its own
+    // test globs is discovered here with no fixture configuration, exactly as a
+    // project running `covsel record --adapter <name>` would discover it.
+    return { cwd, config: resolveConfigFor(spec.adapter, spec.fixture.config), dispose };
   } catch (err) {
     dispose();
     throw err;
@@ -179,7 +183,11 @@ async function record(
   spec: AdapterConformanceSpec,
   project: Project,
 ): Promise<CoverageMap> {
-  const recorder = spec.createRecorder({ cwd: project.cwd, config: project.config });
+  const recorder = spec.adapter.createRecorder({
+    command: spec.fixture.command,
+    cwd: project.cwd,
+    config: project.config,
+  });
   const result = await recordMap({ cwd: project.cwd, config: project.config, recorder });
   if (!result.ok || !result.map) {
     throw new Error(
@@ -206,9 +214,10 @@ function selects(result: AffectedResult, unit: ConformanceUnit): boolean {
 }
 
 /**
- * Hand a selection to the runner the way the adapter would and report which
- * units actually ran. Adapters that only emit a file list are exercised by
- * appending `formatSelection`'s output to the fixture command.
+ * Hand a selection to the runner and report which units actually ran. This goes
+ * through core's own dispatch — the adapter's native narrowing when it has one,
+ * the formatted file list when it does not — so the invocation under test is the
+ * invocation `covsel run` builds, not one shaped like it.
  */
 function runSelected(
   spec: AdapterConformanceSpec,
@@ -218,30 +227,24 @@ function runSelected(
   const marker = join(project.cwd, RAN_MARKER_FILE);
   rmSync(marker, { force: true });
 
-  let status: number;
-  let detail: string;
-  if (spec.runSelection) {
-    status = spec.runSelection({ selected, cwd: project.cwd });
-    detail = `exited ${status}`;
-  } else {
-    const args = [
-      ...spec.fixture.command.slice(1),
-      ...spec.adapter.formatSelection(selected),
-    ];
-    const res = spawnSync(spec.fixture.command[0]!, args, {
-      cwd: project.cwd,
-      encoding: 'utf8',
-    });
-    detail = spawnDetail(res);
-    status = res.status ?? 1;
-  }
+  const outcome = runSelectedThroughAdapter({
+    adapter: spec.adapter,
+    selected,
+    command: spec.fixture.command,
+    cwd: project.cwd,
+    stdio: 'ignore',
+  });
 
   const ran = existsSync(marker)
     ? readFileSync(marker, 'utf8')
         .split('\n')
         .filter((line) => line.length > 0)
     : [];
-  return { status, ran, detail };
+  return {
+    status: outcome.status,
+    ran,
+    detail: outcome.output ?? `exited ${outcome.status}`,
+  };
 }
 
 function mapPath(project: Project): string {

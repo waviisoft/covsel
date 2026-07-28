@@ -11,6 +11,7 @@ import {
   isExcludedRel,
   LocalStore,
   loadConfig,
+  MAP_SCHEMA_VERSION,
   makeMatcher,
   makeSourceFilter,
   matchesAny,
@@ -19,10 +20,11 @@ import {
 } from '../src/index.js';
 
 const emptyMap: CoverageMap = {
-  schemaVersion: 1,
+  schemaVersion: MAP_SCHEMA_VERSION,
   granularity: 'file',
   recordedAt: '',
   sentinelHashes: {},
+  observed: ['**'],
   entries: [],
 };
 
@@ -139,10 +141,11 @@ describe('store', () => {
     try {
       const store = new LocalStore({ cwd: dir, dir: '.covsel' });
       await store.write({
-        schemaVersion: 1,
+        schemaVersion: MAP_SCHEMA_VERSION,
         granularity: 'file',
         recordedAt: '2026-01-01T00:00:00.000Z',
         sentinelHashes: {},
+        observed: ['**'],
         entries: [],
       });
       expect(await store.read()).toBeDefined();

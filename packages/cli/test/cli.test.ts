@@ -79,22 +79,6 @@ describe('covsel cli', () => {
     expect(err).toContain('expected a runner command after');
   });
 
-  it('watch rejects an unknown adapter rather than silently using the default', async () => {
-    const { code, err } = await captureStderr(() =>
-      main(['watch', '--adapter', 'nope', '--', 'node', '--test']),
-    );
-    expect(code).toBe(1);
-    expect(err).toContain("unknown adapter 'nope'");
-  });
-
-  it('run rejects an unknown adapter rather than silently using the default', async () => {
-    const { code, err } = await captureStderr(() =>
-      main(['run', '--adapter', 'nope', '--', 'node', '--test']),
-    );
-    expect(code).toBe(1);
-    expect(err).toContain("unknown adapter 'nope'");
-  });
-
   it.each(['-5', 'soon'])('watch rejects a bad --debounce (%s)', async (value) => {
     const { code, err } = await captureStderr(() =>
       main(['watch', '--debounce', value, '--', 'node', '--test']),
@@ -122,6 +106,21 @@ describe('covsel cli', () => {
     expect(code).toBe(1);
     expect(err).toContain('cannot read');
   });
+
+  it.each(['record', 'affected', 'run', 'watch'])(
+    '%s rejects an unknown adapter and lists the ones it knows',
+    async (cmd) => {
+      const argv = cmd === 'affected' ? [cmd] : [cmd, '--', 'node', '--test'];
+      const { code, err } = await captureStderr(() =>
+        main([...argv.slice(0, 1), '--adapter', 'frobnicate', ...argv.slice(1)]),
+      );
+      expect(code).toBe(1);
+      expect(err).toContain("unknown adapter 'frobnicate'");
+      for (const name of ['generic', 'vitest', 'jest', 'node-test', 'cucumber']) {
+        expect(err).toContain(`'${name}'`);
+      }
+    },
+  );
 
   it('affected rejects an unsupported --format', async () => {
     const { code, err } = await captureStderr(() =>

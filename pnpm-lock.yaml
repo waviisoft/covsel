@@ -160,6 +160,9 @@ importers:
       '@covsel/adapter-cucumber':
         specifier: workspace:*
         version: link:../adapter-cucumber
+      '@covsel/adapter-generic':
+        specifier: workspace:*
+        version: link:../adapter-generic
       '@covsel/adapter-jest':
         specifier: workspace:*
         version: link:../adapter-jest

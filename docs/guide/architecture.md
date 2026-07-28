@@ -17,8 +17,15 @@ Selector      git diff → impacted test-ids → emit(file list | runner-native 
 ```
 
 `@covsel/core` exposes these as stable interfaces — `Observer`, `Mapper`,
-`Store`, `Selector`, `Policy`, `Adapter` — plus the versioned map schema.
-Adapters depend on `core` only.
+`Store`, `Selector`, `Policy`, `Recorder`, `Adapter` — plus the versioned map
+schema. Adapters depend on `core` only.
+
+`Adapter` is the capability contract for a runner, and core owns it: one object
+per runner carries its name, its selection formatting, its recorder factory, and
+any optional capability it has beyond the file-list baseline. The CLI resolves
+`--adapter` to one of those objects and reads what it can do off it — it defines
+no adapter shape of its own — and the conformance kit certifies the same object
+through the same code path.
 
 ## Two granularity levels
 
@@ -47,8 +54,8 @@ Adapters depend on `core` only.
 | Package                     | Purpose                                                                  |
 | --------------------------- | ------------------------------------------------------------------------ |
 | `covsel`                    | The CLI                                                                  |
-| `@covsel/core`              | Observer · Mapper · Store · Selector · Policy + the versioned map schema |
-| `@covsel/adapter-generic`   | Wrap-any-command adapter (whole-file)                                    |
+| `@covsel/core`              | Observer · Mapper · Store · Selector · Policy · Adapter + the map schema |
+| `@covsel/adapter-generic`   | Wrap-any-command adapter (whole-file) — covsel's default                 |
 | `@covsel/adapter-vitest`    | Vitest adapter (records via Vitest's own V8 coverage)                    |
 | `@covsel/adapter-jest`      | Jest adapter (records via Jest's own coverage)                           |
 | `@covsel/adapter-node-test` | node:test adapter (per-test selection via the inspector observer)        |

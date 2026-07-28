@@ -5,7 +5,7 @@
  */
 
 /** Bump on any breaking change to the persisted map shape. */
-export const MAP_SCHEMA_VERSION = 1;
+export const MAP_SCHEMA_VERSION = 2;
 
 /**
  * Identifies a test at the finest granularity we know about.
@@ -58,8 +58,31 @@ export interface CoverageMap {
   recordedAt: string;
   /** Hashes of sentinel files at record time; any change invalidates the map. */
   sentinelHashes: Record<string, string>;
+  /**
+   * Repo-relative globs the recording was able to observe execution within.
+   *
+   * The entries say which files each test covered. They cannot, on their own,
+   * say whether "not covered" means "did not run" or "ran somewhere the
+   * recorder could not see" — and selection reads it the first way. This is
+   * what separates the two: outside these globs the map's silence carries no
+   * information, so a change there falls open to a full run rather than
+   * selecting on coverage that was never in a position to see it.
+   *
+   * A recorder whose runner executes the code under test in the process tree
+   * the recorder controls sees any path that runs, and declares `['**']`. One
+   * that sees only part of a test's execution declares only what it can see,
+   * and is then held to it.
+   */
+  observed: string[];
   entries: MapEntry[];
 }
+
+/**
+ * The `observed` scope of a recorder that would see any repo path that ran —
+ * every recorder whose runner executes the code under test in the process tree
+ * the recorder controls.
+ */
+export const OBSERVES_EVERYTHING: readonly string[] = Object.freeze(['**']);
 
 /**
  * Returns true when a stored map can be used for selection. A false result
@@ -68,5 +91,9 @@ export interface CoverageMap {
 export function isUsableMap(map: unknown): map is CoverageMap {
   if (typeof map !== 'object' || map === null) return false;
   const m = map as Partial<CoverageMap>;
-  return m.schemaVersion === MAP_SCHEMA_VERSION && Array.isArray(m.entries);
+  if (m.schemaVersion !== MAP_SCHEMA_VERSION || !Array.isArray(m.entries)) return false;
+  // A map that does not say what it could observe cannot be told apart from one
+  // that observed everything, and guessing "everything" is the guess that skips
+  // tests. Require the declaration, and treat its absence as unusable.
+  return Array.isArray(m.observed) && m.observed.every((g) => typeof g === 'string');
 }

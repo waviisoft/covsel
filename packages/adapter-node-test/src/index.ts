@@ -13,14 +13,17 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 
-import type {
-  Adapter,
-  CoveredBlock,
-  CoveredFile,
-  CovselConfig,
-  Recorder,
-  RecordedUnit,
-  TestId,
+import {
+  type Adapter,
+  type CoveredBlock,
+  type CoveredFile,
+  type CovselConfig,
+  OBSERVES_EVERYTHING,
+  type Recorder,
+  type RecordedUnit,
+  type RecorderInit,
+  type SelectionRunInit,
+  type TestId,
 } from '@covsel/core';
 
 const shimUrl = pathToFileURL(fileURLToPath(new URL('./shim.js', import.meta.url))).href;
@@ -29,6 +32,12 @@ export const nodeTestAdapter: Adapter = {
   name: 'node-test',
   formatSelection(tests: TestId[]): string[] {
     return [...new Set(tests.map((t) => t.file))];
+  },
+  createRecorder(init: RecorderInit): Recorder {
+    return createNodeTestRecorder(init);
+  },
+  runSelection(init: SelectionRunInit): number {
+    return runNodeTestSelection(init);
   },
 };
 
@@ -54,6 +63,9 @@ interface ShimUnit {
 export function createNodeTestRecorder(init: NodeTestRecorderInit): Recorder {
   const [bin, ...rest] = init.command;
   return {
+    // The inspector observer watches the isolate the tests run in and reports
+    // every script it loads, so any repo path a test executes is visible.
+    observes: OBSERVES_EVERYTHING,
     async record(testFile: string): Promise<RecordedUnit[]> {
       if (bin === undefined) throw new Error('empty command');
       const dir = mkdtempSync(join(tmpdir(), 'covsel-nodetest-'));
@@ -105,15 +117,8 @@ function namePattern(names: string[]): string {
   return `^(?:${escaped.join('|')})$`;
 }
 
-export interface RunNodeTestInit {
-  /** The selected test units from `selectAffected`. */
-  selected: TestId[];
-  /** Base command, e.g. `['node', '--test']`. */
-  command: string[];
-  cwd: string;
-  /** Child stdio (default `'inherit'` so the user sees the runner output). */
-  stdio?: 'inherit' | 'ignore';
-}
+/** Exactly what the adapter contract hands a runner, named for direct callers. */
+export type RunNodeTestInit = SelectionRunInit;
 
 /**
  * Run only the affected node:test tests. Files that must run in full are invoked

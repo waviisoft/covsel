@@ -3,6 +3,7 @@
  * only these); implementations live in core or in pluggable packages.
  */
 
+import type { CovselConfig } from './config.js';
 import type { CoverageMap, CoveredBlock, CoveredFile, TestId } from './schema.js';
 
 /** Raw V8 coverage for one observation window, before source-mapping. */
@@ -66,10 +67,70 @@ export interface Policy {
   mandatory(changes: Change[]): Promise<TestId[]>;
 }
 
+/** The sources one observation window executed. */
+export interface RecordedTest {
+  files: CoveredFile[];
+  /** Executed function/module blocks, when recording at block granularity. */
+  blocks: CoveredBlock[];
+}
+
+/** One recorded map entry: a test id and the sources that test executed. */
+export interface RecordedUnit extends RecordedTest {
+  test: TestId;
+}
+
 /**
- * Adapter — the only per-runner surface. Implementations call
- * observer.startTest/endTest around each test and translate a selection into
- * the runner's native input.
+ * A recorder observes one test file and returns one recorded unit per test it
+ * saw — a single whole-file unit for whole-file recorders, or one unit per
+ * individual test for per-test recorders. Each recorder obtains its coverage
+ * from its own tool — the runner's built-in coverage, or Node's built-in V8
+ * engine via `NODE_V8_COVERAGE`.
+ */
+export interface Recorder {
+  /**
+   * Repo-relative globs this recorder is able to observe execution within,
+   * stamped onto the map it produces as `observed`.
+   *
+   * This is a claim about recall, not about what the runner happens to execute:
+   * declare a path only when, had code there run, this recorder would have seen
+   * it. Everything outside falls open on change, because the map's silence about
+   * it means nothing. Under-claiming costs CI minutes; over-claiming skips tests.
+   * A recorder that would see anything that ran declares `OBSERVES_EVERYTHING`.
+   */
+  readonly observes: readonly string[];
+  record(testFile: string): Promise<RecordedUnit[]>;
+}
+
+/** What an adapter needs to build a recorder for one project. */
+export interface RecorderInit {
+  /** The runner command to wrap, as the user gave it, e.g. `['vitest', 'run']`. */
+  command: string[];
+  cwd: string;
+  config: CovselConfig;
+}
+
+/** What an adapter needs to run one computed selection through its runner. */
+export interface SelectionRunInit {
+  /** The selected test units. A unit without a `name` means the whole file. */
+  selected: TestId[];
+  /** The runner command to narrow, as the user gave it. */
+  command: string[];
+  cwd: string;
+  /** Child stdio (default `'inherit'`, so the user sees the runner's output). */
+  stdio?: 'inherit' | 'ignore';
+}
+
+/**
+ * Adapter — the only per-runner surface, and one object per runner. It carries
+ * everything a consumer needs to drive that runner: what to call it, how to
+ * observe it, how to hand a selection back to it, and whatever it can do beyond
+ * the file-list baseline. Implementations call observer.startTest/endTest around
+ * each test and translate a selection into the runner's native input.
+ *
+ * The optional members are capabilities, not configuration: an adapter that
+ * omits them gets covsel's universal behaviour — discover `*.test.*` files, run
+ * a selection by appending a file list — and one that has more to offer says so
+ * in a way a consumer can read off the object and the compiler can check.
  */
 export interface Adapter {
   readonly name: string;
@@ -77,8 +138,22 @@ export interface Adapter {
    * The selected test files, deduplicated, ready to append to the runner's
    * command line. Per-test ids of one file collapse to that file once: narrowing
    * a run to individual tests needs runner-specific flags and ordering, so an
-   * adapter that selects per test exposes that as its own run helper rather than
-   * through this list.
+   * adapter that selects per test exposes that through `runSelection` rather
+   * than through this list.
    */
   formatSelection(tests: TestId[]): string[];
+  /** Build the recorder `covsel record` observes this runner with. */
+  createRecorder(init: RecorderInit): Recorder;
+  /**
+   * Globs to discover tests with when the project has not set `testGlobs`.
+   * cucumber's tests are `.feature` files, not the default `*.test.*` sources,
+   * so its adapter has to be able to find them zero-config.
+   */
+  readonly defaultTestGlobs?: readonly string[];
+  /**
+   * Run a selection through the runner's own filtering, returning its exit code.
+   * Present only for adapters that record individual tests; without one the
+   * runner is handed the formatted file list.
+   */
+  runSelection?(init: SelectionRunInit): number;
 }

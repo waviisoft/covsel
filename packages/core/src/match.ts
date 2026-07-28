@@ -25,6 +25,21 @@ export function makeMatcher(patterns: readonly string[]): (rel: string) => boole
   };
 }
 
+/**
+ * Build a path matcher that means exactly what its globs say — no basename
+ * widening.
+ *
+ * {@link makeMatcher} widens on purpose, because for sentinels, test globs, and
+ * always-run globs a wider match runs more tests. That polarity inverts for a
+ * glob set describing what a recording could observe: there, matching a path it
+ * does not really cover suppresses the full run that path was supposed to
+ * trigger. Widening would skip tests, so this matcher does not.
+ */
+export function makeStrictMatcher(patterns: readonly string[]): (rel: string) => boolean {
+  if (patterns.length === 0) return () => false;
+  return picomatch(patterns as string[], { dot: true });
+}
+
 /** Convenience: does `rel` match any of `patterns`? */
 export function matchesAny(rel: string, patterns: readonly string[]): boolean {
   return makeMatcher(patterns)(rel);

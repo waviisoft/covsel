@@ -14,13 +14,16 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-import type {
-  Adapter,
-  CoveredFile,
-  CovselConfig,
-  Recorder,
-  RecordedUnit,
-  TestId,
+import {
+  type Adapter,
+  type CoveredFile,
+  type CovselConfig,
+  OBSERVES_EVERYTHING,
+  type Recorder,
+  type RecordedUnit,
+  type RecorderInit,
+  type SelectionRunInit,
+  type TestId,
 } from '@covsel/core';
 
 const shimPath = fileURLToPath(new URL('./shim.js', import.meta.url));
@@ -32,6 +35,13 @@ export const cucumberAdapter: Adapter = {
   name: 'cucumber',
   formatSelection(tests: TestId[]): string[] {
     return [...new Set(tests.map((t) => t.file))];
+  },
+  createRecorder(init: RecorderInit): Recorder {
+    return createCucumberRecorder(init);
+  },
+  defaultTestGlobs: CUCUMBER_TEST_GLOBS,
+  runSelection(init: SelectionRunInit): number {
+    return runCucumberSelection(init);
   },
 };
 
@@ -69,6 +79,9 @@ function supportGlobFor(featureFile: string): string {
 export function createCucumberRecorder(init: CucumberRecorderInit): Recorder {
   const [bin, ...rest] = init.command;
   return {
+    // The shim drives the inspector observer inside the cucumber process, which
+    // reports every script that process loads, wherever it lives in the repo.
+    observes: OBSERVES_EVERYTHING,
     async record(featureFile: string): Promise<RecordedUnit[]> {
       if (bin === undefined) throw new Error('empty command');
       const dir = mkdtempSync(join(tmpdir(), 'covsel-cucumber-'));
@@ -129,15 +142,8 @@ function namePattern(names: string[]): string {
   return `^(?:${escaped.join('|')})$`;
 }
 
-export interface RunCucumberInit {
-  /** The selected units from `selectAffected`. */
-  selected: TestId[];
-  /** Base command, e.g. `['cucumber-js']`. */
-  command: string[];
-  cwd: string;
-  /** Child stdio (default `'inherit'` so the user sees the runner output). */
-  stdio?: 'inherit' | 'ignore';
-}
+/** Exactly what the adapter contract hands a runner, named for direct callers. */
+export type RunCucumberInit = SelectionRunInit;
 
 /**
  * Run only the affected scenarios. Feature files that must run in full are
