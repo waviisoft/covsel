@@ -3,6 +3,7 @@ import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 
 import { blockHashesOf } from './blocks.js';
+import { agreedScope } from './combine.js';
 import { type CovselConfig, resolveConfig } from './config.js';
 import { discoverTestFiles } from './discover.js';
 import { commitExists, diffChanges, gitHeadCommit, isGitWorkTree } from './git.js';
@@ -126,6 +127,7 @@ export async function recordMap(init: RecordInit): Promise<RecordResult> {
   const store = new LocalStore({ cwd, dir: config.store.dir });
   const entries: MapEntry[] = [];
   const failures: { file: string; reason: string }[] = [];
+  const scopes: (readonly string[])[] = [];
 
   const wantBlocks = config.granularity !== 'file';
   for (const file of testFiles) {
@@ -138,6 +140,10 @@ export async function recordMap(init: RecordInit): Promise<RecordResult> {
           files: unit.files,
           ...(wantBlocks && unit.blocks.length > 0 ? { blocks: unit.blocks } : {}),
         });
+        // A unit combined from several observation windows knows the scope those
+        // windows add up to, which is what its entry was really watched for; a
+        // unit from a single window is covered by the recorder's declaration.
+        scopes.push(unit.observes ?? recorder.observes);
         sources += unit.files.length;
       }
       init.onEvent?.({ kind: 'recorded', file, tests: units.length, sources });
@@ -159,7 +165,13 @@ export async function recordMap(init: RecordInit): Promise<RecordResult> {
   }
 
   const recordedAt = init.recordedAt ?? new Date().toISOString();
-  const map = assembleMap(entries, cwd, config, recordedAt, recorder.observes);
+  // The map claims one scope for every entry in it, so it may claim no more than
+  // the units agreed on: an entry watched by a narrower set of windows than
+  // another must not be selected against paths its own windows never saw. With a
+  // single-window recorder every unit reports the same declaration, so this is
+  // that declaration.
+  const observed = entries.length > 0 ? agreedScope(scopes) : recorder.observes;
+  const map = assembleMap(entries, cwd, config, recordedAt, observed);
   await store.write(map);
   return {
     ok: true,

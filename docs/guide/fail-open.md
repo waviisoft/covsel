@@ -50,6 +50,15 @@ Merged shard maps keep the scope only when every shard agrees. Shards that
 disagree produce a map claiming nothing, which falls open on any change, rather
 than one shard's coverage vouching for paths another was never watching.
 
+A recorder with several observation windows onto one test — a browser, and the
+server behind it — combines them into a single entry, and that entry claims the
+**union** of what its windows could see. The opposite of the shard rule, from the
+same invariant: no entry may be vouched for by a scope that was not watching that
+entry's execution. Shards observe different entries, so one shard's scope may not
+speak for another's; windows observe the same execution, and the entry carries
+all of them. A window that produced nothing usable fails the recording instead of
+contributing half a test.
+
 ## How the map enforces it
 
 The persisted map is a **versioned contract**. Bumping the schema version

@@ -91,6 +91,54 @@ process_. A recorder tied to a single isolate will not see a test that shells ou
 to another one, and no glob describes that. If your runner works that way, say so
 in the adapter's docs.
 
+## When one window is not the whole test
+
+A recorder that spans several isolates -- a browser, the worker driving the spec,
+the server the page talks to -- holds one observation per isolate, and none of
+them is the test. Fold them with `combineObservations`, so the rules are decided
+once rather than re-derived per adapter:
+
+```ts
+import { combineObservations, type ObservationWindow } from '@covsel/core';
+
+const windows: ObservationWindow[] = [
+  { observes: ['src/**'], files: browserFiles, blocks: browserBlocks },
+  { observes: ['server/**'], files: serverFiles, blocks: serverBlocks },
+];
+
+return [combineObservations({ file: testFile }, windows)];
+```
+
+Covered files union by path, blocks deduplicate by file and hash, and the unit
+claims the union of what its windows claimed -- `src/**` and `server/**`, never
+`**` and never some wider glob that happens to cover both. That combined scope is
+what the map records, so a recorder is held to what its windows actually watched
+rather than to its own declaration.
+
+Opening and closing the windows stays yours: only the code that started them can
+stop them around the same execution. Two rules come with that.
+
+**A window that produced nothing usable fails the unit.** Hand it in as a
+failure and let the error propagate -- recording that test file fails and no map
+is written:
+
+```ts
+const server: ObservationWindow = coverage
+  ? { observes: ['server/**'], files, blocks }
+  : { failed: 'the app server reported no coverage' };
+```
+
+Half a test's execution recorded as all of it is precisely the map that skips
+tests: everything the failed window would have covered reads as "ran nowhere".
+
+**A window may claim a path only if it would see that path run wherever the test
+runs it.** Scopes union, so a path claimed by the browser window but executed
+inside the server's isolate ends up recorded as covered by a recording that never
+watched it. Code both sides can execute -- anything isomorphic -- must be claimed
+by both windows or by neither. When the layout is the user's to describe, take
+the scope from your adapter's configuration and document that this is what they
+are promising.
+
 ## Prove it with the conformance kit
 
 Every adapter must pass the shared suite in `@covsel/conformance`. It writes a

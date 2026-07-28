@@ -1,3 +1,4 @@
+import { agreedScope } from './combine.js';
 import {
   type CoverageMap,
   type CoveredBlock,
@@ -70,12 +71,8 @@ export function mergeMaps(maps: CoverageMap[]): CoverageMap {
   );
 
   // A shard's silence is only informative inside its own observed scope, so the
-  // merged map may claim no more than every shard agreed on. Disagreeing shards
-  // leave it empty — which puts every change outside it and falls open — rather
-  // than unioning, which would let one shard's coverage vouch for paths another
-  // shard was never watching.
-  const scopes = new Set(usable.map((m) => JSON.stringify([...m.observed].sort())));
-  const observed = scopes.size === 1 ? [...(usable[0]?.observed ?? [])] : [];
+  // merged map may claim no more than every shard agreed on.
+  const observed = agreedScope(usable.map((m) => m.observed));
 
   const allBlocks = usable.every((m) => m.granularity === 'block');
   const commits = new Set(usable.map((m) => m.commit));
