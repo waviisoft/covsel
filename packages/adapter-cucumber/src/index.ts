@@ -14,15 +14,16 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-import type {
-  Adapter,
-  CoveredFile,
-  CovselConfig,
-  Recorder,
-  RecordedUnit,
-  RecorderInit,
-  SelectionRunInit,
-  TestId,
+import {
+  type Adapter,
+  type CoveredFile,
+  type CovselConfig,
+  OBSERVES_EVERYTHING,
+  type Recorder,
+  type RecordedUnit,
+  type RecorderInit,
+  type SelectionRunInit,
+  type TestId,
 } from '@covsel/core';
 
 const shimPath = fileURLToPath(new URL('./shim.js', import.meta.url));
@@ -78,6 +79,9 @@ function supportGlobFor(featureFile: string): string {
 export function createCucumberRecorder(init: CucumberRecorderInit): Recorder {
   const [bin, ...rest] = init.command;
   return {
+    // The shim drives the inspector observer inside the cucumber process, which
+    // reports every script that process loads, wherever it lives in the repo.
+    observes: OBSERVES_EVERYTHING,
     async record(featureFile: string): Promise<RecordedUnit[]> {
       if (bin === undefined) throw new Error('empty command');
       const dir = mkdtempSync(join(tmpdir(), 'covsel-cucumber-'));

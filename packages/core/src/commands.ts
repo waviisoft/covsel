@@ -39,6 +39,10 @@ export function createGenericRecorder(init: GenericRecorderInit): Recorder {
   const mapper = new V8FileMapper({ cwd: init.cwd, config: init.config });
   const wantBlocks = init.config.granularity !== 'file';
   return {
+    // NODE_V8_COVERAGE is inherited by child processes and dumps every script
+    // they load, so anything the run executes anywhere in the process tree is
+    // visible to this recorder wherever it lives in the repo.
+    observes: OBSERVES_EVERYTHING,
     async record(testFile: string) {
       await observer.startTest({ file: testFile });
       const raw = await observer.endTest({ file: testFile });
@@ -64,6 +68,7 @@ function assembleMap(
   cwd: string,
   config: Pick<CovselConfig, 'sentinels' | 'granularity'>,
   recordedAt: string,
+  observed: readonly string[],
 ): CoverageMap {
   const commit = gitHeadCommit(cwd);
   // Reflect what was actually recorded: per-test (node:test) recorders capture
@@ -77,6 +82,7 @@ function assembleMap(
     ...(commit ? { commit } : {}),
     recordedAt,
     sentinelHashes: hashSentinels(cwd, config.sentinels),
+    observed: [...observed],
     entries,
   };
 }
@@ -152,7 +158,7 @@ export async function recordMap(init: RecordInit): Promise<RecordResult> {
   }
 
   const recordedAt = init.recordedAt ?? new Date().toISOString();
-  const map = assembleMap(entries, cwd, config, recordedAt);
+  const map = assembleMap(entries, cwd, config, recordedAt, recorder.observes);
   await store.write(map);
   return {
     ok: true,
@@ -453,6 +459,8 @@ export interface StatusResult {
   recordedAt?: string;
   ageMs?: number;
   granularity?: string;
+  /** Globs the recording was able to observe execution within. */
+  observed?: string[];
   entryCount?: number;
   coveredFileCount?: number;
   coveredBlockCount?: number;
@@ -523,6 +531,7 @@ export async function computeStatus(init: StatusInit): Promise<StatusResult> {
     recordedAt: map.recordedAt,
     ageMs: now - Date.parse(map.recordedAt),
     granularity: map.granularity,
+    observed: [...map.observed],
     entryCount: map.entries.length,
     coveredFileCount: coveredFiles.size,
     ...(coveredBlocks.size > 0 ? { coveredBlockCount: coveredBlocks.size } : {}),
