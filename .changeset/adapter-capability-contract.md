@@ -39,7 +39,9 @@ Also in core: `runSelected({ adapter, selected, command, cwd })` hands one
 selection to a runner — the adapter's own narrowing when it has one, otherwise
 the command with `formatSelection`'s file list appended — and `runAffected` and
 the conformance kit both go through it, which puts `formatSelection` on the
-product's execution path for the first time. `resolveConfigFor(adapter, raw)`
+product's execution path for the first time. An empty selection runs nothing
+either way, since appending an empty file list would hand the runner its whole
+suite. `resolveConfigFor(adapter, raw)`
 applies an adapter's default test globs in one place for every consumer.
 `selectAffected` now returns `selected` sorted by file and then name, so
 collapsing it to files yields exactly the sorted `tests` list it already

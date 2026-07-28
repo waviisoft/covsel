@@ -65,11 +65,11 @@ function flag(opts: string[], name: string): string | undefined {
  * An unknown name is reported with the names covsel does know rather than
  * quietly falling back to the default.
  */
-function resolveAdapter(command: string, opts: string[]): Adapter | undefined {
+function resolveAdapter(cmd: string, opts: string[]): Adapter | undefined {
   const name = flag(opts, 'adapter') ?? DEFAULT_ADAPTER;
   const adapter = ADAPTERS[name];
   if (!adapter) {
-    err(`covsel ${command}: unknown adapter '${name}' (expected ${adapterNameList()})\n`);
+    err(`covsel ${cmd}: unknown adapter '${name}' (expected ${adapterNameList()})\n`);
     return undefined;
   }
   return adapter;

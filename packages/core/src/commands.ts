@@ -342,9 +342,7 @@ export async function selectAffected(init: SelectInit): Promise<AffectedResult> 
 
 /**
  * Order test units by file, then by name, so a selection is reproducible and
- * collapsing it to files yields the same sorted list as `tests`. The whole-file
- * id of a file sorts before its individual tests, which is also the order a
- * runner should see them in.
+ * collapsing it to files yields the same sorted list as `tests`.
  */
 function sortUnits(units: TestId[]): void {
   const key = (t: TestId): string => `${t.file}\0${t.name ?? ''}`;
@@ -394,18 +392,25 @@ export interface SelectionOutcome {
 export function runSelected(init: RunSelectedInit): SelectionOutcome {
   const { adapter, selected, command, cwd } = init;
   const stdio = init.stdio ?? 'inherit';
+  const [bin, ...rest] = command;
+  if (bin === undefined) throw new Error('empty command');
+  // An empty selection means there is nothing to run, not that the run needs no
+  // filter: appending an empty file list would hand the runner its entire suite.
+  // An adapter that narrows the run itself already invokes nothing for an empty
+  // selection, so deciding it here is what keeps the two paths agreeing.
+  if (selected.length === 0) return { status: 0 };
   if (adapter.runSelection) {
     return { status: adapter.runSelection({ selected, command, cwd, stdio }) };
   }
-  const [bin, ...rest] = command;
-  if (bin === undefined) throw new Error('empty command');
   const args = [...rest, ...adapter.formatSelection(selected)];
   // Silencing the runner still has to leave a failure diagnosable, so its output
-  // is captured rather than discarded when it is not being passed through.
+  // is captured rather than discarded when it is not being passed through. The
+  // ceiling matches what the adapters allow themselves: a verbose suite's output
+  // is large, and truncating it into an error would obscure the real failure.
   const res =
     stdio === 'inherit'
       ? spawnSync(bin, args, { cwd, stdio: 'inherit' })
-      : spawnSync(bin, args, { cwd, encoding: 'utf8' });
+      : spawnSync(bin, args, { cwd, encoding: 'utf8', maxBuffer: 64 * 1024 * 1024 });
   if (res.error) throw res.error;
   const output = `${res.stdout ?? ''}${res.stderr ?? ''}`.trim();
   return { status: res.status ?? 1, ...(output ? { output } : {}) };
@@ -434,7 +439,6 @@ export async function runAffected(
     if (res.error) throw res.error;
     return res.status ?? 1;
   }
-  if (selection.selected.length === 0) return 0;
   return runSelected({
     adapter: init.adapter,
     selected: selection.selected,

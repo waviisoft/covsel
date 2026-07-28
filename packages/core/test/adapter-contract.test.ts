@@ -112,7 +112,7 @@ describe('the adapter capability contract', () => {
   it('captures the runner output it is not passing through, so a failure is diagnosable', () => {
     const adapter: Adapter = {
       name: 'file-list',
-      formatSelection: () => [],
+      formatSelection: fileList,
       createRecorder: () => ({
         async record() {
           return [];
@@ -121,13 +121,36 @@ describe('the adapter capability contract', () => {
     };
     const outcome = runSelected({
       adapter,
-      selected: [],
+      selected: [{ file: 'boom.test.mjs' }],
       command: ['node', '-e', 'console.error("boom"); process.exit(3)'],
       cwd: process.cwd(),
       stdio: 'ignore',
     });
     expect(outcome.status).toBe(3);
     expect(outcome.output).toContain('boom');
+  });
+
+  it('runs nothing for an empty selection, whichever path an adapter takes', () => {
+    // Appending an empty file list would hand the runner its whole suite — the
+    // one way "no affected tests" could turn into "run everything", and a
+    // difference between the two dispatch paths if it were left to each of them.
+    const { adapter: narrowing, calls } = spyAdapter();
+    const fileListOnly: Adapter = {
+      name: 'file-list',
+      formatSelection: fileList,
+      createRecorder: narrowing.createRecorder,
+    };
+    for (const adapter of [narrowing, fileListOnly]) {
+      const outcome = runSelected({
+        adapter,
+        selected: [],
+        // Would exit 7 if it were ever spawned.
+        command: ['node', '-e', 'process.exit(7)'],
+        cwd: process.cwd(),
+      });
+      expect(outcome.status).toBe(0);
+    }
+    expect(calls, 'an empty selection never reaches the runner').toEqual([]);
   });
 
   it("lets an adapter's default test globs stand in, and the project overrule them", () => {
