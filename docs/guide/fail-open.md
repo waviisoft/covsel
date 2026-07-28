@@ -46,6 +46,12 @@ Under-claiming costs CI minutes; over-claiming skips tests. It is required — a
 map that does not say what it observed is unusable, because the only available
 guess ("everything") is the one that loses tests.
 
+The claim is not left to good faith either. The conformance suite holds every
+adapter to it in both directions: nothing it records may lie outside the scope it
+declares, and code inside that scope which the tests execute must appear in the
+map. A recorder that watches part of a run and claims the whole one fails there
+rather than shipping.
+
 Merged shard maps keep the scope only when every shard agrees. Shards that
 disagree produce a map claiming nothing, which falls open on any change, rather
 than one shard's coverage vouching for paths another was never watching.

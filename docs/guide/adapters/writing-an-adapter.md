@@ -91,6 +91,11 @@ process_. A recorder tied to a single isolate will not see a test that shells ou
 to another one, and no glob describes that. If your runner works that way, say so
 in the adapter's docs.
 
+The declaration is not taken on trust: the conformance kit holds it in both
+directions. Nothing you record may lie outside it, and anything inside it that
+the fixture's units execute must appear in the map -- so a recorder that watches
+part of the run and claims the whole one is caught rather than certified.
+
 ## Prove it with the conformance kit
 
 Every adapter must pass the shared suite in `@covsel/conformance`. It writes a
@@ -111,13 +116,15 @@ re-derive:
 | a test added after recording runs    | new tests are never skipped                            |
 | a sentinel change runs everything    | config changes invalidate the map                      |
 | an unusable map runs everything      | a stale map never means "run nothing"                  |
+| blind spots fall open                | **a partial view is declared, never assumed**          |
 
-The three in bold catch an adapter that is silently wrong rather than obviously
+The four in bold catch an adapter that is silently wrong rather than obviously
 broken. Each corresponds to a real way to be green and useless: recording only
 what a test file names, recording only module skeletons so every change inside a
-function is invisible, and building an invocation that runs zero tests and still
-reports success. Nothing else in the suite notices any of them -- the fail-open
-checks pass
+function is invisible, building an invocation that runs zero tests and still
+reports success, and recording a plausible fraction of what a test executed
+because the recorder was never watching the rest. Nothing else in the suite
+notices any of them -- the fail-open checks pass
 because core's policy holds regardless of what the adapter recorded, and the
 precision checks pass because under-recording is, if anything, _more_ precise.
 
@@ -168,6 +175,18 @@ Four rules make it work, and the suite enforces the ones it can:
   file only perturbs the module skeleton, so without this the block-granularity
   path -- the default -- never runs. The suite rejects a `bodyEdit` that changes the
   module block or leaves every function hash intact.
+- **A `blindSpot` when your recorder declares less than everything.** A source
+  both units execute that lies _outside_ the scope you declare -- the app server a
+  browser test drives, an isolate the runner starts on its own -- plus a
+  `breakingEdit`, a change to it that makes both units fail. The suite applies
+  that edit and runs them: if they still pass, your blind spot is code nothing
+  reaches, and it is rejected rather than certifying a fall-open nothing
+  exercised. Then it changes that source and requires selection to report a full
+  run naming it. A fixture in which every unit executes only code the recorder
+  can see never exercises a narrow declaration at all, so the suite refuses that
+  combination instead of passing it. An adapter declaring `OBSERVES_EVERYTHING`
+  needs none; supply one anyway and the suite holds the recorder to having
+  recorded it, because nothing lies outside `**`.
 - **Every unit appends its own label** -- its `name`, or its `testFile` when it has
   none -- plus a newline to `RAN_MARKER_FILE` when it runs. That is how the suite
   sees which units a selection actually executed, without parsing any runner's
