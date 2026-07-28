@@ -43,8 +43,15 @@ describe('covsel cli', () => {
 
   it('help lists the available commands', async () => {
     const { out } = await captureStdout(() => main(['--help']));
-    for (const cmd of ['record', 'affected', 'run', 'status']) {
+    for (const cmd of ['record', 'affected', 'run', 'watch', 'status']) {
       expect(out).toContain(`covsel ${cmd}`);
+    }
+  });
+
+  it('help documents the watch options', async () => {
+    const { out } = await captureStdout(() => main(['--help']));
+    for (const opt of ['--debounce', '--record', '--no-initial-run']) {
+      expect(out).toContain(opt);
     }
   });
 
@@ -64,6 +71,36 @@ describe('covsel cli', () => {
     const { code, err } = await captureStderr(() => main(['record']));
     expect(code).toBe(1);
     expect(err).toContain('expected a runner command after');
+  });
+
+  it('watch without a command after -- errors', async () => {
+    const { code, err } = await captureStderr(() => main(['watch']));
+    expect(code).toBe(1);
+    expect(err).toContain('expected a runner command after');
+  });
+
+  it('watch rejects an unknown adapter rather than silently using the default', async () => {
+    const { code, err } = await captureStderr(() =>
+      main(['watch', '--adapter', 'nope', '--', 'node', '--test']),
+    );
+    expect(code).toBe(1);
+    expect(err).toContain("unknown adapter 'nope'");
+  });
+
+  it('run rejects an unknown adapter rather than silently using the default', async () => {
+    const { code, err } = await captureStderr(() =>
+      main(['run', '--adapter', 'nope', '--', 'node', '--test']),
+    );
+    expect(code).toBe(1);
+    expect(err).toContain("unknown adapter 'nope'");
+  });
+
+  it.each(['-5', 'soon'])('watch rejects a bad --debounce (%s)', async (value) => {
+    const { code, err } = await captureStderr(() =>
+      main(['watch', '--debounce', value, '--', 'node', '--test']),
+    );
+    expect(code).toBe(1);
+    expect(err).toContain('--debounce needs a non-negative number');
   });
 
   it('merge without any shard files errors', async () => {

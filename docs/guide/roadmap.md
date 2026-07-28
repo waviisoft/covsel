@@ -25,7 +25,9 @@ The end-to-end loop works, from whole-file down to individual tests:
   moving parts.
 - An adapter conformance kit every adapter runs, so a community adapter can prove
   itself — see [Writing an adapter](/guide/adapters/writing-an-adapter).
-- CLI: `record`, `affected`, `run`, `status`, `merge`.
+- CLI: `record`, `affected`, `run`, `watch`, `status`, `merge`.
+- [Watch mode](/guide/watch): the same selection driven continuously, one
+  debounced run per save.
 
 Editing one source selects only the tests that execute it; editing a sentinel
 selects everything; a brand-new test always runs — proven end-to-end in CI by
@@ -34,7 +36,6 @@ the [examples](https://github.com/waviisoft/covsel/tree/main/examples).
 ## Next — more adapters
 
 - Adapters for Mocha and Playwright.
-- `covsel watch`.
 
 ## Beyond — bundlers, monorepos, ecosystem
 

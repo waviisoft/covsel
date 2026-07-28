@@ -13,11 +13,18 @@ import {
   mergeMaps,
   recordMap,
   resolveConfig,
-  runAffected,
+  runSelectionCommand,
   selectAffected,
+  watchAffected,
+  type WatchEvent,
 } from '@covsel/core';
 
-import { ADAPTERS, adapterNameList, DEFAULT_ADAPTER } from './adapters.js';
+import {
+  ADAPTERS,
+  type AdapterEntry,
+  adapterNameList,
+  DEFAULT_ADAPTER,
+} from './adapters.js';
 
 const HELP = `covsel — runtime-coverage test impact analysis for any JS/TS runner
 
@@ -25,14 +32,23 @@ Usage:
   covsel record [--adapter <name>] -- <command>   Run the suite and build the map
   covsel affected [--since <ref>] [--format files] Print tests the diff can affect
   covsel run -- <command>                          Run only the affected tests
+  covsel watch -- <command>                        Rerun affected tests as you edit
   covsel status                                    Show map age, size, and next action
   covsel merge <maps...> [--out <file>]            Merge CI shard maps into one
   covsel --help                                    Show this help
   covsel --version                                 Show version
 
+Options:
+  --adapter <name>   Runner adapter for record/run/watch (${adapterNameList()})
+  --since <ref>      Diff against <ref> instead of the commit the map records
+  --debounce <ms>    watch: quiet period after a change before running (default 200)
+  --record           watch: re-record the map after a run that passes
+  --no-initial-run   watch: wait for the first change instead of running at startup
+
 record wraps a runner and observes each test file in its own process to learn
 which sources it executes. affected prints those test files a diff can affect,
-so \`<runner> $(covsel affected)\` runs only what is needed.
+so \`<runner> $(covsel affected)\` runs only what is needed. watch drives the same
+selection continuously, running the affected tests on every save.
 
 covsel never skips a test whose behavior your change could alter — and when it
 can't be sure, it runs it (fail-open). Map schema v${MAP_SCHEMA_VERSION}.
@@ -59,6 +75,11 @@ function flag(opts: string[], name: string): string | undefined {
   return undefined;
 }
 
+/** True when a bare `--name` switch is present. */
+function hasFlag(opts: string[], name: string): boolean {
+  return opts.includes(`--${name}`);
+}
+
 /**
  * Load config, letting the chosen adapter supply the test globs when the project
  * has not set them, so a runner whose tests are not `*.test.*` sources still
@@ -81,6 +102,38 @@ function reportSelection(result: AffectedResult): void {
   }
 }
 
+/**
+ * Hand a selection to the runner. Adapters that record individual tests narrow
+ * below file level through the runner's own filtering; the rest get the file
+ * list. A full run bypasses both — the runner is invoked with no filter, so its
+ * own full suite is what runs.
+ */
+function runSelected(
+  entry: AdapterEntry,
+  cwd: string,
+  command: string[],
+  selection: AffectedResult,
+): number {
+  if (!selection.fullRun && entry.runSelection && selection.selected.length > 0) {
+    return entry.runSelection({ selected: selection.selected, command, cwd });
+  }
+  return runSelectionCommand({ cwd, command, selection });
+}
+
+/** Resolve `--adapter`, reporting the valid names when it is not one of them. */
+function resolveAdapter(
+  cmd: string,
+  opts: string[],
+): { name: string; entry: AdapterEntry } | undefined {
+  const name = flag(opts, 'adapter') ?? DEFAULT_ADAPTER;
+  const entry = ADAPTERS[name];
+  if (!entry) {
+    err(`covsel ${cmd}: unknown adapter '${name}' (expected ${adapterNameList()})\n`);
+    return undefined;
+  }
+  return { name, entry };
+}
+
 async function cmdRecord(argv: string[]): Promise<number> {
   const { opts, command } = splitAtDoubleDash(argv);
   if (command.length === 0) {
@@ -89,15 +142,11 @@ async function cmdRecord(argv: string[]): Promise<number> {
     );
     return 1;
   }
-  const adapter = flag(opts, 'adapter') ?? DEFAULT_ADAPTER;
-  const entry = ADAPTERS[adapter];
-  if (!entry) {
-    err(`covsel record: unknown adapter '${adapter}' (expected ${adapterNameList()})\n`);
-    return 1;
-  }
+  const adapter = resolveAdapter('record', opts);
+  if (!adapter) return 1;
   const cwd = process.cwd();
-  const config = await loadConfigFor(cwd, adapter);
-  const recorder = entry.createRecorder({ command, cwd, config });
+  const config = await loadConfigFor(cwd, adapter.name);
+  const recorder = adapter.entry.createRecorder({ command, cwd, config });
 
   const result = await recordMap({
     cwd,
@@ -146,26 +195,123 @@ async function cmdRun(argv: string[]): Promise<number> {
     );
     return 1;
   }
-  const adapter = flag(opts, 'adapter') ?? DEFAULT_ADAPTER;
+  const adapter = resolveAdapter('run', opts);
+  if (!adapter) return 1;
   const since = flag(opts, 'since');
   const cwd = process.cwd();
-  const config = await loadConfigFor(cwd, adapter);
+  const config = await loadConfigFor(cwd, adapter.name);
 
-  const runSelection = ADAPTERS[adapter]?.runSelection;
-  if (runSelection) {
-    const selection = await selectAffected({ cwd, config, ...(since ? { since } : {}) });
-    reportSelection(selection);
-    if (selection.fullRun) {
-      return runAffected({ cwd, config, command, ...(since ? { since } : {}) });
+  const selection = await selectAffected({ cwd, config, ...(since ? { since } : {}) });
+  reportSelection(selection);
+  return runSelected(adapter.entry, cwd, command, selection);
+}
+
+/** Render one watch-loop event as a line of status on stderr. */
+function reportWatchEvent(event: WatchEvent): void {
+  switch (event.kind) {
+    case 'watching':
+      err(`covsel watch: watching for changes (debounce ${event.debounceMs}ms)\n`);
+      break;
+    case 'change': {
+      const what = event.unnamed
+        ? 'a change the watcher could not name'
+        : event.paths.length === 1
+          ? event.paths[0]
+          : `${event.paths.length} files`;
+      err(`\ncovsel watch: changed — ${what}\n`);
+      break;
     }
-    if (selection.selected.length === 0) return 0;
-    return runSelection({ selected: selection.selected, command, cwd });
+    case 'selected':
+      reportSelection(event.selection);
+      if (!event.selection.fullRun && event.selection.tests.length > 0) {
+        err(`covsel watch: running ${event.selection.selected.length} test(s)\n`);
+      }
+      break;
+    case 'ran':
+      err(`covsel watch: ${event.code === 0 ? 'pass' : `fail (exit ${event.code})`}\n`);
+      break;
+    case 'recorded':
+      err(
+        event.ok
+          ? 'covsel watch: map re-recorded\n'
+          : `covsel watch: map not re-recorded (${event.reason ?? 'record failed'}); ` +
+              'the previous map still stands, so selection stays conservative\n',
+      );
+      break;
+    case 'warning':
+      err(`covsel watch: ${event.reason}\n`);
+      break;
+    case 'watcher-failed':
+      err(
+        `covsel watch: ${event.reason}\n` +
+          'covsel watch: stopping — a watcher that cannot see changes would ' +
+          'silently stop selecting tests\n',
+      );
+      break;
+  }
+}
+
+async function cmdWatch(argv: string[]): Promise<number> {
+  const { opts, command } = splitAtDoubleDash(argv);
+  if (command.length === 0) {
+    err(
+      'covsel watch: expected a runner command after `--`, e.g. covsel watch -- vitest run\n',
+    );
+    return 1;
+  }
+  const adapter = resolveAdapter('watch', opts);
+  if (!adapter) return 1;
+
+  const debounceRaw = flag(opts, 'debounce');
+  const debounceMs = debounceRaw === undefined ? undefined : Number(debounceRaw);
+  if (debounceMs !== undefined && (!Number.isFinite(debounceMs) || debounceMs < 0)) {
+    err(`covsel watch: --debounce needs a non-negative number of milliseconds\n`);
+    return 1;
   }
 
-  return runAffected(
-    { cwd, config, command, ...(since ? { since } : {}) },
-    reportSelection,
-  );
+  const since = flag(opts, 'since');
+  const cwd = process.cwd();
+  const config = await loadConfigFor(cwd, adapter.name);
+
+  // Re-recording is opt-in: it re-runs the whole suite, and a map that only ages
+  // over-selects, so the default trades precision for the latency watch exists
+  // to give.
+  const record = hasFlag(opts, 'record')
+    ? async (): Promise<{ ok: boolean; reason?: string }> => {
+        const result = await recordMap({
+          cwd,
+          config,
+          recorder: adapter.entry.createRecorder({ command, cwd, config }),
+        });
+        return result.ok
+          ? { ok: true }
+          : {
+              ok: false,
+              reason: `${result.failures.length} test file(s) failed to record`,
+            };
+      }
+    : undefined;
+
+  const controller = new AbortController();
+  const abort = (): void => controller.abort();
+  process.on('SIGINT', abort);
+  process.on('SIGTERM', abort);
+  try {
+    return await watchAffected({
+      cwd,
+      config,
+      run: (selection) => runSelected(adapter.entry, cwd, command, selection),
+      onEvent: reportWatchEvent,
+      signal: controller.signal,
+      ...(since !== undefined ? { since } : {}),
+      ...(debounceMs !== undefined ? { debounceMs } : {}),
+      ...(record !== undefined ? { record } : {}),
+      ...(hasFlag(opts, 'no-initial-run') ? { initialRun: false } : {}),
+    });
+  } finally {
+    process.off('SIGINT', abort);
+    process.off('SIGTERM', abort);
+  }
 }
 
 async function cmdStatus(): Promise<number> {
@@ -285,6 +431,8 @@ export async function main(argv: string[] = process.argv.slice(2)): Promise<numb
       return cmdAffected(rest);
     case 'run':
       return cmdRun(rest);
+    case 'watch':
+      return cmdWatch(rest);
     case 'status':
       return cmdStatus();
     case 'merge':

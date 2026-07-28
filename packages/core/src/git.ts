@@ -69,6 +69,30 @@ function mergeBase(cwd: string, a: string, b: string): string | undefined {
   }
 }
 
+/**
+ * Drop the paths git ignores, keeping the rest in order. A file git ignores can
+ * never show up in a diff, so a change to one cannot affect selection — which is
+ * what keeps a runner's own output from re-triggering a watch loop.
+ *
+ * Tracked files are never dropped: `check-ignore` consults the index, and a
+ * tracked file is not subject to ignore rules. When git cannot answer at all,
+ * every path is kept, so the caller decides on more input rather than less.
+ */
+export function filterUnignored(cwd: string, paths: string[]): string[] {
+  if (paths.length === 0) return [];
+  const res = spawnSync('git', ['check-ignore', '--stdin', '-z'], {
+    cwd,
+    encoding: 'utf8',
+    input: `${paths.join('\0')}\0`,
+    maxBuffer: 64 * 1024 * 1024,
+  });
+  // 0: some paths are ignored. 1: none are. Anything else (128, a signal, git
+  // missing) means git did not answer, so nothing may be dropped.
+  if (res.error || (res.status !== 0 && res.status !== 1)) return paths;
+  const ignored = new Set((res.stdout ?? '').split('\0').filter((p) => p !== ''));
+  return paths.filter((p) => !ignored.has(p));
+}
+
 function kindFromStatusLetter(letter: string): Change['kind'] {
   switch (letter) {
     case 'A':

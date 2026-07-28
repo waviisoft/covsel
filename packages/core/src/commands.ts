@@ -367,6 +367,29 @@ export interface RunInit extends SelectInit {
   command: string[];
 }
 
+export interface RunSelectionInit {
+  cwd: string;
+  command: string[];
+  selection: AffectedResult;
+}
+
+/**
+ * Hand a selection to the runner as a file list — the universal contract every
+ * runner honors. A full run invokes the command with no file filter, so the
+ * runner's own full suite is what runs; an empty non-full selection runs nothing
+ * and exits 0.
+ */
+export function runSelectionCommand(init: RunSelectionInit): number {
+  const { selection } = init;
+  const [bin, ...rest] = init.command;
+  if (bin === undefined) throw new Error('empty command');
+  if (!selection.fullRun && selection.tests.length === 0) return 0;
+  const args = selection.fullRun ? rest : [...rest, ...selection.tests];
+  const res = spawnSync(bin, args, { cwd: init.cwd, stdio: 'inherit' });
+  if (res.error) throw res.error;
+  return res.status ?? 1;
+}
+
 /**
  * Run only the affected tests by wrapping the runner. On a full run the runner
  * is invoked with no file filter (its own full suite). On an empty non-full
@@ -378,13 +401,7 @@ export async function runAffected(
 ): Promise<number> {
   const selection = await selectAffected(init);
   onSelection?.(selection);
-  const [bin, ...rest] = init.command;
-  if (bin === undefined) throw new Error('empty command');
-  if (!selection.fullRun && selection.tests.length === 0) return 0;
-  const args = selection.fullRun ? rest : [...rest, ...selection.tests];
-  const res = spawnSync(bin, args, { cwd: init.cwd, stdio: 'inherit' });
-  if (res.error) throw res.error;
-  return res.status ?? 1;
+  return runSelectionCommand({ cwd: init.cwd, command: init.command, selection });
 }
 
 export interface StatusResult {

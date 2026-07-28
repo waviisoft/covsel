@@ -14,3 +14,4 @@ export * from './blocks.js';
 export * from './selector.js';
 export * from './policy.js';
 export * from './commands.js';
+export * from './watch.js';
