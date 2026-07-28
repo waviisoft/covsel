@@ -40,6 +40,12 @@ export const vitestAdapter: Adapter = {
   },
 };
 
+/**
+ * The export the dynamic resolver reads, so this package is selectable by its
+ * specifier exactly as a third-party adapter is.
+ */
+export const adapter = vitestAdapter;
+
 interface IstanbulPosition {
   line: number;
   column: number;

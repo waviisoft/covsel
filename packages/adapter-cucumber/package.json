@@ -20,7 +20,7 @@
     "dist"
   ],
   "scripts": {
-    "build": "tsup src/index.ts --format esm,cjs --dts --sourcemap --clean && cp src/shim.js dist/shim.js",
+    "build": "tsup src/index.ts --format esm,cjs --dts --sourcemap --shims --clean && cp src/shim.js dist/shim.js",
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {

@@ -19,6 +19,35 @@ covsel record --adapter vitest -- vitest run
 
 With no `--adapter`, covsel uses the **generic** adapter.
 
+## Using an adapter covsel does not ship
+
+A name covsel does not recognise is a package your project installed. Install it,
+then name it:
+
+```bash
+npm install --save-dev @covsel/adapter-mocha
+covsel record --adapter mocha -- mocha
+```
+
+covsel resolves a short name to `@covsel/adapter-<name>` first, then to
+`covsel-adapter-<name>` — the convention a published adapter should follow. A
+package named neither way is selectable by writing the specifier out in full:
+
+```bash
+covsel record --adapter @acme/our-runner-adapter -- our-runner
+```
+
+Resolution happens from your project, so the adapter that loads is the one your
+project installed, even when covsel itself is installed globally. The adapters
+covsel ships always win over a package of the same name, and are the only ones
+that work with nothing else installed.
+
+An adapter that resolves but is not really an adapter is rejected before anything
+is recorded, naming the capability it is missing. That is deliberate: covsel's
+promise is that it never skips a test your change could affect, and a recorder
+that silently produces nothing would record that your tests cover nothing — which
+would skip all of them on every diff afterwards.
+
 ## How covsel observes coverage
 
 At file granularity there are two ways to learn which sources a test file ran,

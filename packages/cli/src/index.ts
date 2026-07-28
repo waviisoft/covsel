@@ -18,7 +18,7 @@ import {
   selectAffected,
 } from '@covsel/core';
 
-import { ADAPTERS, adapterNameList, DEFAULT_ADAPTER } from './adapters.js';
+import { DEFAULT_ADAPTER, loadAdapter } from './adapters.js';
 
 const HELP = `covsel — runtime-coverage test impact analysis for any JS/TS runner
 
@@ -61,18 +61,23 @@ function flag(opts: string[], name: string): string | undefined {
 }
 
 /**
- * Resolve `--adapter` to the object every command reads its capabilities off.
- * An unknown name is reported with the names covsel does know rather than
- * quietly falling back to the default.
+ * Resolve `--adapter` to the object every command reads its capabilities off:
+ * one covsel ships, or one the project installed. A name that resolves to
+ * nothing, or to something that is not an adapter, is reported with what went
+ * wrong rather than quietly falling back to the default.
  */
-function resolveAdapter(cmd: string, opts: string[]): Adapter | undefined {
+async function resolveAdapter(
+  cmd: string,
+  opts: string[],
+  cwd: string,
+): Promise<Adapter | undefined> {
   const name = flag(opts, 'adapter') ?? DEFAULT_ADAPTER;
-  const adapter = ADAPTERS[name];
-  if (!adapter) {
-    err(`covsel ${cmd}: unknown adapter '${name}' (expected ${adapterNameList()})\n`);
+  try {
+    return await loadAdapter(name, cwd);
+  } catch (e) {
+    err(`covsel ${cmd}: ${e instanceof Error ? e.message : String(e)}\n`);
     return undefined;
   }
-  return adapter;
 }
 
 /**
@@ -100,9 +105,9 @@ async function cmdRecord(argv: string[]): Promise<number> {
     );
     return 1;
   }
-  const adapter = resolveAdapter('record', opts);
-  if (!adapter) return 1;
   const cwd = process.cwd();
+  const adapter = await resolveAdapter('record', opts, cwd);
+  if (!adapter) return 1;
   const config = await loadConfigFor(cwd, adapter);
   const recorder = adapter.createRecorder({ command, cwd, config });
 
@@ -136,10 +141,10 @@ async function cmdAffected(argv: string[]): Promise<number> {
     );
     return 1;
   }
-  const adapter = resolveAdapter('affected', argv);
+  const cwd = process.cwd();
+  const adapter = await resolveAdapter('affected', argv, cwd);
   if (!adapter) return 1;
   const since = flag(argv, 'since');
-  const cwd = process.cwd();
   const config = await loadConfigFor(cwd, adapter);
   const result = await selectAffected({ cwd, config, ...(since ? { since } : {}) });
   reportSelection(result);
@@ -158,10 +163,10 @@ async function cmdRun(argv: string[]): Promise<number> {
     );
     return 1;
   }
-  const adapter = resolveAdapter('run', opts);
+  const cwd = process.cwd();
+  const adapter = await resolveAdapter('run', opts, cwd);
   if (!adapter) return 1;
   const since = flag(opts, 'since');
-  const cwd = process.cwd();
   const config = await loadConfigFor(cwd, adapter);
 
   return runAffected(

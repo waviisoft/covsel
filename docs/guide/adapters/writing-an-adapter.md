@@ -164,6 +164,30 @@ neither — an adapter's own `defaultTestGlobs` are applied here exactly as the 
 applies them, so a runner whose tests are `.feature` files is discovered with no
 fixture configuration at all.
 
+## Publishing it
+
+covsel resolves an adapter it does not ship from the project that installed it,
+so a published package is selectable with no change to covsel. Two things make
+yours findable:
+
+- **Name the package `covsel-adapter-<runner>`** (or `@your-scope/covsel-adapter-<runner>`).
+  `--adapter <runner>` expands to `@covsel/adapter-<runner>` and then
+  `covsel-adapter-<runner>`, so the short name works out of the box. A package
+  named anything else is still selectable — users write the full specifier — but
+  the short name is what people will reach for.
+- **Export it as `adapter`**, or as the default export:
+
+  ```ts
+  export const adapter: Adapter = myAdapter;
+  ```
+
+covsel checks what it imported against the contract before recording anything,
+and rejects a module that does not satisfy it by naming the capability that
+failed. If your package exports something else — a factory, a config object — it
+will be refused rather than half-used. The check is strict for a fail-open
+reason: an adapter that loads but cannot really drive its runner would record
+that its tests cover nothing, and covsel would then skip them on every diff.
+
 ## Conventions
 
 Adapters depend on `@covsel/core` only — never on each other or on CLI
