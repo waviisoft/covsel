@@ -13,16 +13,17 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 
-import type {
-  Adapter,
-  CoveredBlock,
-  CoveredFile,
-  CovselConfig,
-  Recorder,
-  RecordedUnit,
-  RecorderInit,
-  SelectionRunInit,
-  TestId,
+import {
+  type Adapter,
+  type CoveredBlock,
+  type CoveredFile,
+  type CovselConfig,
+  OBSERVES_EVERYTHING,
+  type Recorder,
+  type RecordedUnit,
+  type RecorderInit,
+  type SelectionRunInit,
+  type TestId,
 } from '@covsel/core';
 
 const shimUrl = pathToFileURL(fileURLToPath(new URL('./shim.js', import.meta.url))).href;
@@ -68,6 +69,9 @@ interface ShimUnit {
 export function createNodeTestRecorder(init: NodeTestRecorderInit): Recorder {
   const [bin, ...rest] = init.command;
   return {
+    // The inspector observer watches the isolate the tests run in and reports
+    // every script it loads, so any repo path a test executes is visible.
+    observes: OBSERVES_EVERYTHING,
     async record(testFile: string): Promise<RecordedUnit[]> {
       if (bin === undefined) throw new Error('empty command');
       const dir = mkdtempSync(join(tmpdir(), 'covsel-nodetest-'));

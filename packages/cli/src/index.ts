@@ -8,6 +8,7 @@ import {
   type CoverageMap,
   type CovselConfig,
   loadConfig,
+  isDirtyWorkTree,
   isUsableMap,
   loadRawConfig,
   MAP_SCHEMA_VERSION,
@@ -15,7 +16,10 @@ import {
   recordMap,
   resolveConfigFor,
   runAffected,
+  runAffectedSelection,
   selectAffected,
+  watchAffected,
+  type WatchEvent,
 } from '@covsel/core';
 
 import { DEFAULT_ADAPTER, loadAdapter } from './adapters.js';
@@ -26,14 +30,24 @@ Usage:
   covsel record [--adapter <name>] -- <command>   Run the suite and build the map
   covsel affected [--since <ref>] [--format files] Print tests the diff can affect
   covsel run -- <command>                          Run only the affected tests
+  covsel watch -- <command>                        Rerun affected tests as you edit
   covsel status                                    Show map age, size, and next action
   covsel merge <maps...> [--out <file>]            Merge CI shard maps into one
   covsel --help                                    Show this help
   covsel --version                                 Show version
 
+Options:
+  --adapter <name>   Installed adapter package for record/affected/run/watch
+                     (default '${DEFAULT_ADAPTER}'; adapters install separately)
+  --since <ref>      Diff against <ref> instead of the commit the map records
+  --debounce <ms>    watch: quiet period after a change before running (default 200)
+  --record           watch: re-record the map after a run that passes
+  --no-initial-run   watch: wait for the first change instead of running at startup
+
 record wraps a runner and observes each test file in its own process to learn
 which sources it executes. affected prints those test files a diff can affect,
-so \`<runner> $(covsel affected)\` runs only what is needed.
+so \`<runner> $(covsel affected)\` runs only what is needed. watch drives the same
+selection continuously, running the affected tests on every save.
 
 covsel never skips a test whose behavior your change could alter -- and when it
 can't be sure, it runs it (fail-open). Map schema v${MAP_SCHEMA_VERSION}.
@@ -58,6 +72,11 @@ function flag(opts: string[], name: string): string | undefined {
     if (cur?.startsWith(`--${name}=`)) return cur.slice(name.length + 3);
   }
   return undefined;
+}
+
+/** True when a bare `--name` switch is present. */
+function hasFlag(opts: string[], name: string): boolean {
+  return opts.includes(`--${name}`);
 }
 
 /**
@@ -177,6 +196,127 @@ async function cmdRun(argv: string[]): Promise<number> {
   );
 }
 
+/** Render one watch-loop event as a line of status on stderr. */
+function reportWatchEvent(event: WatchEvent): void {
+  switch (event.kind) {
+    case 'watching':
+      err(`covsel watch: watching for changes (debounce ${event.debounceMs}ms)\n`);
+      break;
+    case 'change': {
+      const what = event.unnamed
+        ? 'a change the watcher could not name'
+        : event.paths.length === 1
+          ? event.paths[0]
+          : `${event.paths.length} files`;
+      err(`\ncovsel watch: changed — ${what}\n`);
+      break;
+    }
+    case 'selected':
+      reportSelection(event.selection);
+      if (!event.selection.fullRun && event.selection.tests.length > 0) {
+        err(`covsel watch: running ${event.selection.selected.length} test(s)\n`);
+      }
+      break;
+    case 'ran':
+      err(`covsel watch: ${event.code === 0 ? 'pass' : `fail (exit ${event.code})`}\n`);
+      break;
+    case 'recorded':
+      err(
+        event.ok
+          ? 'covsel watch: map re-recorded\n'
+          : `covsel watch: map not re-recorded (${event.reason ?? 'record failed'}); ` +
+              'the previous map still stands, so selection stays conservative\n',
+      );
+      break;
+    case 'warning':
+      err(`covsel watch: ${event.reason}\n`);
+      break;
+    case 'watcher-failed':
+      err(
+        `covsel watch: ${event.reason}\n` +
+          'covsel watch: stopping — a watcher that cannot see changes would ' +
+          'silently stop selecting tests\n',
+      );
+      break;
+  }
+}
+
+async function cmdWatch(argv: string[]): Promise<number> {
+  const { opts, command } = splitAtDoubleDash(argv);
+  if (command.length === 0) {
+    err(
+      'covsel watch: expected a runner command after `--`, e.g. covsel watch -- vitest run\n',
+    );
+    return 1;
+  }
+  const cwd = process.cwd();
+  const adapter = await resolveAdapter('watch', opts, cwd);
+  if (!adapter) return 1;
+
+  const debounceRaw = flag(opts, 'debounce');
+  const debounceMs = debounceRaw === undefined ? undefined : Number(debounceRaw);
+  if (debounceMs !== undefined && (!Number.isFinite(debounceMs) || debounceMs < 0)) {
+    err(`covsel watch: --debounce needs a non-negative number of milliseconds\n`);
+    return 1;
+  }
+
+  const since = flag(opts, 'since');
+  const config = await loadConfigFor(cwd, adapter);
+
+  // Re-recording is opt-in: it re-runs the whole suite, and a map that only ages
+  // over-selects, so the default trades precision for the latency watch exists
+  // to give.
+  const record = hasFlag(opts, 'record')
+    ? async (): Promise<{ ok: boolean; reason?: string }> => {
+        // A map is stamped with HEAD, so recording from an edited tree would
+        // describe code that commit does not contain — and a later checkout of
+        // exactly HEAD would then trust it and could skip a test. Waiting for a
+        // commit costs freshness; recording anyway costs the guarantee.
+        if (isDirtyWorkTree(cwd)) {
+          return {
+            ok: false,
+            reason:
+              'the working tree has uncommitted changes, so a fresh map ' +
+              'would describe a state no commit names',
+          };
+        }
+        const result = await recordMap({
+          cwd,
+          config,
+          recorder: adapter.createRecorder({ command, cwd, config }),
+        });
+        return result.ok
+          ? { ok: true }
+          : {
+              ok: false,
+              reason: `${result.failures.length} test file(s) failed to record`,
+            };
+      }
+    : undefined;
+
+  const controller = new AbortController();
+  const abort = (): void => controller.abort();
+  process.on('SIGINT', abort);
+  process.on('SIGTERM', abort);
+  try {
+    return await watchAffected({
+      cwd,
+      config,
+      run: (selection) =>
+        runAffectedSelection({ adapter, selection, command, cwd }).status,
+      onEvent: reportWatchEvent,
+      signal: controller.signal,
+      ...(since !== undefined ? { since } : {}),
+      ...(debounceMs !== undefined ? { debounceMs } : {}),
+      ...(record !== undefined ? { record } : {}),
+      ...(hasFlag(opts, 'no-initial-run') ? { initialRun: false } : {}),
+    });
+  } finally {
+    process.off('SIGINT', abort);
+    process.off('SIGTERM', abort);
+  }
+}
+
 async function cmdStatus(): Promise<number> {
   const cwd = process.cwd();
   const config = await loadConfig(cwd);
@@ -189,6 +329,13 @@ async function cmdStatus(): Promise<number> {
       `recorded:   ${s.recordedAt ?? 'unknown'}${ageMin !== undefined ? ` (${ageMin}m ago)` : ''}\n`,
     );
     out(`granularity:${s.granularity ?? 'unknown'}\n`);
+    out(
+      `observed:   ${
+        s.observed === undefined || s.observed.length === 0
+          ? 'nothing (every change forces a full run)'
+          : s.observed.join(', ')
+      }\n`,
+    );
     out(`entries:    ${s.entryCount ?? 0}\n`);
     out(`sources:    ${s.coveredFileCount ?? 0}\n`);
     if (s.coveredBlockCount !== undefined) out(`blocks:     ${s.coveredBlockCount}\n`);
@@ -273,6 +420,12 @@ async function cmdMerge(argv: string[]): Promise<number> {
         'records none, so the next selection will be a full run\n',
     );
   }
+  if (merged.observed.length === 0) {
+    err(
+      'covsel merge: shards disagree on what they could observe; the merged map ' +
+        'claims nothing, so the next selection will be a full run\n',
+    );
+  }
   return 0;
 }
 
@@ -294,6 +447,8 @@ export async function main(argv: string[] = process.argv.slice(2)): Promise<numb
       return cmdAffected(rest);
     case 'run':
       return cmdRun(rest);
+    case 'watch':
+      return cmdWatch(rest);
     case 'status':
       return cmdStatus();
     case 'merge':

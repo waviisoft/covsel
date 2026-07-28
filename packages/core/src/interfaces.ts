@@ -87,6 +87,17 @@ export interface RecordedUnit extends RecordedTest {
  * engine via `NODE_V8_COVERAGE`.
  */
 export interface Recorder {
+  /**
+   * Repo-relative globs this recorder is able to observe execution within,
+   * stamped onto the map it produces as `observed`.
+   *
+   * This is a claim about recall, not about what the runner happens to execute:
+   * declare a path only when, had code there run, this recorder would have seen
+   * it. Everything outside falls open on change, because the map's silence about
+   * it means nothing. Under-claiming costs CI minutes; over-claiming skips tests.
+   * A recorder that would see anything that ran declares `OBSERVES_EVERYTHING`.
+   */
+  readonly observes: readonly string[];
   record(testFile: string): Promise<RecordedUnit[]>;
 }
 

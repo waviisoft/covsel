@@ -21,6 +21,7 @@ import {
   type ExecRegion,
   hashFileContents,
   makeSourceFilter,
+  OBSERVES_EVERYTHING,
   positionToOffset,
   type Recorder,
   type RecordedUnit,
@@ -109,6 +110,10 @@ export function createVitestRecorder(init: VitestRecorderInit): Recorder {
   const isSource = makeSourceFilter(init.config);
   const wantBlocks = init.config.granularity !== 'file';
   return {
+    // Vitest's V8 provider reports every module its runner loaded, remapped to
+    // the original file, so any source under the repo that a test reaches shows
+    // up in the report regardless of where it lives.
+    observes: OBSERVES_EVERYTHING,
     async record(testFile: string): Promise<RecordedUnit[]> {
       const reportsDir = mkdtempSync(join(tmpdir(), 'covsel-vitest-'));
       const [bin, ...rest] = init.command;

@@ -46,6 +46,9 @@ npx covsel affected --since origin/main
 # Run only those tests by wrapping the runner
 npx covsel run -- node --test
 
+# Or leave it running: rerun the affected tests on every save
+npx covsel watch -- node --test
+
 # Runners with no selection of their own: pick individual scenarios
 npx covsel record --adapter cucumber -- cucumber-js
 npx covsel run --adapter cucumber -- cucumber-js

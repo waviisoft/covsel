@@ -35,7 +35,8 @@ Two capabilities are required:
 2. **`createRecorder({ command, cwd, config })`** -- a `Recorder` whose
    `record(testFile)` returns one `RecordedUnit` per test it observed: a single
    whole-file unit, or one unit per individual test for runners you can hook per
-   test.
+   test. It also declares `observes`, the globs it is able to see execution
+   within.
 
 Two more are optional, and omitting one means "covsel's default is right for my
 runner":
@@ -59,6 +60,36 @@ runner-specific decision:
 - Runners that transform sources first (Vitest, Jest) must read the runner's own
   coverage, because process coverage never sees the original files.
 - Runners with lifecycle hooks can drive the `InspectorObserver` per test.
+
+## Say what you can see
+
+`observes` is the other half of what you record, and the half no shared layer can
+infer. It declares the repo paths where, had code run, your recorder would have
+seen it — so a change outside them falls open to a full run instead of trusting
+a silence that means nothing.
+
+All three mechanisms above watch the code under test in the process tree the
+recorder controls, so they declare `OBSERVES_EVERYTHING`:
+
+```ts
+return {
+  observes: OBSERVES_EVERYTHING,
+  async record(testFile) {
+    /* … */
+  },
+};
+```
+
+Declare something narrower the moment your recorder sees only part of a test's
+execution. A recorder that collects coverage from a browser sees the app's
+sources and nothing of the server the page talks to; claiming everything there
+would let a change to that server skip the tests it breaks. Under-claiming costs
+CI minutes, over-claiming costs correctness — so when in doubt, claim less.
+
+One boundary this cannot express: paths say _where in the repo_, not _in which
+process_. A recorder tied to a single isolate will not see a test that shells out
+to another one, and no glob describes that. If your runner works that way, say so
+in the adapter's docs.
 
 ## Prove it with the conformance kit
 

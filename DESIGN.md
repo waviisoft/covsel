@@ -117,8 +117,9 @@ coverage comes later via bundler plugins emitting clean per-source maps.
 
 ## 3. Target UX (design to this)
 
-> Not yet implemented. Today the CLI ships `--help` and `--version`; the surface
-> below is what selection should feel like once it lands.
+> Mostly implemented. `record`, `affected`, `run`, `watch`, `status`, and
+> `merge` ship today; `explain` and the runner-native `--format` outputs below
+> are still target UX.
 
 ### CLI surface
 
@@ -244,8 +245,8 @@ version. The shape:
   that execute it, editing a sentinel selects everything, and a new test always
   runs.
 - **Later -- per-test precision + real adapters.** Inspector snapshot-diff
-  observation; block-hash granularity; adapters for Jest, Mocha, node:test,
-  cucumber-js, Playwright; the CI publish/fetch/shard-merge story; `covsel watch`.
+  observation; block-hash granularity; `covsel watch`; adapters for Jest, Mocha,
+  node:test, cucumber-js, Playwright; the CI publish/fetch/shard-merge story.
 - **Beyond -- bundlers, monorepos, ecosystem.** Bundler source-map plugins for
   browser coverage; composition with Nx/Turbo project graphs; fs-read tracking
   for non-JS dependencies.

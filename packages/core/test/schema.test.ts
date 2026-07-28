@@ -6,6 +6,7 @@ const validMap: CoverageMap = {
   granularity: 'file',
   recordedAt: '2026-01-01T00:00:00.000Z',
   sentinelHashes: {},
+  observed: ['**'],
   entries: [],
 };
 
@@ -18,7 +19,9 @@ describe('MAP_SCHEMA_VERSION', () => {
 
 describe('isUsableMap', () => {
   it('accepts a current-version map', () => {
-    expect(isUsableMap({ schemaVersion: MAP_SCHEMA_VERSION, entries: [] })).toBe(true);
+    expect(
+      isUsableMap({ schemaVersion: MAP_SCHEMA_VERSION, observed: [], entries: [] }),
+    ).toBe(true);
   });
 
   it('accepts a fully-populated map', () => {
@@ -26,7 +29,7 @@ describe('isUsableMap', () => {
   });
 
   it('rejects a stale schema version (fail open)', () => {
-    expect(isUsableMap({ schemaVersion: 0, entries: [] })).toBe(false);
+    expect(isUsableMap({ schemaVersion: 0, observed: [], entries: [] })).toBe(false);
     expect(isUsableMap({ ...validMap, schemaVersion: MAP_SCHEMA_VERSION - 1 })).toBe(
       false,
     );
@@ -39,11 +42,23 @@ describe('isUsableMap', () => {
   });
 
   it('rejects a map whose entries are missing or not an array', () => {
-    expect(isUsableMap({ schemaVersion: MAP_SCHEMA_VERSION })).toBe(false);
-    expect(isUsableMap({ schemaVersion: MAP_SCHEMA_VERSION, entries: 'nope' })).toBe(
-      false,
-    );
-    expect(isUsableMap({ schemaVersion: MAP_SCHEMA_VERSION, entries: null })).toBe(false);
+    expect(isUsableMap({ schemaVersion: MAP_SCHEMA_VERSION, observed: [] })).toBe(false);
+    expect(
+      isUsableMap({ schemaVersion: MAP_SCHEMA_VERSION, observed: [], entries: 'nope' }),
+    ).toBe(false);
+    expect(
+      isUsableMap({ schemaVersion: MAP_SCHEMA_VERSION, observed: [], entries: null }),
+    ).toBe(false);
+  });
+
+  it('rejects a map that does not say what it observed (fail open)', () => {
+    // A map predating the field, or one hand-edited to drop it, must not be
+    // read as "observed everything" — that is the reading that skips tests.
+    const withoutObserved: Record<string, unknown> = { ...validMap };
+    delete withoutObserved.observed;
+    expect(isUsableMap(withoutObserved)).toBe(false);
+    expect(isUsableMap({ ...validMap, observed: 'src/**' })).toBe(false);
+    expect(isUsableMap({ ...validMap, observed: ['src/**', 7] })).toBe(false);
   });
 
   it('rejects non-object garbage', () => {

@@ -17,6 +17,7 @@ import {
   type Granularity,
   MAP_SCHEMA_VERSION,
   type MapEntry,
+  OBSERVES_EVERYTHING,
   type TestId,
 } from './schema.js';
 import { FileSelector } from './selector.js';
@@ -39,6 +40,10 @@ export function createGenericRecorder(init: GenericRecorderInit): Recorder {
   const mapper = new V8FileMapper({ cwd: init.cwd, config: init.config });
   const wantBlocks = init.config.granularity !== 'file';
   return {
+    // NODE_V8_COVERAGE is inherited by child processes and dumps every script
+    // they load, so anything the run executes anywhere in the process tree is
+    // visible to this recorder wherever it lives in the repo.
+    observes: OBSERVES_EVERYTHING,
     async record(testFile: string) {
       await observer.startTest({ file: testFile });
       const raw = await observer.endTest({ file: testFile });
@@ -64,6 +69,7 @@ function assembleMap(
   cwd: string,
   config: Pick<CovselConfig, 'sentinels' | 'granularity'>,
   recordedAt: string,
+  observed: readonly string[],
 ): CoverageMap {
   const commit = gitHeadCommit(cwd);
   // Reflect what was actually recorded: per-test (node:test) recorders capture
@@ -77,6 +83,7 @@ function assembleMap(
     ...(commit ? { commit } : {}),
     recordedAt,
     sentinelHashes: hashSentinels(cwd, config.sentinels),
+    observed: [...observed],
     entries,
   };
 }
@@ -152,7 +159,7 @@ export async function recordMap(init: RecordInit): Promise<RecordResult> {
   }
 
   const recordedAt = init.recordedAt ?? new Date().toISOString();
-  const map = assembleMap(entries, cwd, config, recordedAt);
+  const map = assembleMap(entries, cwd, config, recordedAt, recorder.observes);
   await store.write(map);
   return {
     ok: true,
@@ -421,6 +428,40 @@ export interface RunInit extends SelectInit {
   command: string[];
 }
 
+export interface RunAffectedSelectionInit extends Omit<SelectionRunInit, 'selected'> {
+  adapter: Adapter;
+  selection: AffectedResult;
+}
+
+/**
+ * Run one already-computed selection. A full run invokes the command with no
+ * file filter, so the runner's own full suite is what runs; anything else goes
+ * through the adapter's narrowing. Callers that hold a selection already — a
+ * watch loop reruns one per change — run it here rather than reselecting.
+ */
+export function runAffectedSelection(init: RunAffectedSelectionInit): SelectionOutcome {
+  const { adapter, selection, command, cwd } = init;
+  const [bin, ...rest] = command;
+  if (bin === undefined) throw new Error('empty command');
+  if (selection.fullRun) {
+    const stdio = init.stdio ?? 'inherit';
+    const res =
+      stdio === 'inherit'
+        ? spawnSync(bin, rest, { cwd, stdio: 'inherit' })
+        : spawnSync(bin, rest, { cwd, encoding: 'utf8', maxBuffer: 64 * 1024 * 1024 });
+    if (res.error) throw res.error;
+    const output = `${res.stdout ?? ''}${res.stderr ?? ''}`.trim();
+    return { status: res.status ?? 1, ...(output ? { output } : {}) };
+  }
+  return runSelected({
+    adapter,
+    selected: selection.selected,
+    command,
+    cwd,
+    ...(init.stdio !== undefined ? { stdio: init.stdio } : {}),
+  });
+}
+
 /**
  * Run only the affected tests by wrapping the runner. On a full run the runner
  * is invoked with no file filter (its own full suite). On an empty non-full
@@ -432,16 +473,9 @@ export async function runAffected(
 ): Promise<number> {
   const selection = await selectAffected(init);
   onSelection?.(selection);
-  const [bin, ...rest] = init.command;
-  if (bin === undefined) throw new Error('empty command');
-  if (selection.fullRun) {
-    const res = spawnSync(bin, rest, { cwd: init.cwd, stdio: 'inherit' });
-    if (res.error) throw res.error;
-    return res.status ?? 1;
-  }
-  return runSelected({
+  return runAffectedSelection({
     adapter: init.adapter,
-    selected: selection.selected,
+    selection,
     command: init.command,
     cwd: init.cwd,
   }).status;
@@ -453,6 +487,8 @@ export interface StatusResult {
   recordedAt?: string;
   ageMs?: number;
   granularity?: string;
+  /** Globs the recording was able to observe execution within. */
+  observed?: string[];
   entryCount?: number;
   coveredFileCount?: number;
   coveredBlockCount?: number;
@@ -523,6 +559,7 @@ export async function computeStatus(init: StatusInit): Promise<StatusResult> {
     recordedAt: map.recordedAt,
     ageMs: now - Date.parse(map.recordedAt),
     granularity: map.granularity,
+    observed: [...map.observed],
     entryCount: map.entries.length,
     coveredFileCount: coveredFiles.size,
     ...(coveredBlocks.size > 0 ? { coveredBlockCount: coveredBlocks.size } : {}),

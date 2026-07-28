@@ -43,8 +43,15 @@ describe('covsel cli', () => {
 
   it('help lists the available commands', async () => {
     const { out } = await captureStdout(() => main(['--help']));
-    for (const cmd of ['record', 'affected', 'run', 'status']) {
+    for (const cmd of ['record', 'affected', 'run', 'watch', 'status']) {
       expect(out).toContain(`covsel ${cmd}`);
+    }
+  });
+
+  it('help documents the watch options', async () => {
+    const { out } = await captureStdout(() => main(['--help']));
+    for (const opt of ['--debounce', '--record', '--no-initial-run']) {
+      expect(out).toContain(opt);
     }
   });
 
@@ -64,6 +71,20 @@ describe('covsel cli', () => {
     const { code, err } = await captureStderr(() => main(['record']));
     expect(code).toBe(1);
     expect(err).toContain('expected a runner command after');
+  });
+
+  it('watch without a command after -- errors', async () => {
+    const { code, err } = await captureStderr(() => main(['watch']));
+    expect(code).toBe(1);
+    expect(err).toContain('expected a runner command after');
+  });
+
+  it.each(['-5', 'soon'])('watch rejects a bad --debounce (%s)', async (value) => {
+    const { code, err } = await captureStderr(() =>
+      main(['watch', '--debounce', value, '--', 'node', '--test']),
+    );
+    expect(code).toBe(1);
+    expect(err).toContain('--debounce needs a non-negative number');
   });
 
   it('merge without any shard files errors', async () => {
@@ -86,7 +107,7 @@ describe('covsel cli', () => {
     expect(err).toContain('cannot read');
   });
 
-  it.each(['record', 'affected', 'run'])(
+  it.each(['record', 'affected', 'run', 'watch'])(
     '%s rejects an adapter that is not installed, and says how to install it',
     async (cmd) => {
       const argv = cmd === 'affected' ? [cmd] : [cmd, '--', 'node', '--test'];
