@@ -12,6 +12,18 @@ export interface ConformanceUnit {
   name?: string;
   /** A source file this unit executes and the other unit does not. */
   source: string;
+  /**
+   * A change *inside a function body* of `source` that this unit executes, as a
+   * literal substring and its replacement. Appending to a file only perturbs the
+   * module skeleton, so without this the block-granularity path — the default —
+   * is never exercised, and an adapter that records only module blocks looks
+   * perfect while missing every change to a function.
+   *
+   * The suite rejects a `bodyEdit` that changes the module block or leaves every
+   * function hash intact, so it cannot be satisfied by an edit that does not
+   * reach a function body.
+   */
+  bodyEdit: { find: string; replace: string };
 }
 
 /**
@@ -25,8 +37,9 @@ export const RAN_MARKER_FILE = '.covsel-conformance-ran';
 /**
  * A throwaway project the suite writes, records, and edits. It must contain two
  * units that execute different sources, so the suite can tell precise selection
- * from "everything ran", plus one source both execute, so it can tell recording
- * everything a unit touched from recording only the obvious part.
+ * from "everything ran", plus one source both reach *indirectly*, so it can tell
+ * recording everything a unit touched from recording only what its test file
+ * names.
  *
  * Every unit must append its label — its `name`, or its `testFile` when it has
  * no name — followed by a newline to {@link RAN_MARKER_FILE} when it runs.
@@ -42,8 +55,15 @@ export interface ConformanceFixture {
   config?: Partial<CovselConfig>;
   units: { a: ConformanceUnit; b: ConformanceUnit };
   /**
-   * A source file *both* units execute. Editing it must select both; a recorder
-   * that credits a unit with only the source it imports directly will not.
+   * A source file *both* units execute, reached only *through* their own
+   * sources — no test file may import it. Editing it must select both.
+   *
+   * The indirection is the point. A recorder that credits a test with the files
+   * its test file names, and nothing those files reach in turn, is precise,
+   * deterministic, and fails open on new tests and sentinels; only a source it
+   * had to follow a dependency to find will expose it. The suite rejects a
+   * fixture whose test files mention this path, so it cannot be satisfied by a
+   * source that is really a direct import.
    */
   sharedSource: string;
   /** A test file that does not exist at record time, added later by the suite. */

@@ -1,9 +1,10 @@
-import { spawnSync } from 'node:child_process';
+import { spawnSync, type SpawnSyncReturns } from 'node:child_process';
 import {
   existsSync,
   mkdirSync,
   mkdtempSync,
   readFileSync,
+  realpathSync,
   rmSync,
   symlinkSync,
   writeFileSync,
@@ -15,7 +16,9 @@ import {
   type AffectedResult,
   type CoverageMap,
   type CovselConfig,
+  extractBlocks,
   MAP_SCHEMA_VERSION,
+  MODULE_BLOCK,
   recordMap,
   resolveConfig,
   selectAffected,
@@ -36,9 +39,29 @@ interface Project {
   dispose(): void;
 }
 
+/** Explain why a spawn produced no clean exit, so a broken fixture is diagnosable. */
+function spawnDetail(res: SpawnSyncReturns<string>): string {
+  if (res.error) return res.error.message;
+  if (res.signal) return `killed by ${res.signal}`;
+  return (res.stderr || res.stdout || '').trim() || `exited ${res.status ?? 'unknown'}`;
+}
+
 function git(cwd: string, args: string[]): void {
-  const res = spawnSync('git', args, { cwd, encoding: 'utf8' });
-  if (res.status !== 0) throw new Error(`git ${args.join(' ')} failed: ${res.stderr}`);
+  // Isolated from the contributor's global config: an ambient excludesFile,
+  // hooksPath, or commit.gpgsign would break the fixture for reasons that have
+  // nothing to do with the adapter under test.
+  const res = spawnSync('git', args, {
+    cwd,
+    encoding: 'utf8',
+    env: {
+      ...process.env,
+      GIT_CONFIG_GLOBAL: '/dev/null',
+      GIT_CONFIG_SYSTEM: '/dev/null',
+    },
+  });
+  if (res.status !== 0) {
+    throw new Error(`git ${args.join(' ')} failed: ${spawnDetail(res)}`);
+  }
 }
 
 function writeFile(cwd: string, rel: string, contents: string): void {
@@ -53,19 +76,83 @@ function editSource(project: Project, rel: string): void {
   writeFile(project.cwd, rel, `${original}\n// conformance edit\n`);
 }
 
+/**
+ * Apply a unit's `bodyEdit`, having first proved it really is a body edit: the
+ * module skeleton must survive it and some function hash must not. An edit that
+ * fails either test would exercise the same path as appending to the file, which
+ * is what let a module-blocks-only recorder look correct.
+ */
+function editBody(project: Project, unit: ConformanceUnit): void {
+  const { find, replace } = unit.bodyEdit;
+  const before = readFileSync(join(project.cwd, unit.source), 'utf8');
+  if (!before.includes(find)) {
+    throw new Error(
+      `${unit.source} does not contain the bodyEdit text ${JSON.stringify(find)}`,
+    );
+  }
+  const after = before.replace(find, replace);
+  const blocks = (source: string): Map<string, string> =>
+    new Map(extractBlocks(source, unit.source).map((b) => [b.name, b.hash]));
+  const [was, now] = [blocks(before), blocks(after)];
+  if (was.get(MODULE_BLOCK) !== now.get(MODULE_BLOCK)) {
+    throw new Error(
+      `the bodyEdit for ${unit.source} changes the module skeleton; it must change only a function body, or it exercises the same path as appending to the file`,
+    );
+  }
+  const changed = [...was].some(
+    ([name, hash]) => name !== MODULE_BLOCK && now.get(name) !== hash,
+  );
+  if (!changed) {
+    throw new Error(
+      `the bodyEdit for ${unit.source} leaves every function hash intact; it must change a function body`,
+    );
+  }
+  writeFile(project.cwd, unit.source, after);
+}
+
+/**
+ * A fixture only measures recall if its shared source is reached *through* the
+ * unit sources. If a test file names it, a recorder that never follows a
+ * dependency still records it, and the recall checks certify nothing.
+ */
+function assertSharedSourceIsIndirect(spec: AdapterConformanceSpec): void {
+  const { files, units, sharedSource } = spec.fixture;
+  const reachedBy = new Set([units.a.source, units.b.source, sharedSource]);
+  // The stem, not the basename: a TypeScript fixture imports `./shared.js` for
+  // a file on disk called `shared.ts`, and matching the basename would miss it.
+  const stem = sharedSource
+    .split('/')
+    .pop()!
+    .replace(/\.[^.]+$/, '');
+  for (const [rel, contents] of Object.entries(files)) {
+    if (reachedBy.has(rel)) continue;
+    if (contents.includes(stem)) {
+      throw new Error(
+        `${rel} mentions "${stem}": ${sharedSource} must be reached only through ${units.a.source} and ${units.b.source}, never named by a test file, or it measures no recall`,
+      );
+    }
+  }
+}
+
 function createProject(spec: AdapterConformanceSpec): Project {
-  const cwd = mkdtempSync(join(tmpdir(), `covsel-conformance-${spec.adapter.name}-`));
+  assertSharedSourceIsIndirect(spec);
+  const cwd = realpathSync(
+    mkdtempSync(
+      join(tmpdir(), `covsel-conformance-${spec.adapter.name.replace(/\W+/g, '-')}-`),
+    ),
+  );
   const dispose = (): void => rmSync(cwd, { recursive: true, force: true });
   try {
     for (const [rel, contents] of Object.entries(spec.fixture.files)) {
       writeFile(cwd, rel, contents);
     }
-    // The sentinel check mutates package.json, so the suite owns it: a fixture
-    // that supplies its own would make that mutation a silent no-op.
-    if (spec.fixture.files['package.json']) {
-      throw new Error(
-        'a fixture must not supply package.json; the suite writes it so the sentinel check can mutate it',
-      );
+    // The sentinel check mutates package.json and the marker file must stay
+    // ignored, so the suite owns both: a fixture supplying either would make
+    // those mechanisms silent no-ops.
+    for (const owned of ['package.json', '.gitignore']) {
+      if (owned in spec.fixture.files) {
+        throw new Error(`a fixture must not supply ${owned}; the suite writes it`);
+      }
     }
     writeFile(
       cwd,
@@ -127,13 +214,15 @@ function runSelected(
   spec: AdapterConformanceSpec,
   project: Project,
   selected: TestId[],
-): { status: number; ran: string[] } {
+): { status: number; ran: string[]; detail: string } {
   const marker = join(project.cwd, RAN_MARKER_FILE);
   rmSync(marker, { force: true });
 
   let status: number;
+  let detail: string;
   if (spec.runSelection) {
     status = spec.runSelection({ selected, cwd: project.cwd });
+    detail = `exited ${status}`;
   } else {
     const args = [
       ...spec.fixture.command.slice(1),
@@ -143,6 +232,7 @@ function runSelected(
       cwd: project.cwd,
       encoding: 'utf8',
     });
+    detail = spawnDetail(res);
     status = res.status ?? 1;
   }
 
@@ -151,7 +241,7 @@ function runSelected(
         .split('\n')
         .filter((line) => line.length > 0)
     : [];
-  return { status, ran };
+  return { status, ran, detail };
 }
 
 function mapPath(project: Project): string {
@@ -310,14 +400,52 @@ const CHECKS: { name: string; run: Check }[] = [
         editSource(project, spec.fixture.sharedSource);
 
         const result = await selectAffected({ cwd: project.cwd, config: project.config });
+        // A full run selects everything, so it would satisfy the assertion below
+        // while proving nothing about what was recorded. Recall has to be shown
+        // through the map, not around it.
+        if (result.fullRun) {
+          throw new Error(
+            `editing ${spec.fixture.sharedSource} fell open (${result.reason}), so this fixture cannot demonstrate recall`,
+          );
+        }
         for (const unit of [a, b]) {
           if (!selects(result, unit)) {
             throw new Error(
-              `editing ${spec.fixture.sharedSource} did not select ${label(unit)}, which executes it (selected ${JSON.stringify(result.selected)})`,
+              `editing ${spec.fixture.sharedSource} did not select ${label(unit)}, which reaches it through ${unit.source} (selected ${JSON.stringify(result.selected)})`,
             );
           }
         }
-        return result.fullRun ? `both, via a full run: ${result.reason}` : 'both units';
+        return 'both units';
+      } finally {
+        project.dispose();
+      }
+    },
+  },
+  {
+    name: 'editing a function body selects the unit that ran it',
+    run: async (spec) => {
+      const project = createProject(spec);
+      try {
+        const map = await record(spec, project);
+        const { a, b } = spec.fixture.units;
+        editBody(project, a);
+
+        const result = await selectAffected({ cwd: project.cwd, config: project.config });
+        if (result.fullRun) {
+          throw new Error(`a function-body edit forced a full run: ${result.reason}`);
+        }
+        if (!selects(result, a)) {
+          throw new Error(
+            `changing a function body in ${a.source} did not select ${label(a)}, which executes it — ` +
+              `at ${map.granularity} granularity that is a change the map missed (selected ${JSON.stringify(result.selected)})`,
+          );
+        }
+        if (selects(result, b)) {
+          throw new Error(
+            `changing a function body in ${a.source} also selected ${label(b)}, which never executes it`,
+          );
+        }
+        return `${map.granularity} granularity: selected only ${label(a)}`;
       } finally {
         project.dispose();
       }
@@ -336,7 +464,7 @@ const CHECKS: { name: string; run: Check }[] = [
           { file: b.testFile, ...(b.name === undefined ? {} : { name: b.name }) },
         ]);
         if (all.status !== 0) {
-          throw new Error(`running both units exited ${all.status}`);
+          throw new Error(`running both units failed: ${all.detail}`);
         }
         for (const unit of [a, b]) {
           if (!all.ran.includes(label(unit))) {
@@ -351,7 +479,7 @@ const CHECKS: { name: string; run: Check }[] = [
         const result = await selectAffected({ cwd: project.cwd, config: project.config });
         const one = runSelected(spec, project, result.selected);
         if (one.status !== 0) {
-          throw new Error(`running the computed selection exited ${one.status}`);
+          throw new Error(`running the computed selection failed: ${one.detail}`);
         }
         if (!one.ran.includes(label(a))) {
           throw new Error(

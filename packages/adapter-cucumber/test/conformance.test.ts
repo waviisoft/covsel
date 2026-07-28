@@ -35,6 +35,15 @@ beforeAll(() => {
   }
 }, 120_000);
 
+const source = (fn: string, expr: string) =>
+  [
+    "import { shared } from './shared.mjs';",
+    `export function ${fn}(x) {`,
+    `  return shared(${expr});`,
+    '}',
+    '',
+  ].join('\n');
+
 describeAdapterConformance({
   adapter: cucumberAdapter,
   createRecorder: ({ cwd, config }) =>
@@ -47,8 +56,8 @@ describeAdapterConformance({
     config: { testGlobs: CUCUMBER_TEST_GLOBS },
     files: {
       'src/shared.mjs': 'export function shared(x) {\n  return x + 0;\n}\n',
-      'src/a.mjs': 'export function alpha(x) {\n  return x * 2;\n}\n',
-      'src/b.mjs': 'export function beta(x) {\n  return x + 1;\n}\n',
+      'src/a.mjs': source('alpha', 'x * 2'),
+      'src/b.mjs': source('beta', 'x + 1'),
       'features/demo.feature': [
         'Feature: demo',
         '',
@@ -64,12 +73,11 @@ describeAdapterConformance({
         "import { Before, When } from '@cucumber/cucumber';",
         "import { alpha } from '../src/a.mjs';",
         "import { beta } from '../src/b.mjs';",
-        "import { shared } from '../src/shared.mjs';",
         // The scenario name is only on the pickle, so the marker is written from
         // a hook rather than from the steps, which several scenarios share.
         `Before(function ({ pickle }) { appendFileSync('${RAN_MARKER_FILE}', pickle.name + '\\n'); });`,
-        "When('I run alpha', function () { shared(alpha(1)); });",
-        "When('I run beta', function () { shared(beta(1)); });",
+        "When('I run alpha', function () { alpha(1); });",
+        "When('I run beta', function () { beta(1); });",
         '',
       ].join('\n'),
     },
@@ -78,11 +86,13 @@ describeAdapterConformance({
         testFile: 'features/demo.feature',
         name: 'alpha scenario',
         source: 'src/a.mjs',
+        bodyEdit: { find: 'shared(x * 2)', replace: 'shared(x * 3)' },
       },
       b: {
         testFile: 'features/demo.feature',
         name: 'beta scenario',
         source: 'src/b.mjs',
+        bodyEdit: { find: 'shared(x + 1)', replace: 'shared(x + 2)' },
       },
     },
     sharedSource: 'src/shared.mjs',

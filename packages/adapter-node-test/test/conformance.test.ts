@@ -13,9 +13,10 @@ import {
 
 /**
  * The per-test case: both units live in one test file and are told apart by
- * name, so the suite's precision checks exercise scenario-level selection
- * rather than file-level. The recorder spawns a shim that imports the built
- * core, so this suite needs `@covsel/core` built.
+ * name, so the suite's precision checks exercise per-test selection rather than
+ * file-level, and `runSelection` proves the name filter really narrows the run.
+ * The recorder spawns a shim that imports the built core, so this suite needs
+ * `@covsel/core` built.
  */
 const repoRoot = fileURLToPath(new URL('../../../', import.meta.url));
 const coreDist = fileURLToPath(new URL('../../core/dist/index.js', import.meta.url));
@@ -26,11 +27,20 @@ beforeAll(() => {
   }
 }, 120_000);
 
+const source = (fn: string, expr: string) =>
+  [
+    "import { shared } from './shared.mjs';",
+    `export function ${fn}(x) {`,
+    `  return shared(${expr});`,
+    '}',
+    '',
+  ].join('\n');
+
 const unit = (name: string, fn: string) =>
   [
     `test('${name}', () => {`,
     `  appendFileSync('${RAN_MARKER_FILE}', '${name}\\n');`,
-    `  shared(${fn}(1));`,
+    `  ${fn}(1);`,
     '});',
   ].join('\n');
 
@@ -44,22 +54,31 @@ describeAdapterConformance({
     command: ['node', '--test'],
     files: {
       'src/shared.mjs': 'export function shared(x) {\n  return x + 0;\n}\n',
-      'src/a.mjs': 'export function alpha(x) {\n  return x * 2;\n}\n',
-      'src/b.mjs': 'export function beta(x) {\n  return x + 1;\n}\n',
+      'src/a.mjs': source('alpha', 'x * 2'),
+      'src/b.mjs': source('beta', 'x + 1'),
       'suite.test.mjs': [
         "import { appendFileSync } from 'node:fs';",
         "import { test } from 'node:test';",
         "import { alpha } from './src/a.mjs';",
         "import { beta } from './src/b.mjs';",
-        "import { shared } from './src/shared.mjs';",
         unit('alpha test', 'alpha'),
         unit('beta test', 'beta'),
         '',
       ].join('\n'),
     },
     units: {
-      a: { testFile: 'suite.test.mjs', name: 'alpha test', source: 'src/a.mjs' },
-      b: { testFile: 'suite.test.mjs', name: 'beta test', source: 'src/b.mjs' },
+      a: {
+        testFile: 'suite.test.mjs',
+        name: 'alpha test',
+        source: 'src/a.mjs',
+        bodyEdit: { find: 'shared(x * 2)', replace: 'shared(x * 3)' },
+      },
+      b: {
+        testFile: 'suite.test.mjs',
+        name: 'beta test',
+        source: 'src/b.mjs',
+        bodyEdit: { find: 'shared(x + 1)', replace: 'shared(x + 2)' },
+      },
     },
     sharedSource: 'src/shared.mjs',
     newTest: {
