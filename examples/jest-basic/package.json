@@ -2,7 +2,7 @@
   "name": "@covsel/example-jest-basic",
   "version": "0.0.0",
   "private": true,
-  "description": "End-to-end example: covsel record → affected driving a Jest suite",
+  "description": "End-to-end example: covsel record -> affected driving a Jest suite",
   "license": "MIT",
   "author": "WAVIISoft, LLC",
   "scripts": {
@@ -10,6 +10,7 @@
     "e2e": "node ./e2e.mjs"
   },
   "devDependencies": {
+    "@covsel/adapter-jest": "workspace:*",
     "@types/jest": "^30.0.0",
     "@types/node": "^22.20.1",
     "covsel": "workspace:*",

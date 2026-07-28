@@ -1,5 +1,5 @@
 /**
- * @covsel/adapter-jest — Jest support for covsel.
+ * @covsel/adapter-jest -- Jest support for covsel.
  *
  * Jest evaluates code through its own transformer and module registry, so raw
  * NODE_V8_COVERAGE at the process boundary cannot be trusted for Jest. The dump
@@ -43,6 +43,12 @@ export const jestAdapter: Adapter = {
     return createJestRecorder(init);
   },
 };
+
+/**
+ * The export the dynamic resolver reads, so this package is selectable by its
+ * specifier exactly as a third-party adapter is.
+ */
+export const adapter = jestAdapter;
 
 interface IstanbulPosition {
   line: number;
@@ -155,7 +161,7 @@ export function createJestRecorder(init: JestRecorderInit): Recorder {
           ) as Record<string, CoverageFinalEntry>;
         } catch {
           throw new Error(
-            `no coverage report produced for ${testFile} — does the jest config ` +
+            `no coverage report produced for ${testFile} -- does the jest config ` +
               `override coverageReporters or coverageDirectory?`,
           );
         }

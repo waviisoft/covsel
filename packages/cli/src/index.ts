@@ -22,9 +22,9 @@ import {
   type WatchEvent,
 } from '@covsel/core';
 
-import { ADAPTERS, adapterNameList, DEFAULT_ADAPTER } from './adapters.js';
+import { DEFAULT_ADAPTER, loadAdapter } from './adapters.js';
 
-const HELP = `covsel — runtime-coverage test impact analysis for any JS/TS runner
+const HELP = `covsel -- runtime-coverage test impact analysis for any JS/TS runner
 
 Usage:
   covsel record [--adapter <name>] -- <command>   Run the suite and build the map
@@ -37,7 +37,8 @@ Usage:
   covsel --version                                 Show version
 
 Options:
-  --adapter <name>   Runner adapter for record/run/watch (${adapterNameList()})
+  --adapter <name>   Installed adapter package for record/affected/run/watch
+                     (default '${DEFAULT_ADAPTER}'; adapters install separately)
   --since <ref>      Diff against <ref> instead of the commit the map records
   --debounce <ms>    watch: quiet period after a change before running (default 200)
   --record           watch: re-record the map after a run that passes
@@ -48,7 +49,7 @@ which sources it executes. affected prints those test files a diff can affect,
 so \`<runner> $(covsel affected)\` runs only what is needed. watch drives the same
 selection continuously, running the affected tests on every save.
 
-covsel never skips a test whose behavior your change could alter — and when it
+covsel never skips a test whose behavior your change could alter -- and when it
 can't be sure, it runs it (fail-open). Map schema v${MAP_SCHEMA_VERSION}.
 `;
 
@@ -79,18 +80,23 @@ function hasFlag(opts: string[], name: string): boolean {
 }
 
 /**
- * Resolve `--adapter` to the object every command reads its capabilities off.
- * An unknown name is reported with the names covsel does know rather than
- * quietly falling back to the default.
+ * Resolve `--adapter` to the object every command reads its capabilities off:
+ * one covsel ships, or one the project installed. A name that resolves to
+ * nothing, or to something that is not an adapter, is reported with what went
+ * wrong rather than quietly falling back to the default.
  */
-function resolveAdapter(cmd: string, opts: string[]): Adapter | undefined {
+async function resolveAdapter(
+  cmd: string,
+  opts: string[],
+  cwd: string,
+): Promise<Adapter | undefined> {
   const name = flag(opts, 'adapter') ?? DEFAULT_ADAPTER;
-  const adapter = ADAPTERS[name];
-  if (!adapter) {
-    err(`covsel ${cmd}: unknown adapter '${name}' (expected ${adapterNameList()})\n`);
+  try {
+    return await loadAdapter(name, cwd);
+  } catch (e) {
+    err(`covsel ${cmd}: ${e instanceof Error ? e.message : String(e)}\n`);
     return undefined;
   }
-  return adapter;
 }
 
 /**
@@ -104,7 +110,9 @@ async function loadConfigFor(cwd: string, adapter: Adapter): Promise<CovselConfi
 
 function reportSelection(result: AffectedResult): void {
   if (result.fullRun) {
-    err(`covsel: full run — ${result.reason ?? 'map cannot be trusted for this diff'}\n`);
+    err(
+      `covsel: full run -- ${result.reason ?? 'map cannot be trusted for this diff'}\n`,
+    );
   } else if (result.tests.length === 0) {
     err('covsel: no affected tests\n');
   }
@@ -118,9 +126,9 @@ async function cmdRecord(argv: string[]): Promise<number> {
     );
     return 1;
   }
-  const adapter = resolveAdapter('record', opts);
-  if (!adapter) return 1;
   const cwd = process.cwd();
+  const adapter = await resolveAdapter('record', opts, cwd);
+  if (!adapter) return 1;
   const config = await loadConfigFor(cwd, adapter);
   const recorder = adapter.createRecorder({ command, cwd, config });
 
@@ -154,10 +162,10 @@ async function cmdAffected(argv: string[]): Promise<number> {
     );
     return 1;
   }
-  const adapter = resolveAdapter('affected', argv);
+  const cwd = process.cwd();
+  const adapter = await resolveAdapter('affected', argv, cwd);
   if (!adapter) return 1;
   const since = flag(argv, 'since');
-  const cwd = process.cwd();
   const config = await loadConfigFor(cwd, adapter);
   const result = await selectAffected({ cwd, config, ...(since ? { since } : {}) });
   reportSelection(result);
@@ -176,10 +184,10 @@ async function cmdRun(argv: string[]): Promise<number> {
     );
     return 1;
   }
-  const adapter = resolveAdapter('run', opts);
+  const cwd = process.cwd();
+  const adapter = await resolveAdapter('run', opts, cwd);
   if (!adapter) return 1;
   const since = flag(opts, 'since');
-  const cwd = process.cwd();
   const config = await loadConfigFor(cwd, adapter);
 
   return runAffected(
@@ -241,7 +249,8 @@ async function cmdWatch(argv: string[]): Promise<number> {
     );
     return 1;
   }
-  const adapter = resolveAdapter('watch', opts);
+  const cwd = process.cwd();
+  const adapter = await resolveAdapter('watch', opts, cwd);
   if (!adapter) return 1;
 
   const debounceRaw = flag(opts, 'debounce');
@@ -252,7 +261,6 @@ async function cmdWatch(argv: string[]): Promise<number> {
   }
 
   const since = flag(opts, 'since');
-  const cwd = process.cwd();
   const config = await loadConfigFor(cwd, adapter);
 
   // Re-recording is opt-in: it re-runs the whole suite, and a map that only ages

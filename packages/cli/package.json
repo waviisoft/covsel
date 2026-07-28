@@ -1,7 +1,7 @@
 {
   "name": "covsel",
   "version": "0.0.0",
-  "description": "Runtime-coverage test impact analysis for any JS/TS runner — run only the tests your diff can affect",
+  "description": "Runtime-coverage test impact analysis for any JS/TS runner -- run only the tests your diff can affect",
   "license": "MIT",
   "author": "WAVIISoft, LLC",
   "type": "module",
@@ -26,11 +26,6 @@
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
-    "@covsel/adapter-cucumber": "workspace:*",
-    "@covsel/adapter-generic": "workspace:*",
-    "@covsel/adapter-jest": "workspace:*",
-    "@covsel/adapter-node-test": "workspace:*",
-    "@covsel/adapter-vitest": "workspace:*",
     "@covsel/core": "workspace:*"
   },
   "engines": {

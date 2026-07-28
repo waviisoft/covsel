@@ -26,7 +26,7 @@ describe('covsel cli', () => {
   it('prints help and exits 0 with no args', async () => {
     const { code, out } = await captureStdout(() => main([]));
     expect(code).toBe(0);
-    expect(out).toContain('covsel — runtime-coverage');
+    expect(out).toContain('covsel -- runtime-coverage');
   });
 
   it.each(['-h', '--help'])('prints help for %s', async (flag) => {
@@ -108,17 +108,16 @@ describe('covsel cli', () => {
   });
 
   it.each(['record', 'affected', 'run', 'watch'])(
-    '%s rejects an unknown adapter and lists the ones it knows',
+    '%s rejects an adapter that is not installed, and says how to install it',
     async (cmd) => {
       const argv = cmd === 'affected' ? [cmd] : [cmd, '--', 'node', '--test'];
       const { code, err } = await captureStderr(() =>
         main([...argv.slice(0, 1), '--adapter', 'frobnicate', ...argv.slice(1)]),
       );
       expect(code).toBe(1);
-      expect(err).toContain("unknown adapter 'frobnicate'");
-      for (const name of ['generic', 'vitest', 'jest', 'node-test', 'cucumber']) {
-        expect(err).toContain(`'${name}'`);
-      }
+      expect(err).toContain(`covsel ${cmd}:`);
+      expect(err).toContain("adapter 'frobnicate' is not installed");
+      expect(err).toContain('npm install --save-dev @covsel/adapter-frobnicate');
     },
   );
 

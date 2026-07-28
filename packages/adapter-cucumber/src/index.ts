@@ -1,5 +1,5 @@
 /**
- * @covsel/adapter-cucumber — scenario-level selection for cucumber-js.
+ * @covsel/adapter-cucumber -- scenario-level selection for cucumber-js.
  *
  * cucumber-js has no built-in test selection, so this is the case covsel exists
  * for: record what each *scenario* executes, then run only the scenarios a diff
@@ -44,6 +44,12 @@ export const cucumberAdapter: Adapter = {
     return runCucumberSelection(init);
   },
 };
+
+/**
+ * The export the dynamic resolver reads, so this package is selectable by its
+ * specifier exactly as a third-party adapter is.
+ */
+export const adapter = cucumberAdapter;
 
 export interface CucumberRecorderInit {
   /** Base command, e.g. `['cucumber-js']`. */

@@ -38,7 +38,7 @@ function git(cwd, args) {
 
 /** Lines the CLI printed to stdout (the selected test files). */
 function affected(cwd) {
-  const res = run('node', [covselBin, 'affected'], cwd);
+  const res = run('node', [covselBin, 'affected', '--adapter', 'jest'], cwd);
   if (res.status !== 0) throw new Error(`covsel affected failed: ${res.stderr}`);
   return res.stdout
     .split('\n')
