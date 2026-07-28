@@ -31,6 +31,8 @@ jobs:
       - run: pnpm test
       - name: Golden example — Vitest (record → affected → run) end-to-end
         run: pnpm --filter @covsel/example-vitest-basic e2e
+      - name: Golden example — Jest (record → affected → run) end-to-end
+        run: pnpm --filter @covsel/example-jest-basic e2e
       - name: Golden example — node:test / generic NODE_V8_COVERAGE end-to-end
         run: pnpm --filter @covsel/example-node-test-basic e2e
       - name: Golden example — cucumber-js scenario-level selection end-to-end

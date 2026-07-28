@@ -28,13 +28,15 @@ and which one an adapter uses depends on the runner:
   directly**, so the coverage records real `file://` paths — for example
   `node --test`, or Mocha on plain JavaScript.
 
-- **The runner's own coverage report** (the [Vitest](/guide/adapters/vitest)
-  adapter). Runners that **transform sources before executing them** (Vitest via
-  vite-node, Jest via its transformer) evaluate the transformed code through
-  their own module loader, so raw `NODE_V8_COVERAGE` never sees your `src/**`.
-  For these, the adapter enables the runner's built-in V8 coverage, which remaps
-  execution back to your sources through the runner's source maps, and reads the
-  resulting report.
+- **The runner's own coverage report** (the [Vitest](/guide/adapters/vitest) and
+  [Jest](/guide/adapters/jest) adapters). Runners that **transform sources before
+  executing them** (Vitest via vite-node, Jest via its transformer) evaluate the
+  transformed code through their own module loader, so raw `NODE_V8_COVERAGE` at
+  the process boundary cannot describe your `src/**` — under Vitest it does not
+  see them at all, and under Jest it names them but reports offsets into the
+  transformed code. For these, the adapter enables the runner's built-in
+  coverage, which remaps execution back to your sources through the runner's
+  source maps, and reads the resulting report.
 
 Both produce the same thing: the set of source files a test executed. The rest
 of covsel is identical regardless of which path recorded the map.
@@ -45,14 +47,15 @@ of covsel is identical regardless of which path recorded the map.
 | --------------------------- | ----------------------- | ---------------------------------- | ------- |
 | `@covsel/adapter-generic`   | any direct-exec command | `NODE_V8_COVERAGE` process         | shipped |
 | `@covsel/adapter-vitest`    | Vitest                  | Vitest's own V8 coverage           | shipped |
+| `@covsel/adapter-jest`      | Jest                    | Jest's own coverage                | shipped |
 | `@covsel/adapter-node-test` | node:test               | inspector snapshot-diff (per-test) | shipped |
 | `@covsel/adapter-cucumber`  | cucumber-js             | inspector snapshot-diff (scenario) | shipped |
-| _(planned)_                 | Jest                    | Jest's own coverage                | later   |
 | _(planned)_                 | Mocha · Playwright · …  | generic wrap / lifecycle shim      | later   |
 
-The generic and Vitest adapters record at whole-file granularity. The node:test
-and cucumber-js adapters record each **test** or **scenario** individually and
-run only the affected ones — which is the only selection cucumber-js has.
+The generic, Vitest, and Jest adapters record at whole-file granularity. The
+node:test and cucumber-js adapters record each **test** or **scenario**
+individually and run only the affected ones — which is the only selection
+cucumber-js has.
 
 ## Writing an adapter
 

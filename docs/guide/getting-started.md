@@ -18,6 +18,7 @@ covered in the [CI guide](/guide/ci).
 # 1. Record: build the test → covered-source map (one process per test file)
 covsel record -- node --test
 covsel record --adapter vitest -- vitest run   # needs @vitest/coverage-v8
+covsel record --adapter jest -- jest           # coverage is built into Jest
 
 # 2. Affected: print the test files your working-tree diff can affect
 covsel affected

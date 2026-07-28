@@ -38,6 +38,7 @@ export default defineConfig({
             { text: 'Overview', link: '/guide/adapters/' },
             { text: 'Generic (any command)', link: '/guide/adapters/generic' },
             { text: 'Vitest', link: '/guide/adapters/vitest' },
+            { text: 'Jest', link: '/guide/adapters/jest' },
             { text: 'node:test', link: '/guide/adapters/node-test' },
             { text: 'cucumber-js', link: '/guide/adapters/cucumber' },
             { text: 'Writing an adapter', link: '/guide/adapters/writing-an-adapter' },

@@ -17,7 +17,8 @@ The end-to-end loop works, from whole-file down to individual tests:
   tests that executed it and reformatting runs nothing.
 - Per-test selection via inspector snapshot-diff observation: individual tests
   for node:test, individual **scenarios** for cucumber-js.
-- Adapters: the generic wrap-any-command adapter, Vitest, node:test, cucumber-js.
+- Adapters: the generic wrap-any-command adapter, Vitest, Jest, node:test,
+  cucumber-js.
 - A CI story: publish the map on the default branch, restore it on pull requests,
   and merge the maps from a sharded suite — see [Using covsel in CI](/guide/ci).
   The store is a directory, so GitHub Actions caching covers it with no extra
@@ -32,7 +33,7 @@ the [examples](https://github.com/waviisoft/covsel/tree/main/examples).
 
 ## Next — more adapters
 
-- Adapters for Jest, Mocha, and Playwright.
+- Adapters for Mocha and Playwright.
 - `covsel watch`.
 
 ## Beyond — bundlers, monorepos, ecosystem

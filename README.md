@@ -30,6 +30,7 @@ git diff — run only the tests whose covered code changed.
 # Record a run and build the map (one process per test file)
 npx covsel record -- node --test
 npx covsel record --adapter vitest -- vitest run   # needs @vitest/coverage-v8
+npx covsel record --adapter jest -- jest
 
 # Print the tests your working-tree diff can affect
 npx covsel affected                 # newline-separated test files
@@ -52,10 +53,10 @@ npx covsel merge shard-*/map.json --out .covsel/map.json
 Zero config to start. `covsel affected` prints a file list, so you can pipe it
 into any runner that accepts test files: `node --test $(covsel affected)`.
 
-Vitest transforms sources before executing them, so raw V8 process coverage
-can't see your `src/**`; `--adapter vitest` records through Vitest's own V8
-coverage provider instead. The generic wrap is for runners that execute source
-directly (e.g. `node --test`, Mocha on plain JS).
+Vitest and Jest transform sources before executing them, so raw V8 process
+coverage can't describe your `src/**`; `--adapter vitest` and `--adapter jest`
+record through the runner's own coverage instead. The generic wrap is for
+runners that execute source directly (e.g. `node --test`, Mocha on plain JS).
 
 ## The fail-open guarantee
 
@@ -74,18 +75,18 @@ can't be sure, we run it.**
 
 Runners that execute source directly work today through the generic wrap.
 Runners that transform sources first (Vitest, Jest) need a per-runner recorder
-that reads the runner's own coverage; Vitest is done. Per-test selection ships
+that reads the runner's own coverage; both are done. Per-test selection ships
 for node:test, and scenario-level selection for cucumber-js.
 
-| Runner                     | Per-file           | Per-test / scenario |
-| -------------------------- | ------------------ | ------------------- |
-| Any command (generic wrap) | yes (direct-exec)  | —                   |
-| node:test                  | yes (generic)      | yes (`--adapter`)   |
-| cucumber-js                | —                  | yes (`--adapter`)   |
-| Mocha                      | yes (generic, JS)  | later               |
-| Vitest                     | yes (`--adapter`)  | later               |
-| Jest                       | planned (own cov.) | later               |
-| Playwright                 | planned (generic)  | later               |
+| Runner                     | Per-file          | Per-test / scenario |
+| -------------------------- | ----------------- | ------------------- |
+| Any command (generic wrap) | yes (direct-exec) | —                   |
+| node:test                  | yes (generic)     | yes (`--adapter`)   |
+| cucumber-js                | —                 | yes (`--adapter`)   |
+| Mocha                      | yes (generic, JS) | later               |
+| Vitest                     | yes (`--adapter`) | later               |
+| Jest                       | yes (`--adapter`) | later               |
+| Playwright                 | planned (generic) | later               |
 
 ## Packages
 
@@ -95,6 +96,7 @@ for node:test, and scenario-level selection for cucumber-js.
 | `@covsel/core`              | Observer · Mapper · Store · Selector · Policy + the versioned map schema |
 | `@covsel/adapter-generic`   | Wrap-any-command adapter (whole-file)                                    |
 | `@covsel/adapter-vitest`    | Vitest adapter (records via Vitest's own V8 coverage)                    |
+| `@covsel/adapter-jest`      | Jest adapter (records via Jest's own coverage)                           |
 | `@covsel/adapter-node-test` | node:test adapter (per-test selection via the inspector observer)        |
 | `@covsel/adapter-cucumber`  | cucumber-js adapter (scenario-level selection)                           |
 | `@covsel/conformance`       | The shared suite every adapter must pass                                 |

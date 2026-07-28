@@ -1,0 +1,12 @@
+{
+  "compilerOptions": {
+    "target": "ES2022",
+    "module": "CommonJS",
+    "moduleResolution": "Node",
+    "strict": true,
+    "esModuleInterop": true,
+    "sourceMap": true,
+    "types": ["jest", "node"]
+  },
+  "include": ["src", "test"]
+}
