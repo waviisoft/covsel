@@ -1,7 +1,7 @@
 {
   "name": "@covsel/adapter-generic",
   "version": "0.0.0",
-  "description": "Level-0 covsel adapter: wrap any runner command via NODE_V8_COVERAGE \u2014 zero integration, per-file selection",
+  "description": "covsel adapter: wrap any runner command via NODE_V8_COVERAGE — zero integration, whole-file selection",
   "license": "MIT",
   "author": "WAVIISoft, LLC",
   "type": "module",
