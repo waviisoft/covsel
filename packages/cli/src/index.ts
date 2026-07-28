@@ -2,6 +2,7 @@ import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 
 import {
+  type Adapter,
   type AffectedResult,
   computeStatus,
   type CoverageMap,
@@ -12,7 +13,7 @@ import {
   MAP_SCHEMA_VERSION,
   mergeMaps,
   recordMap,
-  resolveConfig,
+  resolveConfigFor,
   runAffected,
   selectAffected,
 } from '@covsel/core';
@@ -60,17 +61,27 @@ function flag(opts: string[], name: string): string | undefined {
 }
 
 /**
+ * Resolve `--adapter` to the object every command reads its capabilities off.
+ * An unknown name is reported with the names covsel does know rather than
+ * quietly falling back to the default.
+ */
+function resolveAdapter(command: string, opts: string[]): Adapter | undefined {
+  const name = flag(opts, 'adapter') ?? DEFAULT_ADAPTER;
+  const adapter = ADAPTERS[name];
+  if (!adapter) {
+    err(`covsel ${command}: unknown adapter '${name}' (expected ${adapterNameList()})\n`);
+    return undefined;
+  }
+  return adapter;
+}
+
+/**
  * Load config, letting the chosen adapter supply the test globs when the project
  * has not set them, so a runner whose tests are not `*.test.*` sources still
  * works with no configuration.
  */
-async function loadConfigFor(cwd: string, adapter: string): Promise<CovselConfig> {
-  const raw = await loadRawConfig(cwd);
-  const globs = ADAPTERS[adapter]?.defaultTestGlobs;
-  if (globs !== undefined && raw.testGlobs === undefined) {
-    return resolveConfig({ ...raw, testGlobs: globs });
-  }
-  return resolveConfig(raw);
+async function loadConfigFor(cwd: string, adapter: Adapter): Promise<CovselConfig> {
+  return resolveConfigFor(adapter, await loadRawConfig(cwd));
 }
 
 function reportSelection(result: AffectedResult): void {
@@ -89,15 +100,11 @@ async function cmdRecord(argv: string[]): Promise<number> {
     );
     return 1;
   }
-  const adapter = flag(opts, 'adapter') ?? DEFAULT_ADAPTER;
-  const entry = ADAPTERS[adapter];
-  if (!entry) {
-    err(`covsel record: unknown adapter '${adapter}' (expected ${adapterNameList()})\n`);
-    return 1;
-  }
+  const adapter = resolveAdapter('record', opts);
+  if (!adapter) return 1;
   const cwd = process.cwd();
   const config = await loadConfigFor(cwd, adapter);
-  const recorder = entry.createRecorder({ command, cwd, config });
+  const recorder = adapter.createRecorder({ command, cwd, config });
 
   const result = await recordMap({
     cwd,
@@ -129,12 +136,17 @@ async function cmdAffected(argv: string[]): Promise<number> {
     );
     return 1;
   }
+  const adapter = resolveAdapter('affected', argv);
+  if (!adapter) return 1;
   const since = flag(argv, 'since');
   const cwd = process.cwd();
-  const config = await loadConfigFor(cwd, flag(argv, 'adapter') ?? DEFAULT_ADAPTER);
+  const config = await loadConfigFor(cwd, adapter);
   const result = await selectAffected({ cwd, config, ...(since ? { since } : {}) });
   reportSelection(result);
-  if (result.tests.length > 0) out(`${result.tests.join('\n')}\n`);
+  // The same list the adapter would append to the runner's command line, so
+  // `<runner> $(covsel affected)` and `covsel run` agree by construction.
+  const files = adapter.formatSelection(result.selected);
+  if (files.length > 0) out(`${files.join('\n')}\n`);
   return 0;
 }
 
@@ -146,24 +158,14 @@ async function cmdRun(argv: string[]): Promise<number> {
     );
     return 1;
   }
-  const adapter = flag(opts, 'adapter') ?? DEFAULT_ADAPTER;
+  const adapter = resolveAdapter('run', opts);
+  if (!adapter) return 1;
   const since = flag(opts, 'since');
   const cwd = process.cwd();
   const config = await loadConfigFor(cwd, adapter);
 
-  const runSelection = ADAPTERS[adapter]?.runSelection;
-  if (runSelection) {
-    const selection = await selectAffected({ cwd, config, ...(since ? { since } : {}) });
-    reportSelection(selection);
-    if (selection.fullRun) {
-      return runAffected({ cwd, config, command, ...(since ? { since } : {}) });
-    }
-    if (selection.selected.length === 0) return 0;
-    return runSelection({ selected: selection.selected, command, cwd });
-  }
-
   return runAffected(
-    { cwd, config, command, ...(since ? { since } : {}) },
+    { adapter, cwd, config, command, ...(since ? { since } : {}) },
     reportSelection,
   );
 }

@@ -1,13 +1,15 @@
 # Adapters
 
 An **adapter** is the only runner-specific part of covsel. Everything else — the
-map schema, the selector, the fail-open policy — is shared. An adapter does two
-things:
+map schema, the selector, the fail-open policy — is shared. An adapter is a
+single object implementing the `Adapter` interface from `@covsel/core`, and it
+does two things:
 
 1. **Observe** which source files a test file executes, so `covsel record` can
    build the map.
 2. **Format** a selection as the runner's input (at file level, a plain list of
-   test files).
+   test files) — or, where the runner can be narrowed below file level, run that
+   selection itself.
 
 Adapters depend on `@covsel/core` only. Selecting one is a single flag:
 
@@ -59,10 +61,12 @@ cucumber-js has.
 
 ## Writing an adapter
 
-Adapters are the primary community contribution surface. Each implements the
-`Adapter` interface from `@covsel/core` plus a recorder that produces the
-executed source list, and proves itself against the shared conformance suite in
-`@covsel/conformance` — the same suite every built-in adapter runs. See
+Adapters are the primary community contribution surface. Each is one exported
+object implementing the `Adapter` interface from `@covsel/core` — identity,
+selection formatting, and the recorder that produces the executed source list,
+plus whatever optional capabilities the runner supports — and proves itself
+against the shared conformance suite in `@covsel/conformance`, the same suite
+every built-in adapter runs. See
 [Writing an adapter](/guide/adapters/writing-an-adapter),
 [CONTRIBUTING.md](https://github.com/waviisoft/covsel/blob/main/CONTRIBUTING.md),
 and the [architecture](/guide/architecture) page.

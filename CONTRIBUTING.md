@@ -30,10 +30,12 @@ Requires Node ≥ 22 and pnpm (via `corepack enable`).
 
 1. Open an _adapter request_ issue (template provided) or claim an existing one.
 2. Copy `packages/adapter-generic` as a starting point.
-3. Implement the `Adapter` interface from `@covsel/core`: call
-   `observer.startTest(id)` / `observer.endTest(id)` around each test via your
-   runner's lifecycle hooks, and implement `formatSelection` to emit the
-   runner's native selection syntax.
+3. Export one object implementing the `Adapter` interface from `@covsel/core`.
+   Its `createRecorder` observes the runner — calling `observer.startTest(id)` /
+   `observer.endTest(id)` around each test via your runner's lifecycle hooks —
+   and its `formatSelection` emits the runner's input for a selection. Runners
+   that can be narrowed below file level add `runSelection`; runners whose tests
+   are not `*.test.*` sources add `defaultTestGlobs`.
 4. Pass `@covsel/conformance`, the shared suite every adapter runs. See
    [`docs/guide/adapters/writing-an-adapter.md`](./docs/guide/adapters/writing-an-adapter.md)
    for the fixture it needs, and `packages/adapter-generic/test` for a worked

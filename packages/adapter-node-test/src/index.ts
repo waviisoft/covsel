@@ -20,6 +20,8 @@ import type {
   CovselConfig,
   Recorder,
   RecordedUnit,
+  RecorderInit,
+  SelectionRunInit,
   TestId,
 } from '@covsel/core';
 
@@ -29,6 +31,12 @@ export const nodeTestAdapter: Adapter = {
   name: 'node-test',
   formatSelection(tests: TestId[]): string[] {
     return [...new Set(tests.map((t) => t.file))];
+  },
+  createRecorder(init: RecorderInit): Recorder {
+    return createNodeTestRecorder(init);
+  },
+  runSelection(init: SelectionRunInit): number {
+    return runNodeTestSelection(init);
   },
 };
 
@@ -105,15 +113,8 @@ function namePattern(names: string[]): string {
   return `^(?:${escaped.join('|')})$`;
 }
 
-export interface RunNodeTestInit {
-  /** The selected test units from `selectAffected`. */
-  selected: TestId[];
-  /** Base command, e.g. `['node', '--test']`. */
-  command: string[];
-  cwd: string;
-  /** Child stdio (default `'inherit'` so the user sees the runner output). */
-  stdio?: 'inherit' | 'ignore';
-}
+/** Exactly what the adapter contract hands a runner, named for direct callers. */
+export type RunNodeTestInit = SelectionRunInit;
 
 /**
  * Run only the affected node:test tests. Files that must run in full are invoked

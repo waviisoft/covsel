@@ -5,11 +5,7 @@ import { beforeAll } from 'vitest';
 
 import { describeAdapterConformance, RAN_MARKER_FILE } from '@covsel/conformance/vitest';
 
-import {
-  createNodeTestRecorder,
-  nodeTestAdapter,
-  runNodeTestSelection,
-} from '../src/index.js';
+import { nodeTestAdapter } from '../src/index.js';
 
 /**
  * The per-test case: both units live in one test file and are told apart by
@@ -46,10 +42,6 @@ const unit = (name: string, fn: string) =>
 
 describeAdapterConformance({
   adapter: nodeTestAdapter,
-  createRecorder: ({ cwd, config }) =>
-    createNodeTestRecorder({ command: ['node', '--test'], cwd, config }),
-  runSelection: ({ selected, cwd }) =>
-    runNodeTestSelection({ command: ['node', '--test'], selected, cwd, stdio: 'ignore' }),
   fixture: {
     command: ['node', '--test'],
     files: {

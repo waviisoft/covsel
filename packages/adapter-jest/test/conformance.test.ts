@@ -2,7 +2,7 @@ import { fileURLToPath } from 'node:url';
 
 import { describeAdapterConformance, RAN_MARKER_FILE } from '@covsel/conformance/vitest';
 
-import { createJestRecorder, jestAdapter } from '../src/index.js';
+import { jestAdapter } from '../src/index.js';
 
 /**
  * The transformed-sources case: Jest compiles sources through its transformer
@@ -65,8 +65,6 @@ const source = (fn: string, expr: string) =>
 
 describeAdapterConformance({
   adapter: jestAdapter,
-  createRecorder: ({ cwd, config }) =>
-    createJestRecorder({ command: [jestBin], cwd, config }),
   fixture: {
     command: [jestBin],
     nodeModulesFrom: exampleModules,
