@@ -3,6 +3,13 @@ import { describe, it } from 'vitest';
 import { conformanceCheckNames, runConformanceCheck } from './checks.js';
 import type { AdapterConformanceSpec } from './spec.js';
 
+export { RAN_MARKER_FILE } from './spec.js';
+export type {
+  AdapterConformanceSpec,
+  ConformanceFixture,
+  ConformanceUnit,
+} from './spec.js';
+
 export interface DescribeConformanceOptions {
   /** Per-check timeout; recording spawns a runner, so the default is generous. */
   timeout?: number;

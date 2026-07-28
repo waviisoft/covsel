@@ -1,3 +1,4 @@
+import { spawnSync } from 'node:child_process';
 import { describe, expect, it } from 'vitest';
 
 import { createGenericRecorder, type Recorder } from '@covsel/core';
@@ -5,6 +6,7 @@ import { createGenericRecorder, type Recorder } from '@covsel/core';
 import {
   type AdapterConformanceSpec,
   conformanceCheckNames,
+  RAN_MARKER_FILE,
   runAdapterConformance,
 } from '../src/index.js';
 
@@ -14,11 +16,16 @@ import {
  * teeth as the kit grows.
  */
 
-const testFile = (source: string, fn: string) =>
+const testFile = (label: string, source: string, fn: string) =>
   [
+    "import { appendFileSync } from 'node:fs';",
     "import { test } from 'node:test';",
     `import { ${fn} } from '../${source}';`,
-    `test('${fn}', () => { ${fn}(1); });`,
+    "import { shared } from '../src/shared.mjs';",
+    `test('${fn}', () => {`,
+    `  appendFileSync('${RAN_MARKER_FILE}', '${label}\\n');`,
+    `  shared(${fn}(1));`,
+    '});',
     '',
   ].join('\n');
 
@@ -32,15 +39,17 @@ const conformingSpec: AdapterConformanceSpec = {
   fixture: {
     command: ['node', '--test'],
     files: {
+      'src/shared.mjs': 'export function shared(x) {\n  return x + 0;\n}\n',
       'src/a.mjs': 'export function alpha(x) {\n  return x * 2;\n}\n',
       'src/b.mjs': 'export function beta(x) {\n  return x + 1;\n}\n',
-      'test/a.test.mjs': testFile('src/a.mjs', 'alpha'),
-      'test/b.test.mjs': testFile('src/b.mjs', 'beta'),
+      'test/a.test.mjs': testFile('test/a.test.mjs', 'src/a.mjs', 'alpha'),
+      'test/b.test.mjs': testFile('test/b.test.mjs', 'src/b.mjs', 'beta'),
     },
     units: {
       a: { testFile: 'test/a.test.mjs', source: 'src/a.mjs' },
       b: { testFile: 'test/b.test.mjs', source: 'src/b.mjs' },
     },
+    sharedSource: 'src/shared.mjs',
     newTest: {
       file: 'test/c.test.mjs',
       contents: "import { test } from 'node:test';\ntest('c', () => {});\n",
@@ -101,6 +110,44 @@ describe('the conformance kit', () => {
       createRecorder: overAttributing,
     });
     expect(failed(results, 'attributes each unit')?.ok).toBe(false);
+  }, 180_000);
+
+  it('fails a recorder that misses a source every unit executes', async () => {
+    // Correct in every other way — it just never credits the shared source. Its
+    // per-unit attribution is precise, its map is stable, and core still fails
+    // open for new tests and sentinels, so only a recall check catches it.
+    const underCrediting: AdapterConformanceSpec['createRecorder'] = (init) => {
+      const real = conformingSpec.createRecorder(init);
+      const recorder: Recorder = {
+        async record(file) {
+          const units = await real.record(file);
+          return units.map((unit) => ({
+            ...unit,
+            files: unit.files.filter((f) => f.file !== 'src/shared.mjs'),
+            ...(unit.blocks
+              ? { blocks: unit.blocks.filter((b) => b.file !== 'src/shared.mjs') }
+              : {}),
+          }));
+        },
+      };
+      return recorder;
+    };
+    const results = await runAdapterConformance({
+      ...conformingSpec,
+      createRecorder: underCrediting,
+    });
+    expect(failed(results, 'every source it executes')?.ok).toBe(false);
+    expect(failed(results, 'shared source selects both')?.ok).toBe(false);
+  }, 180_000);
+
+  it('fails an adapter whose run plan ignores the selection', async () => {
+    const results = await runAdapterConformance({
+      ...conformingSpec,
+      // Runs the whole suite whatever it was handed — green, and useless.
+      runSelection: ({ cwd }) =>
+        spawnSync('node', ['--test'], { cwd, stdio: 'ignore' }).status ?? 1,
+    });
+    expect(failed(results, 'runs the units it names')?.ok).toBe(false);
   }, 180_000);
 
   it('fails a recorder that records nothing at all', async () => {

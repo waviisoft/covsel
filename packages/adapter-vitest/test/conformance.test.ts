@@ -1,6 +1,6 @@
 import { fileURLToPath } from 'node:url';
 
-import { describeAdapterConformance } from '@covsel/conformance/vitest';
+import { describeAdapterConformance, RAN_MARKER_FILE } from '@covsel/conformance/vitest';
 
 import { createVitestRecorder, vitestAdapter } from '../src/index.js';
 
@@ -17,11 +17,16 @@ const vitestBin = fileURLToPath(
   new URL('../../../examples/vitest-basic/node_modules/.bin/vitest', import.meta.url),
 );
 
-const suite = (source: string, fn: string) =>
+const suite = (label: string, source: string, fn: string) =>
   [
+    "import { appendFileSync } from 'node:fs';",
     "import { expect, test } from 'vitest';",
     `import { ${fn} } from '../${source.replace(/\.ts$/, '.js')}';`,
-    `test('${fn}', () => { expect(typeof ${fn}(1)).toBe('number'); });`,
+    "import { shared } from '../src/shared.js';",
+    `test('${fn}', () => {`,
+    `  appendFileSync('${RAN_MARKER_FILE}', '${label}\\n');`,
+    `  expect(typeof shared(${fn}(1))).toBe('number');`,
+    '});',
     '',
   ].join('\n');
 
@@ -36,15 +41,18 @@ describeAdapterConformance({
       'vitest.config.ts':
         "import { defineConfig } from 'vitest/config';\n" +
         "export default defineConfig({ test: { include: ['test/**/*.test.ts'] } });\n",
+      'src/shared.ts':
+        'export function shared(x: number): number {\n  return x + 0;\n}\n',
       'src/a.ts': 'export function alpha(x: number): number {\n  return x * 2;\n}\n',
       'src/b.ts': 'export function beta(x: number): number {\n  return x + 1;\n}\n',
-      'test/a.test.ts': suite('src/a.ts', 'alpha'),
-      'test/b.test.ts': suite('src/b.ts', 'beta'),
+      'test/a.test.ts': suite('test/a.test.ts', 'src/a.ts', 'alpha'),
+      'test/b.test.ts': suite('test/b.test.ts', 'src/b.ts', 'beta'),
     },
     units: {
       a: { testFile: 'test/a.test.ts', source: 'src/a.ts' },
       b: { testFile: 'test/b.test.ts', source: 'src/b.ts' },
     },
+    sharedSource: 'src/shared.ts',
     newTest: {
       file: 'test/c.test.ts',
       contents:

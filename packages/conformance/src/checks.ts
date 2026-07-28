@@ -1,5 +1,6 @@
 import { spawnSync } from 'node:child_process';
 import {
+  existsSync,
   mkdirSync,
   mkdtempSync,
   readFileSync,
@@ -18,12 +19,14 @@ import {
   recordMap,
   resolveConfig,
   selectAffected,
+  type TestId,
 } from '@covsel/core';
 
-import type {
-  AdapterConformanceSpec,
-  ConformanceResult,
-  ConformanceUnit,
+import {
+  type AdapterConformanceSpec,
+  type ConformanceResult,
+  type ConformanceUnit,
+  RAN_MARKER_FILE,
 } from './spec.js';
 
 /** A prepared fixture project on disk, plus the config the adapter records with. */
@@ -44,32 +47,45 @@ function writeFile(cwd: string, rel: string, contents: string): void {
   writeFileSync(abs, contents);
 }
 
+/** Append a comment to a source so the diff sees it change, without altering behaviour. */
+function editSource(project: Project, rel: string): void {
+  const original = readFileSync(join(project.cwd, rel), 'utf8');
+  writeFile(project.cwd, rel, `${original}\n// conformance edit\n`);
+}
+
 function createProject(spec: AdapterConformanceSpec): Project {
   const cwd = mkdtempSync(join(tmpdir(), `covsel-conformance-${spec.adapter.name}-`));
-  for (const [rel, contents] of Object.entries(spec.fixture.files)) {
-    writeFile(cwd, rel, contents);
-  }
-  if (!spec.fixture.files['package.json']) {
+  const dispose = (): void => rmSync(cwd, { recursive: true, force: true });
+  try {
+    for (const [rel, contents] of Object.entries(spec.fixture.files)) {
+      writeFile(cwd, rel, contents);
+    }
+    // The sentinel check mutates package.json, so the suite owns it: a fixture
+    // that supplies its own would make that mutation a silent no-op.
+    if (spec.fixture.files['package.json']) {
+      throw new Error(
+        'a fixture must not supply package.json; the suite writes it so the sentinel check can mutate it',
+      );
+    }
     writeFile(
       cwd,
       'package.json',
       '{\n  "name": "fixture",\n  "private": true,\n  "type": "module"\n}\n',
     );
+    writeFile(cwd, '.gitignore', `.covsel/\nnode_modules/\n${RAN_MARKER_FILE}\n`);
+    if (spec.fixture.nodeModulesFrom) {
+      symlinkSync(spec.fixture.nodeModulesFrom, join(cwd, 'node_modules'), 'dir');
+    }
+    git(cwd, ['init', '-q', '-b', 'main']);
+    git(cwd, ['config', 'user.email', 'conformance@example.com']);
+    git(cwd, ['config', 'user.name', 'covsel conformance']);
+    git(cwd, ['add', '.']);
+    git(cwd, ['commit', '-q', '-m', 'fixture']);
+    return { cwd, config: resolveConfig(spec.fixture.config), dispose };
+  } catch (err) {
+    dispose();
+    throw err;
   }
-  writeFile(cwd, '.gitignore', '.covsel/\nnode_modules/\n');
-  if (spec.fixture.nodeModulesFrom) {
-    symlinkSync(spec.fixture.nodeModulesFrom, join(cwd, 'node_modules'), 'dir');
-  }
-  git(cwd, ['init', '-q', '-b', 'main']);
-  git(cwd, ['config', 'user.email', 'conformance@example.com']);
-  git(cwd, ['config', 'user.name', 'covsel conformance']);
-  git(cwd, ['add', '.']);
-  git(cwd, ['commit', '-q', '-m', 'fixture']);
-  return {
-    cwd,
-    config: resolveConfig(spec.fixture.config),
-    dispose: () => rmSync(cwd, { recursive: true, force: true }),
-  };
 }
 
 async function record(
@@ -86,15 +102,56 @@ async function record(
   return result.map;
 }
 
-/** How a unit appears in a selection: its name when it has one, else its file. */
-function labels(result: AffectedResult, unit: ConformanceUnit): string[] {
-  return unit.name === undefined
-    ? result.tests
-    : result.selected.filter((t) => t.name !== undefined).map((t) => t.name!);
+/** How this unit shows up in a marker file and in failure messages. */
+function label(unit: ConformanceUnit): string {
+  return unit.name ?? unit.testFile;
 }
 
-function identifies(result: AffectedResult, unit: ConformanceUnit): boolean {
-  return labels(result, unit).includes(unit.name ?? unit.testFile);
+/**
+ * Whether running this selection would run this unit. A selected id with no
+ * name means the whole file, which runs every unit in it — so a per-test adapter
+ * cannot pass a precision check by emitting a redundant whole-file id alongside.
+ */
+function selects(result: AffectedResult, unit: ConformanceUnit): boolean {
+  return result.selected.some(
+    (t) => t.file === unit.testFile && (t.name === undefined || t.name === unit.name),
+  );
+}
+
+/**
+ * Hand a selection to the runner the way the adapter would and report which
+ * units actually ran. Adapters that only emit a file list are exercised by
+ * appending `formatSelection`'s output to the fixture command.
+ */
+function runSelected(
+  spec: AdapterConformanceSpec,
+  project: Project,
+  selected: TestId[],
+): { status: number; ran: string[] } {
+  const marker = join(project.cwd, RAN_MARKER_FILE);
+  rmSync(marker, { force: true });
+
+  let status: number;
+  if (spec.runSelection) {
+    status = spec.runSelection({ selected, cwd: project.cwd });
+  } else {
+    const args = [
+      ...spec.fixture.command.slice(1),
+      ...spec.adapter.formatSelection(selected),
+    ];
+    const res = spawnSync(spec.fixture.command[0]!, args, {
+      cwd: project.cwd,
+      encoding: 'utf8',
+    });
+    status = res.status ?? 1;
+  }
+
+  const ran = existsSync(marker)
+    ? readFileSync(marker, 'utf8')
+        .split('\n')
+        .filter((line) => line.length > 0)
+    : [];
+  return { status, ran };
 }
 
 function mapPath(project: Project): string {
@@ -157,29 +214,32 @@ const CHECKS: { name: string; run: Check }[] = [
     },
   },
   {
-    name: 'attributes each unit to the source it executes and not the other',
+    name: 'attributes each unit to every source it executes and to no other',
     run: async (spec) => {
       const project = createProject(spec);
       try {
         const map = await record(spec, project);
         const { a, b } = spec.fixture.units;
+        const { sharedSource } = spec.fixture;
         for (const [unit, other] of [
           [a, b],
           [b, a],
         ] as const) {
           const covered = entriesFor(map, unit).map((f) => f.file);
-          if (!covered.includes(unit.source)) {
-            throw new Error(
-              `${unit.name ?? unit.testFile} did not record ${unit.source} (got ${covered.join(', ') || 'nothing'})`,
-            );
+          for (const source of [unit.source, sharedSource]) {
+            if (!covered.includes(source)) {
+              throw new Error(
+                `${label(unit)} did not record ${source}, which it executes (got ${covered.join(', ') || 'nothing'})`,
+              );
+            }
           }
           if (covered.includes(other.source)) {
             throw new Error(
-              `${unit.name ?? unit.testFile} wrongly recorded ${other.source}, which it never executes`,
+              `${label(unit)} wrongly recorded ${other.source}, which it never executes`,
             );
           }
         }
-        return 'no cross-contamination between the two units';
+        return 'each unit records its own source and the shared one, and nothing else';
       } finally {
         project.dispose();
       }
@@ -196,6 +256,7 @@ const CHECKS: { name: string; run: Check }[] = [
               .map((e) => ({
                 test: e.test,
                 files: e.files.map((f) => f.file).sort(),
+                blocks: (e.blocks ?? []).map((b) => `${b.file} ${b.blockHash}`).sort(),
               }))
               .sort((x, y) => JSON.stringify(x).localeCompare(JSON.stringify(y))),
           );
@@ -217,24 +278,92 @@ const CHECKS: { name: string; run: Check }[] = [
       try {
         await record(spec, project);
         const { a, b } = spec.fixture.units;
-        const original = readFileSync(join(project.cwd, a.source), 'utf8');
-        writeFile(project.cwd, a.source, `${original}\n// conformance edit\n`);
+        editSource(project, a.source);
 
         const result = await selectAffected({ cwd: project.cwd, config: project.config });
         if (result.fullRun) {
           throw new Error(`a one-source edit forced a full run: ${result.reason}`);
         }
-        if (!identifies(result, a)) {
+        if (!selects(result, a)) {
           throw new Error(
-            `editing ${a.source} did not select ${a.name ?? a.testFile} (selected ${JSON.stringify(result.selected)})`,
+            `editing ${a.source} did not select ${label(a)} (selected ${JSON.stringify(result.selected)})`,
           );
         }
-        if (identifies(result, b)) {
+        if (selects(result, b)) {
           throw new Error(
-            `editing ${a.source} also selected ${b.name ?? b.testFile}, which never executes it`,
+            `editing ${a.source} also selected ${label(b)}, which never executes it (selected ${JSON.stringify(result.selected)})`,
           );
         }
-        return `selected only ${a.name ?? a.testFile}`;
+        return `selected only ${label(a)}`;
+      } finally {
+        project.dispose();
+      }
+    },
+  },
+  {
+    name: 'editing a shared source selects both units',
+    run: async (spec) => {
+      const project = createProject(spec);
+      try {
+        await record(spec, project);
+        const { a, b } = spec.fixture.units;
+        editSource(project, spec.fixture.sharedSource);
+
+        const result = await selectAffected({ cwd: project.cwd, config: project.config });
+        for (const unit of [a, b]) {
+          if (!selects(result, unit)) {
+            throw new Error(
+              `editing ${spec.fixture.sharedSource} did not select ${label(unit)}, which executes it (selected ${JSON.stringify(result.selected)})`,
+            );
+          }
+        }
+        return result.fullRun ? `both, via a full run: ${result.reason}` : 'both units';
+      } finally {
+        project.dispose();
+      }
+    },
+  },
+  {
+    name: 'a selection handed to the runner runs the units it names',
+    run: async (spec) => {
+      const project = createProject(spec);
+      try {
+        await record(spec, project);
+        const { a, b } = spec.fixture.units;
+
+        const all = runSelected(spec, project, [
+          { file: a.testFile, ...(a.name === undefined ? {} : { name: a.name }) },
+          { file: b.testFile, ...(b.name === undefined ? {} : { name: b.name }) },
+        ]);
+        if (all.status !== 0) {
+          throw new Error(`running both units exited ${all.status}`);
+        }
+        for (const unit of [a, b]) {
+          if (!all.ran.includes(label(unit))) {
+            throw new Error(
+              `selecting both units did not run ${label(unit)} (ran ${all.ran.join(', ') || 'nothing'}); ` +
+                `every unit must append its label to ${RAN_MARKER_FILE} when it runs`,
+            );
+          }
+        }
+
+        editSource(project, a.source);
+        const result = await selectAffected({ cwd: project.cwd, config: project.config });
+        const one = runSelected(spec, project, result.selected);
+        if (one.status !== 0) {
+          throw new Error(`running the computed selection exited ${one.status}`);
+        }
+        if (!one.ran.includes(label(a))) {
+          throw new Error(
+            `the selection for an edit to ${a.source} ran ${one.ran.join(', ') || 'nothing'}, not ${label(a)}`,
+          );
+        }
+        if (one.ran.includes(label(b))) {
+          throw new Error(
+            `the selection for an edit to ${a.source} also ran ${label(b)}; the runner is not honouring it`,
+          );
+        }
+        return `ran exactly ${one.ran.join(', ')}`;
       } finally {
         project.dispose();
       }

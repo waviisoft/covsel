@@ -15,9 +15,21 @@ export interface ConformanceUnit {
 }
 
 /**
+ * Name of the file each unit appends its label to when it runs, relative to the
+ * project root. The suite deletes it, hands the runner a selection, and reads it
+ * back — that is how it sees which units a selection actually executed, without
+ * parsing any runner's output format.
+ */
+export const RAN_MARKER_FILE = '.covsel-conformance-ran';
+
+/**
  * A throwaway project the suite writes, records, and edits. It must contain two
  * units that execute different sources, so the suite can tell precise selection
- * from "everything ran".
+ * from "everything ran", plus one source both execute, so it can tell recording
+ * everything a unit touched from recording only the obvious part.
+ *
+ * Every unit must append its label — its `name`, or its `testFile` when it has
+ * no name — followed by a newline to {@link RAN_MARKER_FILE} when it runs.
  */
 export interface ConformanceFixture {
   /** Files to write into the project, repo-relative path → contents. */
@@ -29,6 +41,11 @@ export interface ConformanceFixture {
   /** Config overrides, e.g. `testGlobs` for runners whose tests are not `*.test.*`. */
   config?: Partial<CovselConfig>;
   units: { a: ConformanceUnit; b: ConformanceUnit };
+  /**
+   * A source file *both* units execute. Editing it must select both; a recorder
+   * that credits a unit with only the source it imports directly will not.
+   */
+  sharedSource: string;
   /** A test file that does not exist at record time, added later by the suite. */
   newTest: { file: string; contents: string };
 }
@@ -40,8 +57,10 @@ export interface AdapterConformanceSpec {
   createRecorder(init: { cwd: string; config: CovselConfig }): Recorder;
   fixture: ConformanceFixture;
   /**
-   * Run a computed selection the way the adapter would. Optional: adapters that
-   * only emit a file list are exercised through that list instead.
+   * Run a computed selection the way the adapter would, returning the runner's
+   * exit code. Optional: adapters that only emit a file list are exercised by
+   * appending `formatSelection`'s output to `fixture.command` instead. Either
+   * way the suite runs it and checks which units the runner actually executed.
    */
   runSelection?(init: { selected: TestId[]; cwd: string }): number;
 }
