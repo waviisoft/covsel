@@ -8,6 +8,7 @@ import {
   createGenericRecorder,
   extractBlocks,
   MODULE_BLOCK,
+  OBSERVES_EVERYTHING,
   type Recorder,
 } from '@covsel/core';
 
@@ -99,6 +100,7 @@ const derive = (
   createRecorder(init) {
     const real = probeAdapter.createRecorder(init);
     return {
+      observes: real.observes,
       async record(file) {
         return (await real.record(file)).map((unit) => damage(unit, init.cwd));
       },
@@ -215,6 +217,7 @@ describe('the conformance kit', () => {
       adapter: {
         ...probeAdapter,
         createRecorder: () => ({
+          observes: OBSERVES_EVERYTHING,
           async record() {
             return [];
           },

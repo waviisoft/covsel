@@ -12,11 +12,43 @@ have run_. So every design tension resolves toward **over-selection**:
 - A map whose recorded commit this checkout does not have, or that records no
   commit at all, means a **full run**: without that anchor there is no way to
   tell what changed since the map was recorded.
+- A change to a path the recording **could not observe** means a **full run**.
+  A map says which files each test covered; outside what the recorder was able
+  to watch, "not covered" is a fact about where it was looking, not about what
+  ran.
 - Non-JS dependencies coverage can't see (fixtures, snapshots, templates) are
   handled by user-declared `alwaysRun` globs — and, later, by tracking fs reads.
 
 > **Headline guarantee:** we never skip a test whose behavior your change could
 > alter — and when we can't be sure, we run it.
+
+## What a recording could see
+
+Every adapter shipped today observes the code under test in the process tree it
+controls, so "not covered" really does mean "did not run". That stops being true
+the moment a recorder sees only part of a test's execution — a browser but not
+the server behind it, one isolate of several. The map's silence about everything
+else is then an artifact, and selecting on it skips tests the change breaks.
+
+So a recorder declares what it was able to watch, and the map carries it:
+
+```ts
+const recorder: Recorder = {
+  // Any repo path that ran would have been seen.
+  observes: OBSERVES_EVERYTHING,
+  record: (testFile) => /* … */,
+};
+```
+
+The declaration is a claim about **recall**, not about what the runner happens
+to execute: name a path only if code running there would have been observed.
+Under-claiming costs CI minutes; over-claiming skips tests. It is required — a
+map that does not say what it observed is unusable, because the only available
+guess ("everything") is the one that loses tests.
+
+Merged shard maps keep the scope only when every shard agrees. Shards that
+disagree produce a map claiming nothing, which falls open on any change, rather
+than one shard's coverage vouching for paths another was never watching.
 
 ## How the map enforces it
 

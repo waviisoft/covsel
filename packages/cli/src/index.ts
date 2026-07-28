@@ -182,6 +182,13 @@ async function cmdStatus(): Promise<number> {
       `recorded:   ${s.recordedAt ?? 'unknown'}${ageMin !== undefined ? ` (${ageMin}m ago)` : ''}\n`,
     );
     out(`granularity:${s.granularity ?? 'unknown'}\n`);
+    out(
+      `observed:   ${
+        s.observed === undefined || s.observed.length === 0
+          ? 'nothing (every change forces a full run)'
+          : s.observed.join(', ')
+      }\n`,
+    );
     out(`entries:    ${s.entryCount ?? 0}\n`);
     out(`sources:    ${s.coveredFileCount ?? 0}\n`);
     if (s.coveredBlockCount !== undefined) out(`blocks:     ${s.coveredBlockCount}\n`);
@@ -264,6 +271,12 @@ async function cmdMerge(argv: string[]): Promise<number> {
     err(
       'covsel merge: shards disagree on the recorded commit; the merged map ' +
         'records none, so the next selection will be a full run\n',
+    );
+  }
+  if (merged.observed.length === 0) {
+    err(
+      'covsel merge: shards disagree on what they could observe; the merged map ' +
+        'claims nothing, so the next selection will be a full run\n',
     );
   }
   return 0;

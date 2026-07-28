@@ -6,6 +6,7 @@ import { describe, expect, it } from 'vitest';
 import {
   type Adapter,
   DEFAULT_CONFIG,
+  OBSERVES_EVERYTHING,
   resolveConfigFor,
   runSelected,
   type SelectionRunInit,
@@ -31,6 +32,7 @@ function spyAdapter(overrides: Partial<Adapter> = {}): {
     name: 'spy',
     formatSelection: fileList,
     createRecorder: () => ({
+      observes: OBSERVES_EVERYTHING,
       async record() {
         return [];
       },
@@ -81,6 +83,7 @@ describe('the adapter capability contract', () => {
         name: 'file-list',
         formatSelection: fileList,
         createRecorder: () => ({
+          observes: OBSERVES_EVERYTHING,
           async record() {
             return [];
           },
@@ -114,6 +117,7 @@ describe('the adapter capability contract', () => {
       name: 'file-list',
       formatSelection: fileList,
       createRecorder: () => ({
+        observes: OBSERVES_EVERYTHING,
         async record() {
           return [];
         },

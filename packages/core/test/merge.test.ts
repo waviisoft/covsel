@@ -9,6 +9,7 @@ function shard(over: Partial<CoverageMap> = {}): CoverageMap {
     commit: 'abc123',
     recordedAt: '2026-02-01T00:00:00.000Z',
     sentinelHashes: {},
+    observed: ['**'],
     entries: [],
     ...over,
   };
