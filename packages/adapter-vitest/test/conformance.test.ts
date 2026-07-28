@@ -2,7 +2,7 @@ import { fileURLToPath } from 'node:url';
 
 import { describeAdapterConformance, RAN_MARKER_FILE } from '@covsel/conformance/vitest';
 
-import { createVitestRecorder, vitestAdapter } from '../src/index.js';
+import { vitestAdapter } from '../src/index.js';
 
 /**
  * The transformed-sources case: Vitest evaluates sources through its own module
@@ -42,8 +42,6 @@ const source = (fn: string, expr: string) =>
 
 describeAdapterConformance({
   adapter: vitestAdapter,
-  createRecorder: ({ cwd, config }) =>
-    createVitestRecorder({ command: [vitestBin, 'run'], cwd, config }),
   fixture: {
     command: [vitestBin, 'run'],
     nodeModulesFrom: exampleModules,

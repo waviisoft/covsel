@@ -24,6 +24,7 @@ import {
   positionToOffset,
   type Recorder,
   type RecordedUnit,
+  type RecorderInit,
   selectExecutedBlocks,
   type TestId,
   toRepoRelative,
@@ -33,6 +34,9 @@ export const vitestAdapter: Adapter = {
   name: 'vitest',
   formatSelection(tests: TestId[]): string[] {
     return [...new Set(tests.map((t) => t.file))];
+  },
+  createRecorder(init: RecorderInit): Recorder {
+    return createVitestRecorder(init);
   },
 };
 

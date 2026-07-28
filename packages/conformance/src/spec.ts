@@ -1,4 +1,4 @@
-import type { Adapter, CovselConfig, Recorder, TestId } from '@covsel/core';
+import type { Adapter, CovselConfig } from '@covsel/core';
 
 /**
  * Identifies one of the two test units the suite reasons about. `name` is set
@@ -51,7 +51,11 @@ export interface ConformanceFixture {
   command: string[];
   /** Directory to link as `node_modules`, for runners that need dependencies. */
   nodeModulesFrom?: string;
-  /** Config overrides, e.g. `testGlobs` for runners whose tests are not `*.test.*`. */
+  /**
+   * Config overrides for the fixture project. An adapter whose tests are not
+   * `*.test.*` sources needs none: its own `defaultTestGlobs` are applied here
+   * the same way the CLI applies them.
+   */
   config?: Partial<CovselConfig>;
   units: { a: ConformanceUnit; b: ConformanceUnit };
   /**
@@ -70,19 +74,16 @@ export interface ConformanceFixture {
   newTest: { file: string; contents: string };
 }
 
+/**
+ * What the suite needs to certify an adapter: the adapter itself, and a project
+ * to exercise it on. Everything the suite does to the runner — building the
+ * recorder, running a selection — it asks the adapter object for, so an adapter
+ * cannot pass here through a path the CLI does not take.
+ */
 export interface AdapterConformanceSpec {
-  /** The adapter under test. */
+  /** The adapter under test, exactly as its package exports it. */
   adapter: Adapter;
-  /** Build the adapter's recorder for a fixture project. */
-  createRecorder(init: { cwd: string; config: CovselConfig }): Recorder;
   fixture: ConformanceFixture;
-  /**
-   * Run a computed selection the way the adapter would, returning the runner's
-   * exit code. Optional: adapters that only emit a file list are exercised by
-   * appending `formatSelection`'s output to `fixture.command` instead. Either
-   * way the suite runs it and checks which units the runner actually executed.
-   */
-  runSelection?(init: { selected: TestId[]; cwd: string }): number;
 }
 
 /** One conformance check's outcome. */

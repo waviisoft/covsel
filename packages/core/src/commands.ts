@@ -3,10 +3,10 @@ import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 
 import { blockHashesOf } from './blocks.js';
-import type { CovselConfig } from './config.js';
+import { type CovselConfig, resolveConfig } from './config.js';
 import { discoverTestFiles } from './discover.js';
 import { commitExists, diffChanges, gitHeadCommit, isGitWorkTree } from './git.js';
-import type { Change } from './interfaces.js';
+import type { Adapter, Change, Recorder, SelectionRunInit } from './interfaces.js';
 import { makeMatcher, matchesAny } from './match.js';
 import { V8FileMapper } from './mapper.js';
 import { ProcessObserver } from './observer.js';
@@ -14,8 +14,6 @@ import { hashFileContents, walkFiles } from './paths.js';
 import { FailOpenPolicy, fullRunReason } from './policy.js';
 import {
   type CoverageMap,
-  type CoveredBlock,
-  type CoveredFile,
   type Granularity,
   MAP_SCHEMA_VERSION,
   type MapEntry,
@@ -23,29 +21,6 @@ import {
 } from './schema.js';
 import { FileSelector } from './selector.js';
 import { LocalStore } from './store.js';
-
-/** The sources one observation window executed. */
-export interface RecordedTest {
-  files: CoveredFile[];
-  /** Executed function/module blocks, when recording at block granularity. */
-  blocks: CoveredBlock[];
-}
-
-/** One recorded map entry: a test id and the sources that test executed. */
-export interface RecordedUnit extends RecordedTest {
-  test: TestId;
-}
-
-/**
- * A recorder observes one test file and returns one recorded unit per test it
- * saw — a single whole-file unit for whole-file recorders, or one unit per
- * individual test for per-test recorders. Each recorder obtains its coverage
- * from its own tool — the runner's built-in coverage, or Node's built-in V8
- * engine via `NODE_V8_COVERAGE`.
- */
-export interface Recorder {
-  record(testFile: string): Promise<RecordedUnit[]>;
-}
 
 export interface GenericRecorderInit {
   command: string[];
@@ -225,9 +200,10 @@ export interface AffectedResult {
   /** Selected test files, repo-relative, sorted, deduplicated. */
   tests: string[];
   /**
-   * The selected test units. A unit with a `name` is an individual test (per-test
-   * granularity); a unit without one means the whole file. Adapters use these to
-   * format runner-native, per-test selection.
+   * The selected test units, sorted by file and then by name. A unit with a
+   * `name` is an individual test (per-test granularity); a unit without one
+   * means the whole file. Adapters use these to format runner-native, per-test
+   * selection; collapsing them to their files yields exactly `tests`.
    */
   selected: TestId[];
 }
@@ -358,12 +334,90 @@ export async function selectAffected(init: SelectInit): Promise<AffectedResult> 
       u.name !== undefined ? { file: u.file, name: u.name } : { file: u.file },
     );
   }
+  sortUnits(selected);
 
   const tests = new Set<string>(selected.map((t) => t.file));
-  return { fullRun: false, tests: [...tests].sort(), selected };
+  return { fullRun: false, tests: [...tests], selected };
+}
+
+/**
+ * Order test units by file, then by name, so a selection is reproducible and
+ * collapsing it to files yields the same sorted list as `tests`.
+ */
+function sortUnits(units: TestId[]): void {
+  const key = (t: TestId): string => `${t.file}\0${t.name ?? ''}`;
+  units.sort((a, b) => (key(a) < key(b) ? -1 : key(a) > key(b) ? 1 : 0));
+}
+
+/**
+ * Resolve configuration for a run with this adapter: the project's own settings,
+ * with the adapter's `defaultTestGlobs` filling in when the project named no
+ * `testGlobs` of its own. Only the adapter can know that its runner's tests are
+ * not `*.test.*` sources, and only the project can overrule it — so the
+ * capability lives on the adapter and is applied here, once, for every consumer.
+ */
+export function resolveConfigFor(
+  adapter: Adapter,
+  raw: Partial<CovselConfig> = {},
+): CovselConfig {
+  const globs = adapter.defaultTestGlobs;
+  if (globs !== undefined && raw.testGlobs === undefined) {
+    return resolveConfig({ ...raw, testGlobs: [...globs] });
+  }
+  return resolveConfig(raw);
+}
+
+export interface RunSelectedInit extends SelectionRunInit {
+  adapter: Adapter;
+}
+
+/** What handing a selection to the runner produced. */
+export interface SelectionOutcome {
+  /** The runner's exit code — the worst one, if it took more than one invocation. */
+  status: number;
+  /**
+   * What the runner printed, when covsel captured it instead of passing it
+   * through. An adapter that runs the selection itself owns its child's stdio,
+   * so nothing is captured for one of those.
+   */
+  output?: string;
+}
+
+/**
+ * Hand one selection to the runner: the adapter's own narrowing when it has
+ * one, otherwise the command with the adapter's formatted file list appended.
+ * Both the CLI and the conformance suite build every selected invocation here,
+ * so what the suite certifies is what the product runs.
+ */
+export function runSelected(init: RunSelectedInit): SelectionOutcome {
+  const { adapter, selected, command, cwd } = init;
+  const stdio = init.stdio ?? 'inherit';
+  const [bin, ...rest] = command;
+  if (bin === undefined) throw new Error('empty command');
+  // An empty selection means there is nothing to run, not that the run needs no
+  // filter: appending an empty file list would hand the runner its entire suite.
+  // An adapter that narrows the run itself already invokes nothing for an empty
+  // selection, so deciding it here is what keeps the two paths agreeing.
+  if (selected.length === 0) return { status: 0 };
+  if (adapter.runSelection) {
+    return { status: adapter.runSelection({ selected, command, cwd, stdio }) };
+  }
+  const args = [...rest, ...adapter.formatSelection(selected)];
+  // Silencing the runner still has to leave a failure diagnosable, so its output
+  // is captured rather than discarded when it is not being passed through. The
+  // ceiling matches what the adapters allow themselves: a verbose suite's output
+  // is large, and truncating it into an error would obscure the real failure.
+  const res =
+    stdio === 'inherit'
+      ? spawnSync(bin, args, { cwd, stdio: 'inherit' })
+      : spawnSync(bin, args, { cwd, encoding: 'utf8', maxBuffer: 64 * 1024 * 1024 });
+  if (res.error) throw res.error;
+  const output = `${res.stdout ?? ''}${res.stderr ?? ''}`.trim();
+  return { status: res.status ?? 1, ...(output ? { output } : {}) };
 }
 
 export interface RunInit extends SelectInit {
+  adapter: Adapter;
   command: string[];
 }
 
@@ -380,11 +434,17 @@ export async function runAffected(
   onSelection?.(selection);
   const [bin, ...rest] = init.command;
   if (bin === undefined) throw new Error('empty command');
-  if (!selection.fullRun && selection.tests.length === 0) return 0;
-  const args = selection.fullRun ? rest : [...rest, ...selection.tests];
-  const res = spawnSync(bin, args, { cwd: init.cwd, stdio: 'inherit' });
-  if (res.error) throw res.error;
-  return res.status ?? 1;
+  if (selection.fullRun) {
+    const res = spawnSync(bin, rest, { cwd: init.cwd, stdio: 'inherit' });
+    if (res.error) throw res.error;
+    return res.status ?? 1;
+  }
+  return runSelected({
+    adapter: init.adapter,
+    selected: selection.selected,
+    command: init.command,
+    cwd: init.cwd,
+  }).status;
 }
 
 export interface StatusResult {

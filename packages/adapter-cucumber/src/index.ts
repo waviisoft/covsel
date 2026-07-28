@@ -20,6 +20,8 @@ import type {
   CovselConfig,
   Recorder,
   RecordedUnit,
+  RecorderInit,
+  SelectionRunInit,
   TestId,
 } from '@covsel/core';
 
@@ -32,6 +34,13 @@ export const cucumberAdapter: Adapter = {
   name: 'cucumber',
   formatSelection(tests: TestId[]): string[] {
     return [...new Set(tests.map((t) => t.file))];
+  },
+  createRecorder(init: RecorderInit): Recorder {
+    return createCucumberRecorder(init);
+  },
+  defaultTestGlobs: CUCUMBER_TEST_GLOBS,
+  runSelection(init: SelectionRunInit): number {
+    return runCucumberSelection(init);
   },
 };
 
@@ -129,15 +138,8 @@ function namePattern(names: string[]): string {
   return `^(?:${escaped.join('|')})$`;
 }
 
-export interface RunCucumberInit {
-  /** The selected units from `selectAffected`. */
-  selected: TestId[];
-  /** Base command, e.g. `['cucumber-js']`. */
-  command: string[];
-  cwd: string;
-  /** Child stdio (default `'inherit'` so the user sees the runner output). */
-  stdio?: 'inherit' | 'ignore';
-}
+/** Exactly what the adapter contract hands a runner, named for direct callers. */
+export type RunCucumberInit = SelectionRunInit;
 
 /**
  * Run only the affected scenarios. Feature files that must run in full are

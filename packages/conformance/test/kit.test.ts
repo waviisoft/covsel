@@ -4,6 +4,7 @@ import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 
 import {
+  type Adapter,
   createGenericRecorder,
   extractBlocks,
   MODULE_BLOCK,
@@ -49,13 +50,15 @@ const source = (fn: string, expr: string) =>
     '',
   ].join('\n');
 
+/** An honest adapter: the whole-file recorder, and the file list every runner takes. */
+const probeAdapter: Adapter = {
+  name: 'probe',
+  formatSelection: (tests) => [...new Set(tests.map((t) => t.file))],
+  createRecorder: (init) => createGenericRecorder(init),
+};
+
 const conformingSpec: AdapterConformanceSpec = {
-  adapter: {
-    name: 'probe',
-    formatSelection: (tests) => [...new Set(tests.map((t) => t.file))],
-  },
-  createRecorder: ({ cwd, config }) =>
-    createGenericRecorder({ command: ['node', '--test'], cwd, config }),
+  adapter: probeAdapter,
   fixture: {
     command: ['node', '--test'],
     files: {
@@ -85,22 +88,23 @@ const conformingSpec: AdapterConformanceSpec = {
   },
 };
 
-/** Wrap the honest recorder, then damage what it reported. */
+/** The honest adapter, recording through it and then damaging what it reported. */
 const derive = (
   damage: (
     unit: Awaited<ReturnType<Recorder['record']>>[number],
     cwd: string,
   ) => Awaited<ReturnType<Recorder['record']>>[number],
-): AdapterConformanceSpec['createRecorder'] => {
-  return (init) => {
-    const real = conformingSpec.createRecorder(init);
+): Adapter => ({
+  ...probeAdapter,
+  createRecorder(init) {
+    const real = probeAdapter.createRecorder(init);
     return {
       async record(file) {
         return (await real.record(file)).map((unit) => damage(unit, init.cwd));
       },
     };
-  };
-};
+  },
+});
 
 const check = (
   results: Awaited<ReturnType<typeof runAdapterConformance>>,
@@ -125,10 +129,7 @@ describe('the conformance kit', () => {
   it('fails an adapter whose formatSelection does not deduplicate', async () => {
     const results = await runAdapterConformance({
       ...conformingSpec,
-      adapter: {
-        name: 'bad-format',
-        formatSelection: (tests) => tests.map((t) => t.file),
-      },
+      adapter: { ...probeAdapter, formatSelection: (tests) => tests.map((t) => t.file) },
     });
     expect(check(results, 'formatSelection')?.ok).toBe(false);
   }, 180_000);
@@ -136,7 +137,7 @@ describe('the conformance kit', () => {
   it('fails a recorder that credits a test with code it never ran', async () => {
     const results = await runAdapterConformance({
       ...conformingSpec,
-      createRecorder: derive((unit) => ({
+      adapter: derive((unit) => ({
         ...unit,
         files: [
           { file: 'src/a.mjs', fileHash: 'sha256:stub' },
@@ -155,7 +156,7 @@ describe('the conformance kit', () => {
     const direct = new Set(['src/a.mjs', 'src/b.mjs']);
     const results = await runAdapterConformance({
       ...conformingSpec,
-      createRecorder: derive((unit) => ({
+      adapter: derive((unit) => ({
         ...unit,
         files: unit.files.filter((f) => direct.has(f.file)),
         ...(unit.blocks ? { blocks: unit.blocks.filter((b) => direct.has(b.file)) } : {}),
@@ -175,7 +176,7 @@ describe('the conformance kit', () => {
       )?.hash;
     const results = await runAdapterConformance({
       ...conformingSpec,
-      createRecorder: derive((unit, cwd) => ({
+      adapter: derive((unit, cwd) => ({
         ...unit,
         ...(unit.blocks
           ? {
@@ -191,8 +192,11 @@ describe('the conformance kit', () => {
     const results = await runAdapterConformance({
       ...conformingSpec,
       // Runs the whole suite whatever it was handed — green, and useless.
-      runSelection: ({ cwd }) =>
-        spawnSync('node', ['--test'], { cwd, stdio: 'ignore' }).status ?? 1,
+      adapter: {
+        ...probeAdapter,
+        runSelection: ({ cwd }) =>
+          spawnSync('node', ['--test'], { cwd, stdio: 'ignore' }).status ?? 1,
+      },
     });
     expect(check(results, 'runs the units it names')?.ok).toBe(false);
   }, 180_000);
@@ -200,7 +204,7 @@ describe('the conformance kit', () => {
   it('fails an adapter whose run plan runs nothing and reports success', async () => {
     const results = await runAdapterConformance({
       ...conformingSpec,
-      runSelection: () => 0,
+      adapter: { ...probeAdapter, runSelection: () => 0 },
     });
     expect(check(results, 'runs the units it names')?.ok).toBe(false);
   }, 180_000);
@@ -208,11 +212,14 @@ describe('the conformance kit', () => {
   it('fails a recorder that records nothing at all', async () => {
     const results = await runAdapterConformance({
       ...conformingSpec,
-      createRecorder: () => ({
-        async record() {
-          return [];
-        },
-      }),
+      adapter: {
+        ...probeAdapter,
+        createRecorder: () => ({
+          async record() {
+            return [];
+          },
+        }),
+      },
     });
     expect(check(results, 'records a usable map')?.ok).toBe(false);
   }, 180_000);

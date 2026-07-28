@@ -1,4 +1,3 @@
-import { createGenericRecorder } from '@covsel/core';
 import { describeAdapterConformance, RAN_MARKER_FILE } from '@covsel/conformance/vitest';
 
 import { genericAdapter } from '../src/index.js';
@@ -32,8 +31,6 @@ const source = (fn: string, expr: string) =>
 
 describeAdapterConformance({
   adapter: genericAdapter,
-  createRecorder: ({ cwd, config }) =>
-    createGenericRecorder({ command: ['node', '--test'], cwd, config }),
   fixture: {
     command: ['node', '--test'],
     files: {

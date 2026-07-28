@@ -86,6 +86,21 @@ describe('covsel cli', () => {
     expect(err).toContain('cannot read');
   });
 
+  it.each(['record', 'affected', 'run'])(
+    '%s rejects an unknown adapter and lists the ones it knows',
+    async (cmd) => {
+      const argv = cmd === 'affected' ? [cmd] : [cmd, '--', 'node', '--test'];
+      const { code, err } = await captureStderr(() =>
+        main([...argv.slice(0, 1), '--adapter', 'frobnicate', ...argv.slice(1)]),
+      );
+      expect(code).toBe(1);
+      expect(err).toContain("unknown adapter 'frobnicate'");
+      for (const name of ['generic', 'vitest', 'jest', 'node-test', 'cucumber']) {
+        expect(err).toContain(`'${name}'`);
+      }
+    },
+  );
+
   it('affected rejects an unsupported --format', async () => {
     const { code, err } = await captureStderr(() =>
       main(['affected', '--format', 'vitest']),

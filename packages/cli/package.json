@@ -27,6 +27,7 @@
   },
   "dependencies": {
     "@covsel/adapter-cucumber": "workspace:*",
+    "@covsel/adapter-generic": "workspace:*",
     "@covsel/adapter-jest": "workspace:*",
     "@covsel/adapter-node-test": "workspace:*",
     "@covsel/adapter-vitest": "workspace:*",

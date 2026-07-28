@@ -5,12 +5,7 @@ import { beforeAll } from 'vitest';
 
 import { describeAdapterConformance, RAN_MARKER_FILE } from '@covsel/conformance/vitest';
 
-import {
-  createCucumberRecorder,
-  CUCUMBER_TEST_GLOBS,
-  cucumberAdapter,
-  runCucumberSelection,
-} from '../src/index.js';
+import { cucumberAdapter } from '../src/index.js';
 
 /**
  * Scenario-level conformance: two scenarios in one feature file execute
@@ -46,14 +41,9 @@ const source = (fn: string, expr: string) =>
 
 describeAdapterConformance({
   adapter: cucumberAdapter,
-  createRecorder: ({ cwd, config }) =>
-    createCucumberRecorder({ command: [cucumberBin], cwd, config }),
-  runSelection: ({ selected, cwd }) =>
-    runCucumberSelection({ command: [cucumberBin], selected, cwd, stdio: 'ignore' }),
   fixture: {
     command: [cucumberBin],
     nodeModulesFrom: exampleModules,
-    config: { testGlobs: CUCUMBER_TEST_GLOBS },
     files: {
       'src/shared.mjs': 'export function shared(x) {\n  return x + 0;\n}\n',
       'src/a.mjs': source('alpha', 'x * 2'),
