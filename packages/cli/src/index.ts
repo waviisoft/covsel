@@ -6,7 +6,6 @@ import {
   computeStatus,
   type CoverageMap,
   type CovselConfig,
-  createGenericRecorder,
   loadConfig,
   isUsableMap,
   loadRawConfig,
@@ -17,13 +16,8 @@ import {
   runAffected,
   selectAffected,
 } from '@covsel/core';
-import { createVitestRecorder } from '@covsel/adapter-vitest';
-import { createNodeTestRecorder, runNodeTestSelection } from '@covsel/adapter-node-test';
-import {
-  createCucumberRecorder,
-  CUCUMBER_TEST_GLOBS,
-  runCucumberSelection,
-} from '@covsel/adapter-cucumber';
+
+import { ADAPTERS, adapterNameList, DEFAULT_ADAPTER } from './adapters.js';
 
 const HELP = `covsel — runtime-coverage test impact analysis for any JS/TS runner
 
@@ -67,13 +61,14 @@ function flag(opts: string[], name: string): string | undefined {
 
 /**
  * Load config, letting the chosen adapter supply the test globs when the project
- * has not set them — cucumber's tests are `.feature` files, not the default
- * `*.test.*` sources, so its adapter must be able to find them zero-config.
+ * has not set them, so a runner whose tests are not `*.test.*` sources still
+ * works with no configuration.
  */
 async function loadConfigFor(cwd: string, adapter: string): Promise<CovselConfig> {
   const raw = await loadRawConfig(cwd);
-  if (adapter === 'cucumber' && raw.testGlobs === undefined) {
-    return resolveConfig({ ...raw, testGlobs: CUCUMBER_TEST_GLOBS });
+  const globs = ADAPTERS[adapter]?.defaultTestGlobs;
+  if (globs !== undefined && raw.testGlobs === undefined) {
+    return resolveConfig({ ...raw, testGlobs: globs });
   }
   return resolveConfig(raw);
 }
@@ -94,27 +89,15 @@ async function cmdRecord(argv: string[]): Promise<number> {
     );
     return 1;
   }
-  const adapter = flag(opts, 'adapter') ?? 'generic';
-  const cwd = process.cwd();
-  const config = await loadConfigFor(cwd, adapter);
-
-  const recorder =
-    adapter === 'vitest'
-      ? createVitestRecorder({ command, cwd, config })
-      : adapter === 'node-test'
-        ? createNodeTestRecorder({ command, cwd, config })
-        : adapter === 'cucumber'
-          ? createCucumberRecorder({ command, cwd, config })
-          : adapter === 'generic'
-            ? createGenericRecorder({ command, cwd, config })
-            : undefined;
-  if (!recorder) {
-    err(
-      `covsel record: unknown adapter '${adapter}' ` +
-        `(expected 'generic', 'vitest', 'node-test', or 'cucumber')\n`,
-    );
+  const adapter = flag(opts, 'adapter') ?? DEFAULT_ADAPTER;
+  const entry = ADAPTERS[adapter];
+  if (!entry) {
+    err(`covsel record: unknown adapter '${adapter}' (expected ${adapterNameList()})\n`);
     return 1;
   }
+  const cwd = process.cwd();
+  const config = await loadConfigFor(cwd, adapter);
+  const recorder = entry.createRecorder({ command, cwd, config });
 
   const result = await recordMap({
     cwd,
@@ -148,7 +131,7 @@ async function cmdAffected(argv: string[]): Promise<number> {
   }
   const since = flag(argv, 'since');
   const cwd = process.cwd();
-  const config = await loadConfigFor(cwd, flag(argv, 'adapter') ?? 'generic');
+  const config = await loadConfigFor(cwd, flag(argv, 'adapter') ?? DEFAULT_ADAPTER);
   const result = await selectAffected({ cwd, config, ...(since ? { since } : {}) });
   reportSelection(result);
   if (result.tests.length > 0) out(`${result.tests.join('\n')}\n`);
@@ -163,20 +146,19 @@ async function cmdRun(argv: string[]): Promise<number> {
     );
     return 1;
   }
-  const adapter = flag(opts, 'adapter') ?? 'generic';
+  const adapter = flag(opts, 'adapter') ?? DEFAULT_ADAPTER;
   const since = flag(opts, 'since');
   const cwd = process.cwd();
   const config = await loadConfigFor(cwd, adapter);
 
-  if (adapter === 'node-test' || adapter === 'cucumber') {
+  const runSelection = ADAPTERS[adapter]?.runSelection;
+  if (runSelection) {
     const selection = await selectAffected({ cwd, config, ...(since ? { since } : {}) });
     reportSelection(selection);
     if (selection.fullRun) {
       return runAffected({ cwd, config, command, ...(since ? { since } : {}) });
     }
     if (selection.selected.length === 0) return 0;
-    const runSelection =
-      adapter === 'cucumber' ? runCucumberSelection : runNodeTestSelection;
     return runSelection({ selected: selection.selected, command, cwd });
   }
 

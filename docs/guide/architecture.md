@@ -50,6 +50,7 @@ Adapters depend on `core` only.
 | `@covsel/core`              | Observer · Mapper · Store · Selector · Policy + the versioned map schema |
 | `@covsel/adapter-generic`   | Wrap-any-command adapter (whole-file)                                    |
 | `@covsel/adapter-vitest`    | Vitest adapter (records via Vitest's own V8 coverage)                    |
+| `@covsel/adapter-jest`      | Jest adapter (records via Jest's own coverage)                           |
 | `@covsel/adapter-node-test` | node:test adapter (per-test selection via the inspector observer)        |
 | `@covsel/adapter-cucumber`  | cucumber-js adapter (scenario-level selection)                           |
 | `@covsel/conformance`       | The shared suite every adapter must pass                                 |
