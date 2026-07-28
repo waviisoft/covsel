@@ -11,36 +11,35 @@ does two things:
    test files) — or, where the runner can be narrowed below file level, run that
    selection itself.
 
-Adapters depend on `@covsel/core` only. Selecting one is a single flag:
+Adapters depend on `@covsel/core` only.
+
+## Installing one
+
+**covsel ships no adapters.** Install the one your runner needs alongside the
+CLI, then name it:
 
 ```bash
+npm install --save-dev covsel @covsel/adapter-vitest
 covsel record --adapter vitest -- vitest run
 ```
 
-With no `--adapter`, covsel uses the **generic** adapter.
+With no `--adapter`, covsel uses the name `generic` — which still means
+`@covsel/adapter-generic` has to be installed. Nothing is bundled, so most
+projects carry exactly the adapter they use instead of five runners' worth of
+code they don't.
 
-## Using an adapter covsel does not ship
-
-A name covsel does not recognise is a package your project installed. Install it,
-then name it:
-
-```bash
-npm install --save-dev @covsel/adapter-mocha
-covsel record --adapter mocha -- mocha
-```
-
-covsel resolves a short name to `@covsel/adapter-<name>` first, then to
-`covsel-adapter-<name>` — the convention a published adapter should follow. A
-package named neither way is selectable by writing the specifier out in full:
+A name is resolved to a package by convention: `--adapter mocha` looks for
+`@covsel/adapter-mocha`, then `covsel-adapter-mocha`. A package named neither way
+is selectable by writing the specifier out in full:
 
 ```bash
 covsel record --adapter @acme/our-runner-adapter -- our-runner
 ```
 
 Resolution happens from your project, so the adapter that loads is the one your
-project installed, even when covsel itself is installed globally. The adapters
-covsel ships always win over a package of the same name, and are the only ones
-that work with nothing else installed.
+project installed, even when covsel itself is installed globally. Nothing is
+privileged: the adapters listed below resolve through exactly the same path as a
+third-party one, so you can pin, fork, or replace any of them.
 
 An adapter that resolves but is not really an adapter is rejected before anything
 is recorded, naming the capability it is missing. That is deliberate: covsel's
@@ -74,14 +73,14 @@ of covsel is identical regardless of which path recorded the map.
 
 ## Available adapters
 
-| Adapter                     | Runner                  | How it records                     | Status  |
-| --------------------------- | ----------------------- | ---------------------------------- | ------- |
-| `@covsel/adapter-generic`   | any direct-exec command | `NODE_V8_COVERAGE` process         | shipped |
-| `@covsel/adapter-vitest`    | Vitest                  | Vitest's own V8 coverage           | shipped |
-| `@covsel/adapter-jest`      | Jest                    | Jest's own coverage                | shipped |
-| `@covsel/adapter-node-test` | node:test               | inspector snapshot-diff (per-test) | shipped |
-| `@covsel/adapter-cucumber`  | cucumber-js             | inspector snapshot-diff (scenario) | shipped |
-| _(planned)_                 | Mocha · Playwright · …  | generic wrap / lifecycle shim      | later   |
+| Adapter (install separately) | Runner                  | How it records                     | Status    |
+| ---------------------------- | ----------------------- | ---------------------------------- | --------- |
+| `@covsel/adapter-generic`    | any direct-exec command | `NODE_V8_COVERAGE` process         | published |
+| `@covsel/adapter-vitest`     | Vitest                  | Vitest's own V8 coverage           | published |
+| `@covsel/adapter-jest`       | Jest                    | Jest's own coverage                | published |
+| `@covsel/adapter-node-test`  | node:test               | inspector snapshot-diff (per-test) | published |
+| `@covsel/adapter-cucumber`   | cucumber-js             | inspector snapshot-diff (scenario) | published |
+| _(planned)_                  | Mocha · Playwright · …  | generic wrap / lifecycle shim      | later     |
 
 The generic, Vitest, and Jest adapters record at whole-file granularity. The
 node:test and cucumber-js adapters record each **test** or **scenario**
@@ -95,7 +94,8 @@ object implementing the `Adapter` interface from `@covsel/core` — identity,
 selection formatting, and the recorder that produces the executed source list,
 plus whatever optional capabilities the runner supports — and proves itself
 against the shared conformance suite in `@covsel/conformance`, the same suite
-every built-in adapter runs. See
+every adapter above runs. Nothing distinguishes one covsel publishes from one
+you publish: both are packages a project installs, resolved the same way. See
 [Writing an adapter](/guide/adapters/writing-an-adapter),
 [CONTRIBUTING.md](https://github.com/waviisoft/covsel/blob/main/CONTRIBUTING.md),
 and the [architecture](/guide/architecture) page.

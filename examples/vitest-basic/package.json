@@ -2,7 +2,7 @@
   "name": "@covsel/example-vitest-basic",
   "version": "0.0.0",
   "private": true,
-  "description": "End-to-end example: covsel record → affected driving a Vitest suite",
+  "description": "End-to-end example: covsel record \u2192 affected driving a Vitest suite",
   "license": "MIT",
   "author": "WAVIISoft, LLC",
   "type": "module",
@@ -11,6 +11,7 @@
     "e2e": "node ./e2e.mjs"
   },
   "devDependencies": {
+    "@covsel/adapter-vitest": "workspace:*",
     "@vitest/coverage-v8": "^4.1.10",
     "covsel": "workspace:*",
     "vitest": "^4.1.10"

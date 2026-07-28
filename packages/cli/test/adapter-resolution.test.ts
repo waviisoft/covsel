@@ -3,12 +3,20 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 
-import { adapterSpecifiers, BUILT_IN_ADAPTERS, loadAdapter } from '../src/adapters.js';
+import { adapterSpecifiers, loadAdapter } from '../src/adapters.js';
 
 /**
  * Resolution against real packages on disk, not a mocked module loader: the
  * thing under test is what Node does with a specifier from the project's
  * perspective, so stubbing that away would leave the interesting part untested.
+ *
+ * One question this environment cannot answer, and no test here may ask:
+ * whether a `@covsel/*` package is installed in a given directory. Vitest
+ * aliases every workspace package to its source for these tests, so those
+ * specifiers resolve from anywhere — a fixture would be answering about the
+ * workspace rather than about the project. Questions of that shape go to a real
+ * `node` process instead, in `built-artifact.test.ts`; fixtures here use names
+ * the workspace does not define.
  */
 
 const projects: string[] = [];
@@ -62,23 +70,9 @@ describe('adapter resolution', () => {
     expect(adapterSpecifiers('./local/adapter.js')).toEqual(['./local/adapter.js']);
   });
 
-  it('resolves a built-in without touching the filesystem', async () => {
-    // A directory with no package.json and nothing installed: a built-in has to
-    // work with nothing but covsel present.
-    const cwd = mkdtempSync(join(tmpdir(), 'covsel-empty-'));
-    projects.push(cwd);
-    for (const [name, expected] of Object.entries(BUILT_IN_ADAPTERS)) {
-      await expect(loadAdapter(name, cwd)).resolves.toBe(expected);
-    }
-  });
-
-  it('cannot be shadowed by a package named after a built-in', async () => {
-    const cwd = project({
-      '@covsel/adapter-vitest': adapterModule('impostor', 'adapter'),
-    });
-    const resolved = await loadAdapter('vitest', cwd);
-    expect(resolved).toBe(BUILT_IN_ADAPTERS['vitest']);
-    expect(resolved.name).toBe('vitest');
+  it('reports an adapter the project has not installed', async () => {
+    const cwd = project({});
+    await expect(loadAdapter('mocha', cwd)).rejects.toThrow(/is not installed/);
   });
 
   it('resolves an installed package from the official scope', async () => {
@@ -133,15 +127,11 @@ describe('adapter resolution', () => {
     await expect(loadAdapter('dup', two)).resolves.toMatchObject({ name: 'second' });
   });
 
-  it('lists what it knows and what it tried when nothing resolves', async () => {
+  it('says how to install what it could not find, and what it looked for', async () => {
     const cwd = project({});
-    await expect(loadAdapter('frobnicate', cwd)).rejects.toThrow(
-      /unknown adapter 'frobnicate'/,
-    );
     const message = await loadAdapter('frobnicate', cwd).catch((e: Error) => e.message);
-    for (const name of Object.keys(BUILT_IN_ADAPTERS)) {
-      expect(message).toContain(`'${name}'`);
-    }
+    expect(message).toContain("adapter 'frobnicate' is not installed");
+    expect(message).toContain('npm install --save-dev @covsel/adapter-frobnicate');
     expect(message).toContain('@covsel/adapter-frobnicate');
     expect(message).toContain('covsel-adapter-frobnicate');
   });

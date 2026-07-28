@@ -161,8 +161,9 @@ covsel status                         # map age, coverage %, sentinel triggers
 
 ### Design principles
 
-- **Zero-config Level 0 works out of the box** — sensible sentinel/alwaysRun
-  defaults; config only to refine.
+- **Zero-config Level 0 once an adapter is installed** — the CLI ships none, so
+  a project installs `covsel` plus the adapter for its runner and then needs no
+  configuration; sensible sentinel/alwaysRun defaults, config only to refine.
 - **Composable, not a framework** — `covsel affected` prints; users pipe it.
   Never wrap what a runner already does well.
 - **CI-native** — publish map on `main`, fetch merge-base map on PR, merge shard

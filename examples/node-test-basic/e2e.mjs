@@ -4,7 +4,14 @@
 // asserts selection under a series of edits. Run with
 // `pnpm --filter @covsel/example-node-test-basic e2e` after a build.
 import { spawnSync } from 'node:child_process';
-import { cpSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import {
+  cpSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  symlinkSync,
+  writeFileSync,
+} from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -51,7 +58,10 @@ try {
   for (const entry of ['src', 'test', 'package.json']) {
     cpSync(join(exampleDir, entry), join(tmp, entry), { recursive: true });
   }
-  writeFileSync(join(tmp, '.gitignore'), '.covsel/\n');
+  writeFileSync(join(tmp, '.gitignore'), '.covsel/\nnode_modules/\n');
+  // covsel ships no adapters, so the throwaway project needs the one this
+  // example installs — reuse the example's own resolved copy.
+  symlinkSync(join(exampleDir, 'node_modules'), join(tmp, 'node_modules'), 'dir');
 
   git(tmp, ['init', '-q', '-b', 'main']);
   git(tmp, ['config', 'user.email', 'e2e@example.com']);

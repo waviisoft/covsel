@@ -24,8 +24,10 @@ schema. Adapters depend on `core` only.
 per runner carries its name, its selection formatting, its recorder factory, and
 any optional capability it has beyond the file-list baseline. The CLI resolves
 `--adapter` to one of those objects and reads what it can do off it — it defines
-no adapter shape of its own — and the conformance kit certifies the same object
-through the same code path.
+no adapter shape of its own, and bundles no adapter either. Every adapter is a
+package the project installs and the CLI loads by name, so covsel names no
+runner in its code or its dependencies, and the conformance kit certifies the
+same object through the same code path.
 
 ## Two granularity levels
 
@@ -53,9 +55,9 @@ through the same code path.
 
 | Package                     | Purpose                                                                  |
 | --------------------------- | ------------------------------------------------------------------------ |
-| `covsel`                    | The CLI                                                                  |
+| `covsel`                    | The CLI. Depends on core only — adapters are installed alongside it      |
 | `@covsel/core`              | Observer · Mapper · Store · Selector · Policy · Adapter + the map schema |
-| `@covsel/adapter-generic`   | Wrap-any-command adapter (whole-file) — covsel's default                 |
+| `@covsel/adapter-generic`   | Wrap-any-command adapter (whole-file) — the default `--adapter` name     |
 | `@covsel/adapter-vitest`    | Vitest adapter (records via Vitest's own V8 coverage)                    |
 | `@covsel/adapter-jest`      | Jest adapter (records via Jest's own coverage)                           |
 | `@covsel/adapter-node-test` | node:test adapter (per-test selection via the inspector observer)        |

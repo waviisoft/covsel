@@ -12,6 +12,25 @@ covered in the [CI guide](/guide/ci).
 - For Vitest, `@vitest/coverage-v8` in your project (see the
   [Vitest adapter](/guide/adapters/vitest))
 
+## Install
+
+covsel ships no adapters, so install the CLI and the one for your runner. Which
+one is the only decision here, and [Adapters](/guide/adapters/) has the full
+picture:
+
+```bash
+npm install --save-dev covsel @covsel/adapter-generic   # any command, whole-file
+npm install --save-dev covsel @covsel/adapter-vitest    # Vitest
+npm install --save-dev covsel @covsel/adapter-jest      # Jest
+npm install --save-dev covsel @covsel/adapter-node-test # node:test, per test
+npm install --save-dev covsel @covsel/adapter-cucumber  # cucumber-js, per scenario
+```
+
+Adapters are separate packages because most projects need exactly one: bundling
+five runners' worth of code into every install would make you carry four you
+will never load. A name covsel does not find is reported with the package to
+install, so a missing one is never a mystery.
+
 ## The loop
 
 ```bash
@@ -50,15 +69,15 @@ Selection is zero-config, but recording depends on how your runner executes
 code:
 
 - **Runners that execute source directly** (`node --test`, Mocha on plain JS)
-  use the [generic adapter](/guide/adapters/generic) — the default, nothing to
-  install.
-- **Runners that transform sources** (Vitest) need a runner-specific adapter,
-  because raw process coverage can't see transformed code. See
+  use the [generic adapter](/guide/adapters/generic), which wraps any command
+  and is what `--adapter` defaults to.
+- **Runners that transform sources** (Vitest, Jest) need a runner-specific
+  adapter, because raw process coverage can't see transformed code. See
   [Adapters](/guide/adapters/) for the full picture.
 
 ## Configuration
 
-Zero-config works out of the box. To refine, add a `.covsel.json` (or
+Selection needs no configuration once an adapter is installed. To refine, add a `.covsel.json` (or
 `covsel.config.js`) at your repo root:
 
 ```jsonc

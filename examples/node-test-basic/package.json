@@ -2,7 +2,7 @@
   "name": "@covsel/example-node-test-basic",
   "version": "0.0.0",
   "private": true,
-  "description": "End-to-end example: covsel record → affected driving node:test via NODE_V8_COVERAGE",
+  "description": "End-to-end example: covsel record \u2192 affected driving node:test via NODE_V8_COVERAGE",
   "license": "MIT",
   "author": "WAVIISoft, LLC",
   "type": "module",
@@ -11,6 +11,7 @@
     "e2e": "node ./e2e.mjs"
   },
   "devDependencies": {
+    "@covsel/adapter-generic": "workspace:*",
     "covsel": "workspace:*"
   }
 }

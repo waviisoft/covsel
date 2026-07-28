@@ -26,6 +26,13 @@ git diff — run only the tests whose covered code changed.
 
 ## Quickstart
 
+covsel ships no adapters — install the CLI plus the one for your runner:
+
+```bash
+npm install --save-dev covsel @covsel/adapter-generic   # any command, whole-file
+# or @covsel/adapter-vitest · -jest · -node-test · -cucumber
+```
+
 ```bash
 # Record a run and build the map (one process per test file)
 npx covsel record -- node --test

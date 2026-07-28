@@ -44,6 +44,9 @@ importers:
 
   examples/cucumber-basic:
     devDependencies:
+      '@covsel/adapter-cucumber':
+        specifier: workspace:*
+        version: link:../../packages/adapter-cucumber
       '@cucumber/cucumber':
         specifier: ^11.3.0
         version: 11.3.0
@@ -53,6 +56,9 @@ importers:
 
   examples/jest-basic:
     devDependencies:
+      '@covsel/adapter-jest':
+        specifier: workspace:*
+        version: link:../../packages/adapter-jest
       '@types/jest':
         specifier: ^30.0.0
         version: 30.0.0
@@ -74,12 +80,18 @@ importers:
 
   examples/node-test-basic:
     devDependencies:
+      '@covsel/adapter-generic':
+        specifier: workspace:*
+        version: link:../../packages/adapter-generic
       covsel:
         specifier: workspace:*
         version: link:../../packages/cli
 
   examples/vitest-basic:
     devDependencies:
+      '@covsel/adapter-vitest':
+        specifier: workspace:*
+        version: link:../../packages/adapter-vitest
       '@vitest/coverage-v8':
         specifier: ^4.1.10
         version: 4.1.10(vitest@4.1.10)
@@ -157,21 +169,6 @@ importers:
 
   packages/cli:
     dependencies:
-      '@covsel/adapter-cucumber':
-        specifier: workspace:*
-        version: link:../adapter-cucumber
-      '@covsel/adapter-generic':
-        specifier: workspace:*
-        version: link:../adapter-generic
-      '@covsel/adapter-jest':
-        specifier: workspace:*
-        version: link:../adapter-jest
-      '@covsel/adapter-node-test':
-        specifier: workspace:*
-        version: link:../adapter-node-test
-      '@covsel/adapter-vitest':
-        specifier: workspace:*
-        version: link:../adapter-vitest
       '@covsel/core':
         specifier: workspace:*
         version: link:../core

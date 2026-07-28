@@ -1,11 +1,12 @@
 /**
- * How a `--adapter` name becomes an adapter. covsel ships five, and any other
- * name is a package the project installed: an adapter is one object satisfying
- * one interface, so a module covsel has never seen can be checked against that
- * interface and used exactly like a built-in.
+ * How a `--adapter` name becomes an adapter. covsel ships none of them: an
+ * adapter is a package the project installs, and this file finds it. Every
+ * runner covsel supports is therefore surface area a project opts into rather
+ * than weight in every install, and a runner nobody has written an adapter for
+ * yet needs no change here to become selectable.
  *
- * This file maps names to objects and loads the ones it does not have. It knows
- * nothing about adapter shape — core owns that, including the runtime check.
+ * This file knows how to find and load an adapter. It knows nothing about what
+ * one is — core owns that, including the runtime check.
  */
 import { existsSync, readFileSync } from 'node:fs';
 import { createRequire } from 'node:module';
@@ -13,34 +14,12 @@ import { join } from 'node:path';
 import { pathToFileURL } from 'node:url';
 
 import { type Adapter, assertAdapter } from '@covsel/core';
-import { genericAdapter } from '@covsel/adapter-generic';
-import { vitestAdapter } from '@covsel/adapter-vitest';
-import { jestAdapter } from '@covsel/adapter-jest';
-import { nodeTestAdapter } from '@covsel/adapter-node-test';
-import { cucumberAdapter } from '@covsel/adapter-cucumber';
 
 /**
- * The adapters covsel ships. Insertion order is the order names are listed back
- * to the user. These are bundled dependencies, resolved without touching the
- * filesystem: they have to work when nothing else is installed, and a name
- * covsel ships must not be shadowable by whatever is in `node_modules`.
+ * The adapter assumed when `--adapter` is not given. A name, not an
+ * implementation: it still has to be installed like any other.
  */
-export const BUILT_IN_ADAPTERS: Record<string, Adapter> = {
-  generic: genericAdapter,
-  vitest: vitestAdapter,
-  jest: jestAdapter,
-  'node-test': nodeTestAdapter,
-  cucumber: cucumberAdapter,
-};
-
 export const DEFAULT_ADAPTER = 'generic';
-
-/** The built-in names, rendered for an error message: `'a', 'b', or 'c'`. */
-export function adapterNameList(): string {
-  const names = Object.keys(BUILT_IN_ADAPTERS).map((n) => `'${n}'`);
-  const last = names.pop();
-  return names.length === 0 ? (last ?? '') : `${names.join(', ')}, or ${last}`;
-}
 
 /**
  * The package specifiers a name implies. A name that is already a specifier —
@@ -140,16 +119,23 @@ async function importFrom(
 /** Why an adapter name did not become an adapter. */
 export class AdapterResolutionError extends Error {}
 
+/** What to tell someone whose adapter is not installed. */
+function notInstalled(name: string, specifiers: string[]): string {
+  const tried = specifiers.map((s) => `'${s}'`).join(' and ');
+  const install = `npm install --save-dev ${specifiers[0]}`;
+  return name === DEFAULT_ADAPTER
+    ? `no adapter installed — covsel ships none. Install one for your runner ` +
+        `(\`${install}\` wraps any command), or name another with --adapter (tried ${tried})`
+    : `adapter '${name}' is not installed — \`${install}\` (tried ${tried})`;
+}
+
 /**
- * Resolve a `--adapter` name: a built-in, or a package the project installed.
+ * Resolve a `--adapter` name to the adapter package the project installed.
  * Throws `AdapterResolutionError` with a reason a user can act on — nothing
  * installed under any of the names tried, a module that is not an adapter, or a
  * module that failed to load.
  */
 export async function loadAdapter(name: string, cwd: string): Promise<Adapter> {
-  const builtIn = BUILT_IN_ADAPTERS[name];
-  if (builtIn) return builtIn;
-
   const specifiers = adapterSpecifiers(name);
   for (const specifier of specifiers) {
     let found: { module: unknown } | 'not-installed';
@@ -161,24 +147,20 @@ export async function loadAdapter(name: string, cwd: string): Promise<Adapter> {
       );
     }
     if (found === 'not-installed') continue;
-    const module = found.module;
     // One documented shape, so a package cannot half-satisfy the protocol: the
     // adapter is the `adapter` export, or the default export.
-    const exports = module as { adapter?: unknown; default?: unknown };
+    const exports = found.module as { adapter?: unknown; default?: unknown };
     const candidate = exports.adapter ?? exports.default;
     if (candidate === undefined) {
       throw new AdapterResolutionError(
         `'${specifier}' exports no adapter (expected an 'adapter' or default export)`,
       );
     }
-    // core's own check, so a stranger's module is held to exactly the contract
-    // covsel's five are. Its message names the capability that failed.
+    // core's own check, so every adapter is held to the same contract, whoever
+    // wrote it. Its message names the capability that failed.
     assertAdapter(candidate, `'${specifier}'`);
     return candidate;
   }
 
-  throw new AdapterResolutionError(
-    `unknown adapter '${name}' (expected ${adapterNameList()}, or an installed ` +
-      `package — tried ${specifiers.map((s) => `'${s}'`).join(' and ')})`,
-  );
+  throw new AdapterResolutionError(notInstalled(name, specifiers));
 }
