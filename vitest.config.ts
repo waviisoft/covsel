@@ -20,6 +20,12 @@ export default defineConfig({
       '@covsel/adapter-cucumber': fileURLToPath(
         new URL('./packages/adapter-cucumber/src/index.ts', import.meta.url),
       ),
+      '@covsel/conformance/vitest': fileURLToPath(
+        new URL('./packages/conformance/src/vitest.ts', import.meta.url),
+      ),
+      '@covsel/conformance': fileURLToPath(
+        new URL('./packages/conformance/src/index.ts', import.meta.url),
+      ),
     },
   },
   test: {

@@ -97,6 +97,7 @@ for node:test, and scenario-level selection for cucumber-js.
 | `@covsel/adapter-vitest`    | Vitest adapter (records via Vitest's own V8 coverage)                    |
 | `@covsel/adapter-node-test` | node:test adapter (per-test selection via the inspector observer)        |
 | `@covsel/adapter-cucumber`  | cucumber-js adapter (scenario-level selection)                           |
+| `@covsel/conformance`       | The shared suite every adapter must pass                                 |
 | `@covsel/adapter-*`         | Per-runner adapters (community contribution lane)                        |
 
 ## Documentation

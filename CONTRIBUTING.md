@@ -34,8 +34,10 @@ Requires Node ≥ 22 and pnpm (via `corepack enable`).
    `observer.startTest(id)` / `observer.endTest(id)` around each test via your
    runner's lifecycle hooks, and implement `formatSelection` to emit the
    runner's native selection syntax.
-4. Pass the adapter conformance kit once it lands; until then, mirror the
-   assertions in `packages/adapter-generic/test`.
+4. Pass `@covsel/conformance`, the shared suite every adapter runs. See
+   [`docs/guide/adapters/writing-an-adapter.md`](./docs/guide/adapters/writing-an-adapter.md)
+   for the fixture it needs, and `packages/adapter-generic/test` for a worked
+   example.
 
 ## Workflow
 

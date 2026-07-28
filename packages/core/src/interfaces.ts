@@ -30,7 +30,7 @@ export interface Mapper {
   toBlocks(raw: RawCoverage): Promise<CoveredBlock[]>;
 }
 
-/** Store — persists and retrieves maps (local .covsel/, GHA cache, S3/GCS). */
+/** Store — persists and retrieves maps; the local one is a `.covsel/` directory. */
 export interface Store {
   read(): Promise<CoverageMap | undefined>;
   write(map: CoverageMap): Promise<void>;
@@ -69,10 +69,16 @@ export interface Policy {
 /**
  * Adapter — the only per-runner surface. Implementations call
  * observer.startTest/endTest around each test and translate a selection into
- * the runner's native input (file list, tags, feature:line, …).
+ * the runner's native input.
  */
 export interface Adapter {
   readonly name: string;
-  /** Format selected tests as arguments/stdin for the runner. */
+  /**
+   * The selected test files, deduplicated, ready to append to the runner's
+   * command line. Per-test ids of one file collapse to that file once: narrowing
+   * a run to individual tests needs runner-specific flags and ordering, so an
+   * adapter that selects per test exposes that as its own run helper rather than
+   * through this list.
+   */
   formatSelection(tests: TestId[]): string[];
 }

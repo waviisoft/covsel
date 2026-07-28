@@ -65,7 +65,7 @@ Observer      V8 inspector snapshot-diff | NODE_V8_COVERAGE (process) | istanbul
    (shared — turns "a test ran" into a set of executed source ranges)
 Mapper        source-maps → original files · bundler awareness · block-hash granularity
    (shared — the hard part; maps transpiled/bundled execution back to src/**)
-Store         .covsel/ local · git-notes · GHA cache · S3/GCS
+Store         .covsel/ local (a directory, so a CI cache can carry it)
    (pluggable — publish map on main, fetch merge-base map on PR, merge shards)
 Selector      git diff → impacted test-ids → emit(file list | runner-native tags)
    + Policy:   fail-open · always-run globs · new-test detection · full-run sentinels
@@ -244,11 +244,10 @@ version. The shape:
   runs.
 - **Later — per-test precision + real adapters.** Inspector snapshot-diff
   observation; block-hash granularity; adapters for Jest, Mocha, node:test,
-  cucumber-js, Playwright; the CI publish/fetch/shard-merge story with GHA-cache
-  and S3/GCS Stores; `covsel watch`.
+  cucumber-js, Playwright; the CI publish/fetch/shard-merge story; `covsel watch`.
 - **Beyond — bundlers, monorepos, ecosystem.** Bundler source-map plugins for
   browser coverage; composition with Nx/Turbo project graphs; fs-read tracking
-  for non-JS dependencies; an optional remote map service.
+  for non-JS dependencies.
 
 ---
 
@@ -294,4 +293,4 @@ version. The shape:
 | Map staleness / drift                              | Sentinels + new-test detection + `covsel status` surfacing map age        |
 | Per-test inspector overhead                        | Offer Level-0 process mode as the low-overhead fallback                   |
 | Monorepo scale                                     | Fuse with Nx/Turbo project graph rather than reimplementing it            |
-| Remote map storage for CI                          | GHA cache + S3 first; a hosted service only if demand appears             |
+| Sharing the map across CI jobs                     | The store is a directory, so the CI runner's own cache covers it          |

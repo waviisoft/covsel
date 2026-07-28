@@ -9,8 +9,7 @@ security reports. We aim to acknowledge within 72 hours.
 ## Scope notes
 
 covsel reads your source tree, test files, and git metadata, and executes your
-own test commands. It makes **no network calls** unless you explicitly
-configure a remote Store (e.g. S3/GCS); the default Store writes only to a
+own test commands. It makes **no network calls**; the Store writes only to a
 local `.covsel/` directory.
 
 ## Supported versions
