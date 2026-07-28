@@ -1,13 +1,13 @@
 # Getting started
 
 Selection ships today: `covsel record`, `affected`, `run`, `status`, and
-`merge` — with function-level (block-hash) precision, per-test selection for
+`merge` -- with function-level (block-hash) precision, per-test selection for
 node:test, and scenario-level selection for cucumber-js. Running covsel in CI is
 covered in the [CI guide](/guide/ci).
 
 ## Requirements
 
-- Node ≥ 22 (the V8 inspector and `NODE_V8_COVERAGE` are stable there)
+- Node >= 22 (the V8 inspector and `NODE_V8_COVERAGE` are stable there)
 - pnpm (via `corepack enable`) if you are working on covsel itself
 - For Vitest, `@vitest/coverage-v8` in your project (see the
   [Vitest adapter](/guide/adapters/vitest))
@@ -34,7 +34,7 @@ install, so a missing one is never a mystery.
 ## The loop
 
 ```bash
-# 1. Record: build the test → covered-source map (one process per test file)
+# 1. Record: build the test -> covered-source map (one process per test file)
 covsel record -- node --test
 covsel record --adapter vitest -- vitest run   # needs @vitest/coverage-v8
 covsel record --adapter jest -- jest           # coverage is built into Jest
@@ -114,4 +114,4 @@ pnpm lint && pnpm typecheck
 ```
 
 See [CONTRIBUTING.md](https://github.com/waviisoft/covsel/blob/main/CONTRIBUTING.md)
-for how to write an adapter — the primary community contribution surface.
+for how to write an adapter -- the primary community contribution surface.

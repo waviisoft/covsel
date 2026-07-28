@@ -6,7 +6,7 @@
  * yet needs no change here to become selectable.
  *
  * This file knows how to find and load an adapter. It knows nothing about what
- * one is — core owns that, including the runtime check.
+ * one is -- core owns that, including the runtime check.
  */
 import { existsSync, readFileSync } from 'node:fs';
 import { createRequire } from 'node:module';
@@ -22,8 +22,8 @@ import { type Adapter, assertAdapter } from '@covsel/core';
 export const DEFAULT_ADAPTER = 'generic';
 
 /**
- * The package specifiers a name implies. A name that is already a specifier —
- * scoped, or containing a path — is honoured as written, so an adapter whose
+ * The package specifiers a name implies. A name that is already a specifier --
+ * scoped, or containing a path -- is honoured as written, so an adapter whose
  * package is named something else is still selectable. Anything else is a short
  * name, and expands to the official scope first, then the community prefix.
  */
@@ -36,7 +36,7 @@ export function adapterSpecifiers(name: string): string[] {
  * The installed package's own directory, found by walking the project's
  * `node_modules` chain. This is only reached when the standard resolver could
  * not see the package, which happens for a package whose `exports` map declares
- * an `import` condition and no `require` one — a perfectly ordinary ESM-only
+ * an `import` condition and no `require` one -- a perfectly ordinary ESM-only
  * package, and precisely the kind an adapter is likely to be.
  */
 function packageDir(cwd: string, specifier: string): string | undefined {
@@ -93,7 +93,7 @@ function entryFile(dir: string): string {
  * `cwd` rather than to covsel's own location on disk: the adapter that loads has
  * to be the one this project installed, which a bare import would not guarantee
  * for a globally installed covsel or inside a monorepo. Both routes below stay
- * anchored that way — falling back to a bare import would quietly resolve
+ * anchored that way -- falling back to a bare import would quietly resolve
  * against covsel instead, and report a package the project really has installed
  * as missing.
  */
@@ -124,14 +124,14 @@ function notInstalled(name: string, specifiers: string[]): string {
   const tried = specifiers.map((s) => `'${s}'`).join(' and ');
   const install = `npm install --save-dev ${specifiers[0]}`;
   return name === DEFAULT_ADAPTER
-    ? `no adapter installed — covsel ships none. Install one for your runner ` +
+    ? `no adapter installed -- covsel ships none. Install one for your runner ` +
         `(\`${install}\` wraps any command), or name another with --adapter (tried ${tried})`
-    : `adapter '${name}' is not installed — \`${install}\` (tried ${tried})`;
+    : `adapter '${name}' is not installed -- \`${install}\` (tried ${tried})`;
 }
 
 /**
  * Resolve a `--adapter` name to the adapter package the project installed.
- * Throws `AdapterResolutionError` with a reason a user can act on — nothing
+ * Throws `AdapterResolutionError` with a reason a user can act on -- nothing
  * installed under any of the names tried, a module that is not an adapter, or a
  * module that failed to load.
  */

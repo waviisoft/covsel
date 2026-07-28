@@ -26,7 +26,7 @@ describe('covsel cli', () => {
   it('prints help and exits 0 with no args', async () => {
     const { code, out } = await captureStdout(() => main([]));
     expect(code).toBe(0);
-    expect(out).toContain('covsel — runtime-coverage');
+    expect(out).toContain('covsel -- runtime-coverage');
   });
 
   it.each(['-h', '--help'])('prints help for %s', async (flag) => {

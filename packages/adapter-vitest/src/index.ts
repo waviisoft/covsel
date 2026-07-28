@@ -1,5 +1,5 @@
 /**
- * @covsel/adapter-vitest — Vitest support for covsel.
+ * @covsel/adapter-vitest -- Vitest support for covsel.
  *
  * Vitest evaluates transformed sources through its own module runner, so raw
  * NODE_V8_COVERAGE at the process boundary never sees the original `src/**`
@@ -147,7 +147,7 @@ export function createVitestRecorder(init: VitestRecorderInit): Recorder {
           ) as Record<string, CoverageFinalEntry>;
         } catch {
           throw new Error(
-            `no coverage report produced for ${testFile} — is @vitest/coverage-v8 installed?`,
+            `no coverage report produced for ${testFile} -- is @vitest/coverage-v8 installed?`,
           );
         }
 

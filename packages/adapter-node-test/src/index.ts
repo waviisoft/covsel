@@ -1,11 +1,11 @@
 /**
- * @covsel/adapter-node-test — per-test selection for Node's built-in test runner.
+ * @covsel/adapter-node-test -- per-test selection for Node's built-in test runner.
  *
  * Records each test's coverage individually by preloading a shim that drives the
  * per-test InspectorObserver, and runs only the affected tests via node:test's
  * `--test-name-pattern`. A pattern built from a test's leaf name runs that test
  * even inside a non-matching `describe`, and duplicate leaf names only ever
- * over-run — so selection stays fail-open.
+ * over-run -- so selection stays fail-open.
  */
 import { spawnSync } from 'node:child_process';
 import { mkdtempSync, readFileSync, rmSync } from 'node:fs';

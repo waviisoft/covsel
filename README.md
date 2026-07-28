@@ -1,6 +1,6 @@
 # covsel
 
-> Runtime-coverage test impact analysis for any JS/TS runner — precise where
+> Runtime-coverage test impact analysis for any JS/TS runner -- precise where
 > static import-graph selection lies, and the only option for runners that have
 > no selection at all.
 
@@ -15,22 +15,22 @@ publishing and merging maps. More runner adapters are next. Track the work in th
 
 Your CI runs every test on every PR, even when the diff touches three files.
 Existing JS selection (`jest --changedSince`, `vitest --changed`, `nx affected`)
-walks the **static import graph** — which lies on dynamic imports, runtime
+walks the **static import graph** -- which lies on dynamic imports, runtime
 config, DI/plugin coupling, and non-import dependencies. And runners like
 cucumber-js have no selection at all.
 
 covsel takes the approach proven by Python's [pytest-testmon], Java's
 Ekstazi/STARTS, and Ruby's Crystalball: **watch what code each test actually
-executes** (via V8 coverage), persist a test → covered-code map, and — given a
-git diff — run only the tests whose covered code changed.
+executes** (via V8 coverage), persist a test -> covered-code map, and -- given a
+git diff -- run only the tests whose covered code changed.
 
 ## Quickstart
 
-covsel ships no adapters — install the CLI plus the one for your runner:
+covsel ships no adapters -- install the CLI plus the one for your runner:
 
 ```bash
 npm install --save-dev covsel @covsel/adapter-generic   # any command, whole-file
-# or @covsel/adapter-vitest · -jest · -node-test · -cucumber
+# or @covsel/adapter-vitest , -jest , -node-test , -cucumber
 ```
 
 ```bash
@@ -75,7 +75,7 @@ have run_. Every design tension resolves toward over-selection:
   invalidate the map and trigger a **full run**.
 - A stale or unreadable map means a **full run**, never a skipped one.
 
-**We never skip a test whose behavior your change could alter — and when we
+**We never skip a test whose behavior your change could alter -- and when we
 can't be sure, we run it.**
 
 ## Supported runners
@@ -87,9 +87,9 @@ for node:test, and scenario-level selection for cucumber-js.
 
 | Runner                     | Per-file          | Per-test / scenario |
 | -------------------------- | ----------------- | ------------------- |
-| Any command (generic wrap) | yes (direct-exec) | —                   |
+| Any command (generic wrap) | yes (direct-exec) | --                  |
 | node:test                  | yes (generic)     | yes (`--adapter`)   |
-| cucumber-js                | —                 | yes (`--adapter`)   |
+| cucumber-js                | --                | yes (`--adapter`)   |
 | Mocha                      | yes (generic, JS) | later               |
 | Vitest                     | yes (`--adapter`) | later               |
 | Jest                       | yes (`--adapter`) | later               |
@@ -100,7 +100,7 @@ for node:test, and scenario-level selection for cucumber-js.
 | Package                     | Purpose                                                                  |
 | --------------------------- | ------------------------------------------------------------------------ |
 | `covsel`                    | The CLI                                                                  |
-| `@covsel/core`              | Observer · Mapper · Store · Selector · Policy + the versioned map schema |
+| `@covsel/core`              | Observer , Mapper , Store , Selector , Policy + the versioned map schema |
 | `@covsel/adapter-generic`   | Wrap-any-command adapter (whole-file)                                    |
 | `@covsel/adapter-vitest`    | Vitest adapter (records via Vitest's own V8 coverage)                    |
 | `@covsel/adapter-jest`      | Jest adapter (records via Jest's own coverage)                           |
@@ -112,8 +112,8 @@ for node:test, and scenario-level selection for cucumber-js.
 ## Documentation
 
 Full docs: **https://waviisoft.github.io/covsel/** (source in [`docs/`](./docs)).
-Running covsel in CI — publishing the map on your default branch, restoring it on
-pull requests, and merging sharded runs — is covered in the
+Running covsel in CI -- publishing the map on your default branch, restoring it on
+pull requests, and merging sharded runs -- is covered in the
 [CI guide](https://waviisoft.github.io/covsel/guide/ci).
 
 ## Development
@@ -126,13 +126,13 @@ pnpm lint && pnpm typecheck
 pnpm docs:dev      # run the docs site locally
 ```
 
-Node ≥ 22 required. See [CONTRIBUTING.md](./CONTRIBUTING.md).
+Node >= 22 required. See [CONTRIBUTING.md](./CONTRIBUTING.md).
 
 ## Prior art & credits
 
 covsel stands on the shoulders of [pytest-testmon] (Python),
 [Ekstazi](http://ekstazi.org) and STARTS (Java), and
-[Crystalball](https://github.com/toptal/crystalball) (Ruby) — and on
+[Crystalball](https://github.com/toptal/crystalball) (Ruby) -- and on
 `v8-to-istanbul` and the Istanbul ecosystem for source-map remapping.
 
 [pytest-testmon]: https://testmon.org

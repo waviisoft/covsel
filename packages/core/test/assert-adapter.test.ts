@@ -4,7 +4,7 @@ import { type Adapter, assertAdapter } from '../src/index.js';
 
 /**
  * The contract's runtime gate. Everything here is a module covsel did not
- * compile — the compiler cannot help, and a wrong answer is expensive: an
+ * compile -- the compiler cannot help, and a wrong answer is expensive: an
  * adapter accepted but unable to drive its runner records that its tests cover
  * nothing, which silently skips them on every diff after that.
  */

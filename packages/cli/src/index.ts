@@ -20,7 +20,7 @@ import {
 
 import { DEFAULT_ADAPTER, loadAdapter } from './adapters.js';
 
-const HELP = `covsel — runtime-coverage test impact analysis for any JS/TS runner
+const HELP = `covsel -- runtime-coverage test impact analysis for any JS/TS runner
 
 Usage:
   covsel record [--adapter <name>] -- <command>   Run the suite and build the map
@@ -35,7 +35,7 @@ record wraps a runner and observes each test file in its own process to learn
 which sources it executes. affected prints those test files a diff can affect,
 so \`<runner> $(covsel affected)\` runs only what is needed.
 
-covsel never skips a test whose behavior your change could alter — and when it
+covsel never skips a test whose behavior your change could alter -- and when it
 can't be sure, it runs it (fail-open). Map schema v${MAP_SCHEMA_VERSION}.
 `;
 
@@ -91,7 +91,9 @@ async function loadConfigFor(cwd: string, adapter: Adapter): Promise<CovselConfi
 
 function reportSelection(result: AffectedResult): void {
   if (result.fullRun) {
-    err(`covsel: full run — ${result.reason ?? 'map cannot be trusted for this diff'}\n`);
+    err(
+      `covsel: full run -- ${result.reason ?? 'map cannot be trusted for this diff'}\n`,
+    );
   } else if (result.tests.length === 0) {
     err('covsel: no affected tests\n');
   }

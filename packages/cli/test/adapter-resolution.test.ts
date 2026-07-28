@@ -13,7 +13,7 @@ import { adapterSpecifiers, loadAdapter } from '../src/adapters.js';
  * One question this environment cannot answer, and no test here may ask:
  * whether a `@covsel/*` package is installed in a given directory. Vitest
  * aliases every workspace package to its source for these tests, so those
- * specifiers resolve from anywhere — a fixture would be answering about the
+ * specifiers resolve from anywhere -- a fixture would be answering about the
  * workspace rather than about the project. Questions of that shape go to a real
  * `node` process instead, in `built-artifact.test.ts`; fixtures here use names
  * the workspace does not define.
@@ -99,7 +99,7 @@ describe('adapter resolution', () => {
   it('resolves an ESM-only package whose exports map has no require condition', async () => {
     // The standard CJS resolver cannot see this shape at all, and falling back
     // to a bare import would resolve against covsel's own location instead of
-    // the project's — reporting an adapter the project has installed as missing.
+    // the project's -- reporting an adapter the project has installed as missing.
     const cwd = mkdtempSync(join(tmpdir(), 'covsel-resolve-'));
     projects.push(cwd);
     writeFileSync(join(cwd, 'package.json'), '{\n  "name": "host"\n}\n');
@@ -119,7 +119,7 @@ describe('adapter resolution', () => {
 
   it('resolves from the project, not from covsel', async () => {
     // The same short name installed in two projects must give each project its
-    // own copy — the case a bare import, resolved against covsel's own location
+    // own copy -- the case a bare import, resolved against covsel's own location
     // on disk, would get wrong for a global install or inside a monorepo.
     const one = project({ '@covsel/adapter-dup': adapterModule('first', 'adapter') });
     const two = project({ '@covsel/adapter-dup': adapterModule('second', 'adapter') });
@@ -153,7 +153,7 @@ describe('adapter resolution', () => {
 
   it("surfaces a package's own import failure instead of calling it missing", async () => {
     // A dependency the adapter itself cannot import must not read as "you have
-    // not installed the adapter" — the fix for each is completely different.
+    // not installed the adapter" -- the fix for each is completely different.
     const cwd = project({
       '@covsel/adapter-broken': "import 'a-module-that-does-not-exist';\n",
     });

@@ -1,5 +1,5 @@
 // End-to-end proof of the covsel record -> affected loop against node:test using
-// the generic NODE_V8_COVERAGE path — zero runner integration, no coverage
+// the generic NODE_V8_COVERAGE path -- zero runner integration, no coverage
 // provider. Copies this example into a throwaway git repo, records the map, then
 // asserts selection under a series of edits. Run with
 // `pnpm --filter @covsel/example-node-test-basic e2e` after a build.
@@ -60,7 +60,7 @@ try {
   }
   writeFileSync(join(tmp, '.gitignore'), '.covsel/\nnode_modules/\n');
   // covsel ships no adapters, so the throwaway project needs the one this
-  // example installs — reuse the example's own resolved copy.
+  // example installs -- reuse the example's own resolved copy.
   symlinkSync(join(exampleDir, 'node_modules'), join(tmp, 'node_modules'), 'dir');
 
   git(tmp, ['init', '-q', '-b', 'main']);

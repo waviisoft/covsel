@@ -1,5 +1,5 @@
 /**
- * @covsel/adapter-jest — Jest support for covsel.
+ * @covsel/adapter-jest -- Jest support for covsel.
  *
  * Jest evaluates code through its own transformer and module registry, so raw
  * NODE_V8_COVERAGE at the process boundary cannot be trusted for Jest. The dump
@@ -156,7 +156,7 @@ export function createJestRecorder(init: JestRecorderInit): Recorder {
           ) as Record<string, CoverageFinalEntry>;
         } catch {
           throw new Error(
-            `no coverage report produced for ${testFile} — does the jest config ` +
+            `no coverage report produced for ${testFile} -- does the jest config ` +
               `override coverageReporters or coverageDirectory?`,
           );
         }

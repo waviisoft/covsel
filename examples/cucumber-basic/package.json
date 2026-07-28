@@ -2,7 +2,7 @@
   "name": "@covsel/example-cucumber-basic",
   "version": "0.0.0",
   "private": true,
-  "description": "End-to-end example: covsel record \u2192 affected selecting individual cucumber-js scenarios",
+  "description": "End-to-end example: covsel record -> affected selecting individual cucumber-js scenarios",
   "license": "MIT",
   "author": "WAVIISoft, LLC",
   "type": "module",

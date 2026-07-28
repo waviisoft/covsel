@@ -1,14 +1,14 @@
 # Adapters
 
-An **adapter** is the only runner-specific part of covsel. Everything else — the
-map schema, the selector, the fail-open policy — is shared. An adapter is a
+An **adapter** is the only runner-specific part of covsel. Everything else -- the
+map schema, the selector, the fail-open policy -- is shared. An adapter is a
 single object implementing the `Adapter` interface from `@covsel/core`, and it
 does two things:
 
 1. **Observe** which source files a test file executes, so `covsel record` can
    build the map.
 2. **Format** a selection as the runner's input (at file level, a plain list of
-   test files) — or, where the runner can be narrowed below file level, run that
+   test files) -- or, where the runner can be narrowed below file level, run that
    selection itself.
 
 Adapters depend on `@covsel/core` only.
@@ -23,7 +23,7 @@ npm install --save-dev covsel @covsel/adapter-vitest
 covsel record --adapter vitest -- vitest run
 ```
 
-With no `--adapter`, covsel uses the name `generic` — which still means
+With no `--adapter`, covsel uses the name `generic` -- which still means
 `@covsel/adapter-generic` has to be installed. Nothing is bundled, so most
 projects carry exactly the adapter they use instead of five runners' worth of
 code they don't.
@@ -44,7 +44,7 @@ third-party one, so you can pin, fork, or replace any of them.
 An adapter that resolves but is not really an adapter is rejected before anything
 is recorded, naming the capability it is missing. That is deliberate: covsel's
 promise is that it never skips a test your change could affect, and a recorder
-that silently produces nothing would record that your tests cover nothing — which
+that silently produces nothing would record that your tests cover nothing -- which
 would skip all of them on every diff afterwards.
 
 ## How covsel observes coverage
@@ -55,14 +55,14 @@ and which one an adapter uses depends on the runner:
 - **`NODE_V8_COVERAGE` process mode** (the [generic](/guide/adapters/generic)
   adapter). Run one test file in its own process with `NODE_V8_COVERAGE` set and
   read the raw V8 dump. This works when the runner **executes your source
-  directly**, so the coverage records real `file://` paths — for example
+  directly**, so the coverage records real `file://` paths -- for example
   `node --test`, or Mocha on plain JavaScript.
 
 - **The runner's own coverage report** (the [Vitest](/guide/adapters/vitest) and
   [Jest](/guide/adapters/jest) adapters). Runners that **transform sources before
   executing them** (Vitest via vite-node, Jest via its transformer) evaluate the
   transformed code through their own module loader, so raw `NODE_V8_COVERAGE` at
-  the process boundary cannot describe your `src/**` — under Vitest it does not
+  the process boundary cannot describe your `src/**` -- under Vitest it does not
   see them at all, and under Jest it names them but reports offsets into the
   transformed code. For these, the adapter enables the runner's built-in
   coverage, which remaps execution back to your sources through the runner's
@@ -73,26 +73,26 @@ of covsel is identical regardless of which path recorded the map.
 
 ## Available adapters
 
-| Adapter (install separately) | Runner                  | How it records                     | Status    |
-| ---------------------------- | ----------------------- | ---------------------------------- | --------- |
-| `@covsel/adapter-generic`    | any direct-exec command | `NODE_V8_COVERAGE` process         | published |
-| `@covsel/adapter-vitest`     | Vitest                  | Vitest's own V8 coverage           | published |
-| `@covsel/adapter-jest`       | Jest                    | Jest's own coverage                | published |
-| `@covsel/adapter-node-test`  | node:test               | inspector snapshot-diff (per-test) | published |
-| `@covsel/adapter-cucumber`   | cucumber-js             | inspector snapshot-diff (scenario) | published |
-| _(planned)_                  | Mocha · Playwright · …  | generic wrap / lifecycle shim      | later     |
+| Adapter (install separately) | Runner                   | How it records                     | Status    |
+| ---------------------------- | ------------------------ | ---------------------------------- | --------- |
+| `@covsel/adapter-generic`    | any direct-exec command  | `NODE_V8_COVERAGE` process         | published |
+| `@covsel/adapter-vitest`     | Vitest                   | Vitest's own V8 coverage           | published |
+| `@covsel/adapter-jest`       | Jest                     | Jest's own coverage                | published |
+| `@covsel/adapter-node-test`  | node:test                | inspector snapshot-diff (per-test) | published |
+| `@covsel/adapter-cucumber`   | cucumber-js              | inspector snapshot-diff (scenario) | published |
+| _(planned)_                  | Mocha , Playwright , ... | generic wrap / lifecycle shim      | later     |
 
 The generic, Vitest, and Jest adapters record at whole-file granularity. The
 node:test and cucumber-js adapters record each **test** or **scenario**
-individually and run only the affected ones — which is the only selection
+individually and run only the affected ones -- which is the only selection
 cucumber-js has.
 
 ## Writing an adapter
 
 Adapters are the primary community contribution surface. Each is one exported
-object implementing the `Adapter` interface from `@covsel/core` — identity,
+object implementing the `Adapter` interface from `@covsel/core` -- identity,
 selection formatting, and the recorder that produces the executed source list,
-plus whatever optional capabilities the runner supports — and proves itself
+plus whatever optional capabilities the runner supports -- and proves itself
 against the shared conformance suite in `@covsel/conformance`, the same suite
 every adapter above runs. Nothing distinguishes one covsel publishes from one
 you publish: both are packages a project installs, resolved the same way. See

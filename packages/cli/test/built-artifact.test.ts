@@ -16,7 +16,7 @@ import { beforeAll, describe, expect, it } from 'vitest';
 /**
  * Dynamic resolution is a dynamic `import()`, and the CLI ships a CommonJS build
  * as well as an ESM one. A bundler targeting an older Node would rewrite that
- * import into a `require`, which cannot load an ESM-only adapter — so this runs
+ * import into a `require`, which cannot load an ESM-only adapter -- so this runs
  * the built CJS artifact rather than the sources, which is the only place that
  * regression would show up.
  */
@@ -35,7 +35,7 @@ function newestSource(): number {
 
 beforeAll(() => {
   // A stale bundle would pass this test while the shipped code had changed
-  // underneath it, which is the one outcome that makes the test worthless — so
+  // underneath it, which is the one outcome that makes the test worthless -- so
   // rebuild when it is missing or older than the sources rather than trusting
   // whatever the last build left behind.
   if (!existsSync(cjsBundle) || statSync(cjsBundle).mtimeMs < newestSource()) {
@@ -46,7 +46,7 @@ beforeAll(() => {
 /**
  * The child's environment, minus the resolution shortcuts this repo's tooling
  * sets. Vitest's workers export `NODE_PATH` pointing at pnpm's flat store, where
- * every workspace package is visible from any directory — a child inheriting it
+ * every workspace package is visible from any directory -- a child inheriting it
  * would resolve adapters no real project has installed, and these tests would be
  * answering about this workspace instead of about a user's machine.
  */

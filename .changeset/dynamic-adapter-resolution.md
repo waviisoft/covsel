@@ -12,8 +12,8 @@ Resolve every adapter from the project that installed it. `covsel` now ships
 none of them.
 
 **Breaking, hence the major bump on `covsel`: installing the CLI is no longer
-enough.** Install the adapter for your runner alongside it —
-`npm install --save-dev covsel @covsel/adapter-vitest` — including
+enough.** Install the adapter for your runner alongside it --
+`npm install --save-dev covsel @covsel/adapter-vitest` -- including
 `@covsel/adapter-generic` for the zero-integration wrap that `--adapter`
 defaults to. Until now the CLI depended on all five adapter packages and
 imported them statically, so every install carried four runners' worth of code
@@ -23,7 +23,7 @@ at all without a pull request adding it to a map in the CLI.
 `--adapter mocha` now looks for `@covsel/adapter-mocha`, then
 `covsel-adapter-mocha`; a name that is already a specifier
 (`--adapter @acme/our-adapter`) is imported as written. `record`, `affected`,
-and `run` all resolve the same way, and nothing is privileged — the adapters
+and `run` all resolve the same way, and nothing is privileged -- the adapters
 covsel publishes load through exactly the same path as one you publish, so a
 project can pin, fork, or replace any of them.
 
@@ -39,7 +39,7 @@ value to `Adapter` or throws naming the capability that is missing or mistyped.
 Core owns the interface, so it owns the runtime check for it. The strictness is
 a fail-open concern rather than tidiness: an adapter accepted but unable to
 drive its runner yields a recorder that produces nothing, and a map recording
-that a test covers nothing skips that test on every diff afterwards — so a
+that a test covers nothing skips that test on every diff afterwards -- so a
 module that does not satisfy the contract is refused before recording starts.
 
 Each adapter package now also exports its adapter as `adapter`, which is the

@@ -1,5 +1,5 @@
 /**
- * @covsel/adapter-cucumber — scenario-level selection for cucumber-js.
+ * @covsel/adapter-cucumber -- scenario-level selection for cucumber-js.
  *
  * cucumber-js has no built-in test selection, so this is the case covsel exists
  * for: record what each *scenario* executes, then run only the scenarios a diff

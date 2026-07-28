@@ -1,6 +1,6 @@
 /**
  * The runtime side of the adapter contract. The interface itself is compile-time
- * only, which is enough while every adapter is built against it — but a consumer
+ * only, which is enough while every adapter is built against it -- but a consumer
  * that loads an adapter it did not compile against, from a package it does not
  * control, has to be able to ask whether what it got is really an adapter.
  */
@@ -57,7 +57,7 @@ export function assertAdapter(value: unknown, source: string): asserts value is 
     }
     if (globs.length === 0) {
       // An empty list would discover no tests at all, which reads as "this
-      // project has no tests" and selects nothing — the one outcome covsel
+      // project has no tests" and selects nothing -- the one outcome covsel
       // must never produce quietly.
       fail('defaultTestGlobs is empty, so no test would ever be discovered');
     }
