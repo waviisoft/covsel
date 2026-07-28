@@ -1,5 +1,5 @@
 import { spawnSync } from 'node:child_process';
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
@@ -8,7 +8,9 @@ import {
   type AffectedResult,
   type CoverageMap,
   type CovselConfig,
+  filterUnignored,
   hashFileContents,
+  isDirtyWorkTree,
   MAP_SCHEMA_VERSION,
   OBSERVES_EVERYTHING,
   resolveConfig,
@@ -120,7 +122,9 @@ function start(
 const temps: string[] = [];
 
 function tempDir(): string {
-  const dir = mkdtempSync(join(tmpdir(), 'covsel-watch-'));
+  // realpath, because on macOS os.tmpdir() is a symlink and fs.watch reports
+  // filenames relative to the resolved root.
+  const dir = mkdtempSync(join(realpathSync(tmpdir()), 'covsel-watch-'));
   temps.push(dir);
   return dir;
 }
@@ -147,12 +151,19 @@ describe('watchAffected', () => {
   });
 
   it('debounces a burst of writes into a single run', async () => {
-    const h = start(tempDir(), { select: async () => NOTHING, initialRun: false });
+    // Spaced wider than one tick but inside the quiet period, so this fails if
+    // the timer is not actually reset by each change.
+    const h = start(tempDir(), {
+      select: async () => NOTHING,
+      initialRun: false,
+      debounceMs: 60,
+    });
     for (const file of ['src/a.ts', 'src/a.ts', 'src/b.ts', 'src/a.ts', 'src/c.ts']) {
       h.source.change(file);
+      await new Promise((r) => setTimeout(r, 15));
     }
     await waitFor(() => h.runs.length === 1);
-    await quiesce();
+    await new Promise((r) => setTimeout(r, 200));
     expect(h.runs).toHaveLength(1);
     const change = h.events.find((e) => e.kind === 'change');
     expect(change?.kind === 'change' && change.paths.sort()).toEqual([
@@ -160,6 +171,25 @@ describe('watchAffected', () => {
       'src/b.ts',
       'src/c.ts',
     ]);
+    await h.stop();
+  });
+
+  it('runs anyway when writes never stop, rather than debouncing forever', async () => {
+    // A neighbouring `tsc --watch` writing faster than the quiet period must not
+    // be able to hold the loop off indefinitely — that is indistinguishable from
+    // a watcher that has stopped selecting.
+    const h = start(tempDir(), {
+      select: async () => NOTHING,
+      initialRun: false,
+      debounceMs: 50,
+      maxWaitMs: 150,
+    });
+    const stream = setInterval(() => h.source.change('src/churn.ts'), 10);
+    try {
+      await waitFor(() => h.runs.length >= 1, 3000);
+    } finally {
+      clearInterval(stream);
+    }
     await h.stop();
   });
 
@@ -236,21 +266,58 @@ describe('watchAffected', () => {
     await h.stop();
   });
 
-  it('never re-triggers on its own map writes', async () => {
-    const config = resolveConfig({ store: { dir: 'custom-store' } });
-    const h = start(tempDir(), {
-      select: async () => NOTHING,
+  // The store dir is whatever the user wrote it as, while the watcher always
+  // reports a clean repo-relative path, so the two only line up once the
+  // configured value is resolved the way the store resolves it. Without that, a
+  // `--record` run's own map write wakes the loop that recorded it.
+  it.each(['custom-store', './custom-store', 'custom-store/'])(
+    'never re-triggers on its own map writes (store dir %s)',
+    async (dir) => {
+      const config = resolveConfig({ store: { dir } });
+      const h = start(tempDir(), {
+        select: async () => NOTHING,
+        initialRun: false,
+        config,
+      });
+      h.source.change('custom-store/map.json');
+      h.source.change('.git/index');
+      await quiesce();
+      expect(h.runs).toHaveLength(0);
+      h.source.change('src/a.ts');
+      await waitFor(() => h.runs.length === 1);
+      await h.stop();
+    },
+  );
+
+  it('survives a reporting callback that throws', async () => {
+    // onEvent is the caller's code running inside the loop, and the cycle is
+    // invoked detached from a timer — a throw here would otherwise surface as an
+    // unhandled rejection and take the host process down.
+    const source = fakeSource();
+    const runs: AffectedResult[] = [];
+    const controller = new AbortController();
+    const done = watchAffected({
+      cwd: tempDir(),
+      config: resolveConfig(),
+      debounceMs: DEBOUNCE,
+      createSource: source.factory,
+      signal: controller.signal,
       initialRun: false,
-      config,
+      onEvent: () => {
+        throw new Error('reporter exploded');
+      },
+      select: async () => NOTHING,
+      run: (selection) => {
+        runs.push(selection);
+        return 0;
+      },
     });
-    h.source.change('custom-store/map.json');
-    h.source.change('.git/index');
-    h.source.change('node_modules/pkg/index.js');
-    await quiesce();
-    expect(h.runs).toHaveLength(0);
-    h.source.change('src/a.ts');
-    await waitFor(() => h.runs.length === 1);
-    await h.stop();
+    source.change('src/a.ts');
+    await waitFor(() => runs.length === 1);
+    source.change('src/b.ts');
+    await waitFor(() => runs.length === 2);
+    controller.abort();
+    expect(await done).toBe(0);
   });
 
   it('stops loudly when the watcher dies instead of looking healthy', async () => {
@@ -311,14 +378,27 @@ describe('watchAffected', () => {
     });
 
     it('runs everything when git is unavailable', async () => {
-      // A directory that is not a work tree: the real selection path cannot
-      // compute a diff, so it must not conclude that nothing is affected.
+      // A directory that is not a work tree. The map has to be usable and
+      // commit-less, or the run would fall open on the missing map instead and
+      // this would pass without git ever being consulted.
       const cwd = tempDir();
       writeFileSync(join(cwd, 'a.test.js'), 'test\n');
+      mkdirSync(join(cwd, '.covsel'));
+      writeFileSync(
+        join(cwd, '.covsel/map.json'),
+        JSON.stringify({
+          schemaVersion: MAP_SCHEMA_VERSION,
+          granularity: 'file',
+          recordedAt: new Date().toISOString(),
+          sentinelHashes: {},
+          observed: [...OBSERVES_EVERYTHING],
+          entries: [{ test: { file: 'a.test.js' }, files: [] }],
+        }),
+      );
       const h = start(cwd);
       await waitFor(() => h.runs.length === 1);
       expect(h.runs[0]!.fullRun).toBe(true);
-      expect(h.runs[0]!.reason).toBeDefined();
+      expect(h.runs[0]!.reason).toContain('git diff');
       await h.stop();
     });
 
@@ -350,11 +430,17 @@ describe('watchAffected', () => {
       writeFileSync(join(cwd, 'test/a.test.mjs'), 'import "../src/a.mjs";\n');
       writeFileSync(join(cwd, 'test/b.test.mjs'), 'import "../src/b.mjs";\n');
       writeFileSync(join(cwd, 'package.json'), '{ "name": "fixture" }\n');
-      writeFileSync(join(cwd, '.gitignore'), 'out/\n.covsel/\n');
+      // tracked.log is committed *and* matched by .gitignore — git ignores rules
+      // for files it already tracks, and so must the watcher.
+      writeFileSync(join(cwd, 'tracked.log'), 'tracked\n');
+      writeFileSync(join(cwd, '.gitignore'), 'out/\n*.log\n.covsel/\n');
       git(cwd, ['init', '-q']);
       git(cwd, ['config', 'user.email', 'test@example.com']);
       git(cwd, ['config', 'user.name', 'covsel test']);
       git(cwd, ['add', '.']);
+      // `git add .` skips ignored paths, so tracking one takes -f. That is
+      // exactly the situation this fixture needs to represent.
+      git(cwd, ['add', '-f', 'tracked.log']);
       git(cwd, ['commit', '-q', '-m', 'fixture']);
       const commit = spawnSync('git', ['rev-parse', 'HEAD'], {
         cwd,
@@ -446,7 +532,7 @@ describe('watchAffected', () => {
       await h.stop();
     });
 
-    it('ignores writes to gitignored paths but not to tracked ones', async () => {
+    it('ignores writes to gitignored paths', async () => {
       const cwd = fixture();
       const h = start(cwd, { config, initialRun: false });
       mkdirSync(join(cwd, 'out'));
@@ -457,6 +543,38 @@ describe('watchAffected', () => {
       h.source.change('src/a.mjs');
       await waitFor(() => h.runs.length === 1);
       await h.stop();
+    });
+
+    it('runs on a tracked file even when an ignore rule matches its name', async () => {
+      // git does not apply ignore rules to files it tracks, so such a file does
+      // appear in a diff and must not be filtered out of the trigger.
+      const cwd = fixture();
+      const h = start(cwd, { config, initialRun: false });
+      writeFileSync(join(cwd, 'tracked.log'), 'tracked\nmore\n');
+      h.source.change('tracked.log');
+      await waitFor(() => h.runs.length === 1);
+      await h.stop();
+    });
+
+    // A map is stamped with HEAD, so one recorded from an edited tree describes
+    // code that commit does not contain — and a later checkout of exactly HEAD
+    // would trust it. This is what `covsel watch --record` checks before it
+    // records, since in watch mode the tree is dirty most of the time.
+    it('isDirtyWorkTree sees uncommitted work, and says dirty when git cannot answer', () => {
+      const cwd = fixture();
+      expect(isDirtyWorkTree(cwd)).toBe(false);
+      writeFileSync(join(cwd, 'src/a.mjs'), 'export const a = 99;\n');
+      expect(isDirtyWorkTree(cwd)).toBe(true);
+      expect(isDirtyWorkTree(tempDir())).toBe(true);
+    });
+
+    it('filterUnignored keeps tracked files and drops only ignored ones', async () => {
+      const cwd = fixture();
+      expect(
+        filterUnignored(cwd, ['src/a.mjs', 'out/bundle.js', 'tracked.log']).sort(),
+      ).toEqual(['src/a.mjs', 'tracked.log']);
+      // A directory git cannot answer about keeps every path.
+      expect(filterUnignored(tempDir(), ['out/bundle.js'])).toEqual(['out/bundle.js']);
     });
   });
 

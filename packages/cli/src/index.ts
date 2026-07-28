@@ -8,6 +8,7 @@ import {
   type CoverageMap,
   type CovselConfig,
   loadConfig,
+  isDirtyWorkTree,
   isUsableMap,
   loadRawConfig,
   MAP_SCHEMA_VERSION,
@@ -259,6 +260,18 @@ async function cmdWatch(argv: string[]): Promise<number> {
   // to give.
   const record = hasFlag(opts, 'record')
     ? async (): Promise<{ ok: boolean; reason?: string }> => {
+        // A map is stamped with HEAD, so recording from an edited tree would
+        // describe code that commit does not contain — and a later checkout of
+        // exactly HEAD would then trust it and could skip a test. Waiting for a
+        // commit costs freshness; recording anyway costs the guarantee.
+        if (isDirtyWorkTree(cwd)) {
+          return {
+            ok: false,
+            reason:
+              'the working tree has uncommitted changes, so a fresh map ' +
+              'would describe a state no commit names',
+          };
+        }
         const result = await recordMap({
           cwd,
           config,

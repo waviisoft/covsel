@@ -57,6 +57,12 @@ the default is 200ms.
 covsel watch --debounce 500 -- node --test
 ```
 
+The quiet period restarts on each change, but only up to a ceiling — five
+debounce periods, and never less than a second. Something writing continuously
+next door (a `tsc --watch` into a directory git does not ignore) would otherwise
+postpone every run indefinitely, which from the outside is indistinguishable
+from a watcher that has stopped selecting.
+
 Changes that arrive _during_ a run are collected and produce exactly one
 follow-up run when it finishes. Runs never overlap and never queue up behind
 each other.
@@ -76,10 +82,17 @@ When you want the map kept fresh anyway:
 covsel watch --record -- node --test
 ```
 
-With `--record`, a run that passes is followed by a re-record. A run that fails
-is not — coverage from a failing suite is not something to record. If the
-re-record itself fails, the previous map stands and watch keeps going; the next
-selection is then computed against an older commit, which over-selects.
+With `--record`, a run that passes is followed by a re-record — but only when the
+working tree is clean. A map is stamped with the commit it was recorded on, so
+one recorded from an edited tree would claim to describe code that commit does
+not contain; check that commit out again later and covsel would trust a map that
+never described it, and could skip a test. So `--record` refreshes the map at
+each commit rather than at each save, and says why when it declines.
+
+A run that fails is not followed by a re-record either — coverage from a failing
+suite is not something to record. Whenever a re-record is declined or fails, the
+previous map stands and watch keeps going; the next selection is then computed
+against an older commit, which over-selects.
 
 Use `covsel status` to see how old the map is and whether the next selection
 would be a full run.

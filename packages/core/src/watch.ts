@@ -1,12 +1,12 @@
 import { watch as fsWatch } from 'node:fs';
-import { sep } from 'node:path';
+import { join, sep } from 'node:path';
 
 import type { AffectedResult, SelectInit } from './commands.js';
 import { selectAffected } from './commands.js';
 import type { CovselConfig } from './config.js';
 import { discoverTestFiles } from './discover.js';
 import { filterUnignored } from './git.js';
-import { isExcludedRel } from './paths.js';
+import { toRepoRelative } from './paths.js';
 
 /** How the watch loop learns that something on disk changed. */
 export interface WatchSourceHandlers {
@@ -76,6 +76,14 @@ export interface WatchInit extends SelectInit {
   record?: () => Promise<{ ok: boolean; reason?: string }>;
   /** Quiet period after the last change before running. Defaults to 200ms. */
   debounceMs?: number;
+  /**
+   * Longest a change may sit unrun while later changes keep resetting the quiet
+   * period. Without a ceiling, anything writing faster than the debounce — a
+   * `tsc --watch` next door — would hold the loop off indefinitely, which looks
+   * exactly like a watcher that has stopped selecting. Defaults to five debounce
+   * periods, and never less than a second.
+   */
+  maxWaitMs?: number;
   /** Run once before the first change arrives. Defaults to true. */
   initialRun?: boolean;
   onEvent?: (event: WatchEvent) => void;
@@ -106,14 +114,22 @@ function fallOpen(cwd: string, config: CovselConfig, reason: string): AffectedRe
 }
 
 /**
- * True for paths whose changes can never affect selection: the excluded
- * directories, and the store the loop writes its own map into. Filtering these
- * is what keeps a re-record from waking the watcher that triggered it.
+ * True for the two kinds of path covsel writes to or reads through itself: git's
+ * own directory, and the store the loop writes its map into. Filtering the store
+ * is what keeps a re-record from waking the watcher that triggered it, and git
+ * does not report its own internals as ignored, so neither can be left to the
+ * ignore filter.
+ *
+ * Nothing else is dropped here. Build output is dropped by being gitignored,
+ * which is the same test selection applies — so a path a diff would show, and a
+ * selection would therefore act on, always reaches the loop.
  */
-function isNoise(rel: string, storeDir: string): boolean {
-  if (isExcludedRel(rel)) return true;
-  const dir = storeDir.replace(/\/+$/, '');
-  return dir !== '' && (rel === dir || rel.startsWith(`${dir}/`));
+function isNoise(cwd: string, rel: string, storeDir: string): boolean {
+  if (rel.split('/').includes('.git')) return true;
+  // The configured dir is whatever the user wrote ('.covsel', './out/covsel',
+  // an absolute path); resolve it the way the store does before comparing.
+  const dir = toRepoRelative(cwd, join(cwd, storeDir));
+  return dir !== undefined && (rel === dir || rel.startsWith(`${dir}/`));
 }
 
 /**
@@ -133,13 +149,24 @@ function isNoise(rel: string, storeDir: string): boolean {
 export async function watchAffected(init: WatchInit): Promise<number> {
   const { cwd, config } = init;
   const debounceMs = init.debounceMs ?? DEFAULT_DEBOUNCE_MS;
+  const maxWaitMs = init.maxWaitMs ?? Math.max(1000, debounceMs * 5);
   const select = init.select ?? selectAffected;
-  const emit = (event: WatchEvent): void => init.onEvent?.(event);
+  // Reporting is the caller's code running inside the loop; if it throws, that
+  // is the caller's bug and must not become a dead watcher.
+  const emit = (event: WatchEvent): void => {
+    try {
+      init.onEvent?.(event);
+    } catch {
+      /* ignore */
+    }
+  };
   const since = init.since !== undefined ? { since: init.since } : {};
 
   let source: WatchSource | undefined;
   let pending = new Set<string>();
   let unnamed = false;
+  /** When the oldest unrun change in the current batch arrived. */
+  let batchStartedAt: number | undefined;
   let timer: NodeJS.Timeout | undefined;
   let running = false;
   let stopped = false;
@@ -167,10 +194,14 @@ export async function watchAffected(init: WatchInit): Promise<number> {
   const schedule = (): void => {
     if (stopped || running) return;
     if (timer !== undefined) clearTimeout(timer);
+    // Resetting the quiet period on every change is what collapses a burst into
+    // one run, but it must not be able to postpone a run forever.
+    const waited = batchStartedAt === undefined ? 0 : Date.now() - batchStartedAt;
+    const delay = Math.max(0, Math.min(debounceMs, maxWaitMs - waited));
     timer = setTimeout(() => {
       timer = undefined;
       void cycle();
-    }, debounceMs);
+    }, delay);
   };
 
   /** One selection-and-run pass over everything that changed since the last one. */
@@ -181,6 +212,7 @@ export async function watchAffected(init: WatchInit): Promise<number> {
     const sawUnnamed = unnamed;
     pending = new Set();
     unnamed = false;
+    batchStartedAt = undefined;
     try {
       // An unnamed change carries no path to judge, so it always runs. Named
       // paths that git ignores cannot appear in a diff, and dropping them is
@@ -192,6 +224,14 @@ export async function watchAffected(init: WatchInit): Promise<number> {
         emit({ kind: 'change', paths: relevant, unnamed: sawUnnamed });
       }
       await runOnce();
+    } catch (e) {
+      // Nothing a cycle does may escape it: the timer invokes this detached, so
+      // an unhandled rejection here would take the host process down rather than
+      // the loop. An embedder's onEvent throwing is the way in.
+      emit({
+        kind: 'warning',
+        reason: `watch cycle failed: ${e instanceof Error ? e.message : String(e)}`,
+      });
     } finally {
       running = false;
       if (!stopped && (pending.size > 0 || unnamed)) schedule();
@@ -245,8 +285,9 @@ export async function watchAffected(init: WatchInit): Promise<number> {
     change(path) {
       if (stopped) return;
       if (path === undefined) unnamed = true;
-      else if (isNoise(path, config.store.dir)) return;
+      else if (isNoise(cwd, path, config.store.dir)) return;
       else pending.add(path);
+      batchStartedAt ??= Date.now();
       schedule();
     },
     error(error) {

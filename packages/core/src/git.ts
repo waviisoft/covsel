@@ -70,6 +70,26 @@ function mergeBase(cwd: string, a: string, b: string): string | undefined {
 }
 
 /**
+ * True when the work tree differs from HEAD in any way — staged, unstaged, or
+ * untracked. A map recorded from such a tree describes a state no commit names,
+ * yet it is stamped with HEAD, so a later checkout of exactly HEAD would trust a
+ * map that never described it. Callers that record on their own schedule check
+ * this first.
+ *
+ * A git that cannot answer reads as dirty: declining to record leaves the
+ * previous map in place, which over-selects, while recording anyway would write
+ * one that cannot be vouched for.
+ */
+export function isDirtyWorkTree(cwd: string): boolean {
+  try {
+    const res = git(cwd, ['status', '--porcelain']);
+    return !res.ok || res.stdout.trim() !== '';
+  } catch {
+    return true;
+  }
+}
+
+/**
  * Drop the paths git ignores, keeping the rest in order. A file git ignores can
  * never show up in a diff, so a change to one cannot affect selection — which is
  * what keeps a runner's own output from re-triggering a watch loop.
