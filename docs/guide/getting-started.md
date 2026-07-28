@@ -101,6 +101,25 @@ Selection needs no configuration once an adapter is installed. To refine, add a 
 Any change matching `sentinels` forces a full run; see
 [the fail-open guarantee](/guide/fail-open).
 
+### Bundled code
+
+If your tests exercise their sources through a bundle, covsel needs the build's
+source maps to know what that bundle is — a script it cannot map back to a
+source fails the recording rather than crediting nothing. Build with source maps
+on, and tell covsel where to find the assets when the runner only ever names
+them by URL:
+
+```jsonc
+{
+  "sourceMaps": {
+    // Serve-time URLs → the directory holding the built assets.
+    "buildDirs": [{ "urlPrefix": "http://localhost:5173/", "dir": "dist" }],
+    "http": true, // fetch scripts and maps that are not on disk
+    "allowUnmappable": [], // scripts you accept never being able to map
+  },
+}
+```
+
 ### Granularity
 
 At the default `block` granularity, covsel records which **functions** each test

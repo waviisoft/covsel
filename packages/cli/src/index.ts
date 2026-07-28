@@ -139,6 +139,15 @@ async function cmdRecord(argv: string[]): Promise<number> {
     onEvent: (e) => {
       if (e.kind === 'recorded') {
         err(`  recorded ${e.file} (${e.tests} tests, ${e.sources} sources)\n`);
+        // Every allowed script is coverage this entry does not have. Saying so
+        // on each recording is what keeps the accommodation from becoming the
+        // silent hole it exists to replace.
+        if (e.allowedUnmappable) {
+          err(
+            `  UNMAPPED ${e.file}: accepted ${e.allowedUnmappable.join(', ')} ` +
+              `(sourceMaps.allowUnmappable); nothing they executed is recorded\n`,
+          );
+        }
       } else err(`  FAILED   ${e.file}: ${e.reason}\n`);
     },
   });

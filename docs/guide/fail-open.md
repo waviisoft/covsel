@@ -16,6 +16,10 @@ have run_. So every design tension resolves toward **over-selection**:
   A map says which files each test covered; outside what the recorder was able
   to watch, "not covered" is a fact about where it was looking, not about what
   ran.
+- An executed script covsel **cannot map back to any source** fails the
+  recording, and no map is written. A bundle with no source map covers nothing
+  that can be named, and an entry that credits nothing is read as a test that
+  covers nothing.
 - Non-JS dependencies coverage can't see (fixtures, snapshots, templates) are
   handled by user-declared `alwaysRun` globs — and, later, by tracking fs reads.
 
@@ -49,6 +53,36 @@ guess ("everything") is the one that loses tests.
 Merged shard maps keep the scope only when every shard agrees. Shards that
 disagree produce a map claiming nothing, which falls open on any change, rather
 than one shard's coverage vouching for paths another was never watching.
+
+## A script that cannot be mapped
+
+Coverage against a bundle is not coverage of anything anyone wrote. If the
+build published no source map, there is no way back to the sources behind it,
+and the honest answer is that the recording failed — not that those tests cover
+nothing. This is reachable from a stock bundler setup: `vite build` emits no
+source map unless you ask for one, and `sourcemap: 'hidden'` writes the map but
+strips the comment pointing at it. Recording against such a build used to
+produce entries that existed and credited nothing, so editing the file every
+test executes selected zero tests.
+
+So a script that executed and resolves to no source in your repository fails the
+recording, naming the script, and no map is written. covsel looks for the map in
+every place a build publishes one: a `sourceMappingURL` comment naming a sidecar
+file, the same comment carrying the map inline as a `data:` URI, the
+conventional `<script>.map` neighbour when the comment was stripped, over HTTP
+for scripts a browser loaded from a dev server, and in a build directory the
+served URLs are mapped onto.
+
+Not everything that fails to map is a hole. Your own files are their own
+sources; vendored code under `node_modules` is covered by the lockfile sentinel
+rather than by coverage; and the runtime's own scripts are not your project's
+code. What fails is code built from this repository and handed back to the
+runner with no way to trace it home.
+
+Scripts that will genuinely never be mappable — a third-party widget on the page
+under test — can be accepted with `sourceMaps.allowUnmappable`. Each entry is a
+gap in the recording that you have chosen to accept, so `covsel record` names
+the scripts it let through every time it lets one through.
 
 ## How the map enforces it
 
