@@ -72,3 +72,15 @@ if (!isUsableMap(loaded)) {
 This is the difference between a toy and something a team trusts in CI: the
 failure mode is _wasted CI minutes_, never _a real regression that shipped
 green_.
+
+## In watch mode
+
+A long-running loop has one extra way to fail: it can keep looking healthy while
+selecting nothing. [Watch mode](/guide/watch) is built so it cannot. Change
+events decide only _when_ to select, never _what_ — every batch re-runs the same
+full selection against the git diff, so a coalesced, renamed, or unnamed event
+still gets a complete answer. Selection that cannot be computed falls open to a
+full run with the reason printed, every time and not just the first. A failing
+test run leaves the watcher alive. And a watcher that dies stops the loop with a
+non-zero exit rather than sitting idle, because a watcher that sees no changes
+cannot select anything.

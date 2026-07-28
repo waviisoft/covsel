@@ -1,7 +1,7 @@
 # Getting started
 
-Selection ships today: `covsel record`, `affected`, `run`, `status`, and
-`merge` — with function-level (block-hash) precision, per-test selection for
+Selection ships today: `covsel record`, `affected`, `run`, `watch`, `status`,
+and `merge` — with function-level (block-hash) precision, per-test selection for
 node:test, and scenario-level selection for cucumber-js. Running covsel in CI is
 covered in the [CI guide](/guide/ci).
 
@@ -26,7 +26,14 @@ covsel affected --since origin/main
 
 # 3. Run: run only those tests by wrapping the runner
 covsel run -- node --test
+
+# 4. Watch: keep running the affected tests as you edit
+covsel watch -- node --test
 ```
+
+[Watch mode](/guide/watch) drives the same selection continuously — one run per
+save, debounced, falling open to a full run whenever it cannot tell what a
+change affects.
 
 `covsel affected` prints a newline-separated file list, so you can also pipe it
 into any runner that accepts test files:

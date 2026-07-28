@@ -428,6 +428,40 @@ export interface RunInit extends SelectInit {
   command: string[];
 }
 
+export interface RunAffectedSelectionInit extends Omit<SelectionRunInit, 'selected'> {
+  adapter: Adapter;
+  selection: AffectedResult;
+}
+
+/**
+ * Run one already-computed selection. A full run invokes the command with no
+ * file filter, so the runner's own full suite is what runs; anything else goes
+ * through the adapter's narrowing. Callers that hold a selection already — a
+ * watch loop reruns one per change — run it here rather than reselecting.
+ */
+export function runAffectedSelection(init: RunAffectedSelectionInit): SelectionOutcome {
+  const { adapter, selection, command, cwd } = init;
+  const [bin, ...rest] = command;
+  if (bin === undefined) throw new Error('empty command');
+  if (selection.fullRun) {
+    const stdio = init.stdio ?? 'inherit';
+    const res =
+      stdio === 'inherit'
+        ? spawnSync(bin, rest, { cwd, stdio: 'inherit' })
+        : spawnSync(bin, rest, { cwd, encoding: 'utf8', maxBuffer: 64 * 1024 * 1024 });
+    if (res.error) throw res.error;
+    const output = `${res.stdout ?? ''}${res.stderr ?? ''}`.trim();
+    return { status: res.status ?? 1, ...(output ? { output } : {}) };
+  }
+  return runSelected({
+    adapter,
+    selected: selection.selected,
+    command,
+    cwd,
+    ...(init.stdio !== undefined ? { stdio: init.stdio } : {}),
+  });
+}
+
 /**
  * Run only the affected tests by wrapping the runner. On a full run the runner
  * is invoked with no file filter (its own full suite). On an empty non-full
@@ -439,16 +473,9 @@ export async function runAffected(
 ): Promise<number> {
   const selection = await selectAffected(init);
   onSelection?.(selection);
-  const [bin, ...rest] = init.command;
-  if (bin === undefined) throw new Error('empty command');
-  if (selection.fullRun) {
-    const res = spawnSync(bin, rest, { cwd: init.cwd, stdio: 'inherit' });
-    if (res.error) throw res.error;
-    return res.status ?? 1;
-  }
-  return runSelected({
+  return runAffectedSelection({
     adapter: init.adapter,
-    selected: selection.selected,
+    selection,
     command: init.command,
     cwd: init.cwd,
   }).status;
