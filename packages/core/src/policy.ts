@@ -1,7 +1,26 @@
-import type { CovselConfig } from './config.js';
+import { CONFIG_FILES, type CovselConfig } from './config.js';
 import type { Change, Policy } from './interfaces.js';
 import { makeMatcher, makeStrictMatcher } from './match.js';
 import { type CoverageMap, isUsableMap, type TestId } from './schema.js';
+
+/**
+ * covsel's own config, changed since the map was recorded.
+ *
+ * A map is only meaningful under the configuration it was recorded with.
+ * Narrowing `sourceGlobs` is the sharpest case: changes outside the new globs
+ * stop counting as changes at all, while the map's `observed` scope still
+ * covers them from the wider recording, so nothing else notices and the tests
+ * that cover those files are quietly skipped.
+ *
+ * This is checked ahead of the project's own `sentinels` rather than added to
+ * their defaults, because that list replaces wholesale when a project sets it —
+ * and a project that tightens its sentinels should not lose the one that
+ * protects the meaning of the map itself.
+ */
+function changedCovselConfig(changes: Change[]): string | undefined {
+  const names = new Set<string>(CONFIG_FILES);
+  return changes.find((c) => names.has(c.file))?.file;
+}
 
 /**
  * The first changed path the recording was not in a position to observe, if
@@ -28,6 +47,8 @@ export function unobservedChange(
 /**
  * Fail-open policy: every ambiguity resolves toward running more tests.
  *  - An unusable map, or any change to a sentinel file, forces a full run.
+ *  - A change to covsel's own config forces a full run: the map means what it
+ *    means only under the config it was recorded with.
  *  - A change outside what the recording could observe forces a full run.
  *  - Added/changed test files always run, even before they are in the map.
  */
@@ -42,6 +63,7 @@ export class FailOpenPolicy implements Policy {
 
   evaluate(map: CoverageMap | undefined, changes: Change[]): 'select' | 'full-run' {
     if (!isUsableMap(map)) return 'full-run';
+    if (changedCovselConfig(changes) !== undefined) return 'full-run';
     if (changes.some((c) => this.isSentinel(c.file))) return 'full-run';
     if (unobservedChange(map, changes) !== undefined) return 'full-run';
     return 'select';
@@ -62,6 +84,10 @@ export function fullRunReason(
 ): string {
   if (map === undefined) return 'no usable map recorded';
   if (!isUsableMap(map)) return 'recorded map is stale or has an incompatible schema';
+  const configChange = changedCovselConfig(changes);
+  if (configChange !== undefined) {
+    return `${configChange} changed, so the map was recorded under a different configuration`;
+  }
   const isSentinel = makeMatcher(config.sentinels);
   const hit = changes.find((c) => isSentinel(c.file));
   if (hit) return `sentinel changed: ${hit.file}`;

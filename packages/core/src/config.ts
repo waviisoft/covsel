@@ -33,6 +33,15 @@ export interface SourceMapConfig {
  * project needs no config file to get sensible zero-config selection.
  */
 export interface CovselConfig {
+  /**
+   * The adapter this project records with, by the same short name `--adapter`
+   * takes. Unset means the consumer's default, which is why this is the one
+   * field with no default here: covsel ships no adapters, so core cannot name
+   * one that is certain to be installed. `covsel init` writes it so the choice
+   * is made once rather than repeated on every invocation, and `--adapter`
+   * still wins over it.
+   */
+  adapter?: string;
   /** Globs identifying test files. */
   testGlobs: string[];
   /** Globs identifying source files whose changes can affect tests. */
@@ -82,6 +91,7 @@ export const DEFAULT_CONFIG: CovselConfig = {
  */
 export function resolveConfig(partial?: CovselConfigInput): CovselConfig {
   return {
+    ...(partial?.adapter !== undefined ? { adapter: partial.adapter } : {}),
     testGlobs: partial?.testGlobs ?? DEFAULT_CONFIG.testGlobs,
     sourceGlobs: partial?.sourceGlobs ?? DEFAULT_CONFIG.sourceGlobs,
     alwaysRun: partial?.alwaysRun ?? DEFAULT_CONFIG.alwaysRun,
@@ -93,12 +103,21 @@ export function resolveConfig(partial?: CovselConfigInput): CovselConfig {
 }
 
 /** Config file names looked up, in priority order. */
-const CONFIG_FILES = [
-  '.covsel.json',
+export const CONFIG_FILES = [
+  'covsel.json',
   'covsel.config.js',
   'covsel.config.mjs',
   'covsel.config.cjs',
 ] as const;
+
+/** The config file `loadConfig` would read from `cwd`, if any exists. */
+export function findConfigFile(cwd: string): string | undefined {
+  for (const name of CONFIG_FILES) {
+    const path = join(cwd, name);
+    if (existsSync(path)) return path;
+  }
+  return undefined;
+}
 
 /**
  * Read the user's config file from `cwd` without applying defaults, so callers

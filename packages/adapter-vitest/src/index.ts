@@ -20,6 +20,7 @@ import {
   type CovselConfig,
   type ExecRegion,
   hashFileContents,
+  isPackageInstalled,
   makeSourceFilter,
   OBSERVES_EVERYTHING,
   positionToOffset,
@@ -101,12 +102,27 @@ export interface VitestRecorderInit {
   env?: NodeJS.ProcessEnv;
 }
 
+/** The provider Vitest itself loads to produce V8 coverage. */
+const COVERAGE_PROVIDER = '@vitest/coverage-v8';
+
 /**
  * A recorder that runs `<command> <testFile>` once with Vitest's V8 coverage
  * enabled and attributes the JSON report to that test file. Requires
  * `@vitest/coverage-v8` to be installed in the target project.
  */
 export function createVitestRecorder(init: VitestRecorderInit): Recorder {
+  // Checked before anything runs. Without the provider, Vitest executes the
+  // suite quite happily and simply writes no report, so the problem otherwise
+  // surfaces once per test file *after* the whole suite has been paid for --
+  // and what it needs is one install, which is worth saying up front.
+  if (!isPackageInstalled(init.cwd, COVERAGE_PROVIDER)) {
+    throw new Error(
+      `${COVERAGE_PROVIDER} is not installed, and the Vitest adapter records through ` +
+        `Vitest's own coverage provider. Install it with ` +
+        `\`npm install --save-dev ${COVERAGE_PROVIDER}\`, or run \`covsel init\`, ` +
+        `which installs it alongside the adapter.`,
+    );
+  }
   const isSource = makeSourceFilter(init.config);
   const wantBlocks = init.config.granularity !== 'file';
   return {
