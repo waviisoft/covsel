@@ -38,7 +38,7 @@ function git(cwd, args) {
 
 /** Lines the CLI printed to stdout (the selected test files). */
 function affected(cwd) {
-  const res = run('node', [covselBin, 'affected'], cwd);
+  const res = run('node', [covselBin, 'affected', '--adapter', 'vitest'], cwd);
   if (res.status !== 0) throw new Error(`covsel affected failed: ${res.stderr}`);
   return res.stdout
     .split('\n')
@@ -146,7 +146,11 @@ try {
     join(tmp, 'src', 'a.ts'),
     `${readFileSync(join(tmp, 'src', 'a.ts'), 'utf8')}// edit\n`,
   );
-  const ran = run('node', [covselBin, 'run', '--', vitestBin, 'run'], tmp);
+  const ran = run(
+    'node',
+    [covselBin, 'run', '--adapter', 'vitest', '--', vitestBin, 'run'],
+    tmp,
+  );
   assert(ran.status === 0, 'run wraps the runner and exits 0');
   git(tmp, ['checkout', '--', 'src/a.ts']);
 

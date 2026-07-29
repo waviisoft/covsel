@@ -1,11 +1,34 @@
 import type { CovselConfig } from './config.js';
 import type { Change, Policy } from './interfaces.js';
-import { makeMatcher } from './match.js';
+import { makeMatcher, makeStrictMatcher } from './match.js';
 import { type CoverageMap, isUsableMap, type TestId } from './schema.js';
+
+/**
+ * The first changed path the recording was not in a position to observe, if
+ * any.
+ *
+ * Inside a map's `observed` globs, "no entry covers this file" is a measurement:
+ * the recorder was watching and nothing ran. Outside them it is an artifact of
+ * where the recorder was looking, and selecting on it skips tests the change can
+ * break. So an unobserved change falls open instead.
+ *
+ * The globs are matched strictly. Every other glob set here is matched loosely,
+ * because matching more of them runs more tests; this one is the exception, and
+ * reading it loosely would let a path the recorder never covered pass as covered
+ * and suppress the full run it should have caused.
+ */
+export function unobservedChange(
+  map: CoverageMap,
+  changes: Change[],
+): string | undefined {
+  const isObserved = makeStrictMatcher(map.observed);
+  return changes.find((c) => !isObserved(c.file))?.file;
+}
 
 /**
  * Fail-open policy: every ambiguity resolves toward running more tests.
  *  - An unusable map, or any change to a sentinel file, forces a full run.
+ *  - A change outside what the recording could observe forces a full run.
  *  - Added/changed test files always run, even before they are in the map.
  */
 export class FailOpenPolicy implements Policy {
@@ -20,6 +43,7 @@ export class FailOpenPolicy implements Policy {
   evaluate(map: CoverageMap | undefined, changes: Change[]): 'select' | 'full-run' {
     if (!isUsableMap(map)) return 'full-run';
     if (changes.some((c) => this.isSentinel(c.file))) return 'full-run';
+    if (unobservedChange(map, changes) !== undefined) return 'full-run';
     return 'select';
   }
 
@@ -40,5 +64,10 @@ export function fullRunReason(
   if (!isUsableMap(map)) return 'recorded map is stale or has an incompatible schema';
   const isSentinel = makeMatcher(config.sentinels);
   const hit = changes.find((c) => isSentinel(c.file));
-  return hit ? `sentinel changed: ${hit.file}` : 'full run';
+  if (hit) return `sentinel changed: ${hit.file}`;
+  const unobserved = unobservedChange(map, changes);
+  if (unobserved !== undefined) {
+    return `${unobserved} changed, which the recording could not observe`;
+  }
+  return 'full run';
 }

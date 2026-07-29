@@ -29,8 +29,10 @@ packages/core/              @covsel/core — Observer/Mapper/Store/Selector/Poli
                             interfaces + the versioned map schema. Stable contract;
                             discuss design changes in an issue first.
 packages/cli/               covsel — the CLI, thin over core.
-packages/adapter-generic/   @covsel/adapter-generic — Level-0 wrap-any-command adapter.
+packages/adapter-generic/   @covsel/adapter-generic — wrap-any-command adapter.
 packages/adapter-*/         one package per runner (the community lane).
+packages/conformance/       @covsel/conformance — the shared suite every adapter
+                            must pass; adapters register it in their own tests.
 docs/                       VitePress site (private package, deployed to GitHub Pages).
 ```
 
@@ -65,7 +67,9 @@ CI runs these across Node 22/24.
   `exactOptionalPropertyTypes`, `verbatimModuleSyntax` are on. Use `import type`
   for type-only imports.
 - **Adapters depend on `@covsel/core` only** — never on each other or on CLI
-  internals.
+  internals. Every adapter runs the shared conformance suite from
+  `@covsel/conformance`; add checks there rather than re-deriving fail-open
+  behavior per adapter.
 
 ### Comments do not reference issues, PRs, or docs
 

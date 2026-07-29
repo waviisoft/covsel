@@ -4,3 +4,6 @@ packages:
   - 'docs'
 allowBuilds:
   esbuild: true
+  # Jest's resolver ships prebuilt native bindings; its postinstall is not
+  # needed for Jest to run, and skipping it keeps installs script-free.
+  unrs-resolver: false

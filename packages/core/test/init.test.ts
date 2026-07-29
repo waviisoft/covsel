@@ -6,11 +6,11 @@ import { afterAll, describe, expect, it } from 'vitest';
 import { initProject, loadConfig } from '../src/index.js';
 
 /**
- * `covsel init` decides one thing — which adapter records this project — and
- * persists it. The tests that matter most are the ones asserting it refuses to
- * persist a fail-closed setup: a runner that transforms sources before
- * executing them records a map in which no test covers `src/**`, so a diff
- * touching app source would select nothing at all.
+ * `covsel init` answers the first question in adopting covsel — which adapter
+ * package records this project — from a runner the project already declares.
+ * The tests that matter most are the ones asserting it never answers that
+ * question by guessing: a config naming an adapter that cannot record the
+ * runner is worse than no config, because it looks settled.
  */
 
 const dirs: string[] = [];
@@ -38,22 +38,46 @@ afterAll(() => {
   for (const dir of dirs) rmSync(dir, { recursive: true, force: true });
 });
 
-describe('covsel init — detection', () => {
-  it('configures a Vitest project for the Vitest adapter', async () => {
-    const cwd = project({
-      'package.json': pkg({ devDependencies: { vitest: '^3.0.0' } }),
-    });
+describe('covsel init — naming the adapter', () => {
+  it.each([
+    ['vitest', { devDependencies: { vitest: '^3.0.0' } }, 'vitest run'],
+    ['jest', { devDependencies: { jest: '^29.0.0' } }, 'jest'],
+    ['cucumber', { devDependencies: { '@cucumber/cucumber': '^11.0.0' } }, 'cucumber-js'],
+    ['node-test', { scripts: { test: 'node --test' } }, 'node --test'],
+    ['generic', { devDependencies: { mocha: '^10.0.0' } }, 'mocha'],
+  ])('names %s and writes it to the config', async (adapter, fields, command) => {
+    const cwd = project({ 'package.json': pkg(fields) });
 
     const result = await init(cwd);
 
     expect(result.outcome).toBe('configured');
-    expect(result.adapter).toBe('vitest');
-    expect(result.configWritten).toBe(true);
+    expect(result.adapter).toBe(adapter);
     expect(JSON.parse(readFileSync(join(cwd, '.covsel.json'), 'utf8'))).toEqual({
-      adapter: 'vitest',
+      adapter,
     });
-    expect((await loadConfig(cwd)).adapter).toBe('vitest');
-    expect(result.commands?.record).toContain('--adapter vitest');
+    expect((await loadConfig(cwd)).adapter).toBe(adapter);
+    expect(result.commands?.record).toBe(
+      `covsel record --adapter ${adapter} -- ${command}`,
+    );
+  });
+
+  it('reports whether the adapter package is installed', async () => {
+    const cwd = project({ 'package.json': pkg({ devDependencies: { vitest: '^3' } }) });
+
+    const missing = await initProject({
+      cwd,
+      covselVersion: VERSION,
+      isAdapterInstalled: () => Promise.resolve(false),
+    });
+
+    expect(missing.adapter).toBe('vitest');
+    expect(missing.adapterInstalled).toBe(false);
+  });
+
+  it('leaves installedness unknown when the caller cannot check', async () => {
+    const cwd = project({ 'package.json': pkg({ devDependencies: { vitest: '^3' } }) });
+
+    expect((await init(cwd)).adapterInstalled).toBeUndefined();
   });
 
   it('warns when a Vitest project lacks the coverage provider', async () => {
@@ -66,39 +90,21 @@ describe('covsel init — detection', () => {
       }),
     });
 
-    const missing = await init(without);
-    const present = await init(with_);
-
-    expect(missing.warnings.join('\n')).toContain('@vitest/coverage-v8');
-    expect(present.warnings.join('\n')).not.toContain('@vitest/coverage-v8');
-    expect(missing.outcome).toBe('configured');
+    expect((await init(without)).warnings.join('\n')).toContain('@vitest/coverage-v8');
+    expect((await init(with_)).warnings.join('\n')).not.toContain('@vitest/coverage-v8');
   });
 
-  it('configures a node:test project from its test script', async () => {
-    const cwd = project({
-      'package.json': pkg({ scripts: { test: 'node --test' } }),
-    });
-
-    const result = await init(cwd);
-
-    expect(result.outcome).toBe('configured');
-    expect(result.adapter).toBe('node-test');
-    expect(result.commands?.record).toContain('node --test');
-  });
-
-  it('configures Mocha on plain JS for the generic adapter', async () => {
+  it('names the other suites it cannot record', async () => {
     const cwd = project({
       'package.json': pkg({
-        devDependencies: { mocha: '^10.0.0' },
-        scripts: { test: 'mocha' },
+        devDependencies: { vitest: '^3.0.0', '@playwright/test': '^1.0.0' },
       }),
     });
 
     const result = await init(cwd);
 
-    expect(result.outcome).toBe('configured');
-    expect(result.adapter).toBe('generic');
-    expect(result.commands?.record).not.toContain('--adapter');
+    expect(result.adapter).toBe('vitest');
+    expect(result.warnings.join('\n')).toContain('playwright has no adapter yet');
   });
 
   it('adds the store directory to .gitignore', async () => {
@@ -107,9 +113,7 @@ describe('covsel init — detection', () => {
       '.gitignore': 'node_modules/\n',
     });
 
-    const result = await init(cwd);
-
-    expect(result.gitignoreUpdated).toBe(true);
+    expect((await init(cwd)).gitignoreUpdated).toBe(true);
     expect(readFileSync(join(cwd, '.gitignore'), 'utf8')).toContain('.covsel/');
   });
 
@@ -124,81 +128,22 @@ describe('covsel init — detection', () => {
   });
 });
 
-describe('covsel init — never persists a fail-closed setup', () => {
-  it('refuses to auto-configure a known transforming runner', async () => {
+describe('covsel init — what it will not guess', () => {
+  it('writes nothing for a runner no adapter records', async () => {
     const cwd = project({
-      'package.json': pkg({ devDependencies: { jest: '^29.0.0' } }),
+      'package.json': pkg({ devDependencies: { '@playwright/test': '^1.0.0' } }),
     });
 
     const result = await init(cwd);
 
     expect(result.outcome).toBe('unsupported-runner');
     expect(result.configWritten).toBe(false);
-    expect(result.detected.map((r) => r.name)).toContain('jest');
-    expect(result.detected.every((r) => r.adapter === undefined)).toBe(true);
+    expect(result.gitignoreUpdated).toBe(false);
+    expect(result.detected.map((r) => r.name)).toContain('playwright');
+    expect(result.reportUrl).toContain('playwright');
   });
 
-  it.each([
-    ['ts-node', 'mocha --require ts-node/register'],
-    ['tsx', 'node --import tsx --test'],
-    ['babel', 'mocha --require @babel/register'],
-  ])('refuses when the test command transforms sources via %s', async (_, script) => {
-    const cwd = project({
-      'package.json': pkg({
-        devDependencies: { mocha: '^10.0.0' },
-        scripts: { test: script },
-      }),
-    });
-
-    const result = await init(cwd);
-
-    expect(result.outcome).toBe('unsupported-runner');
-    expect(result.configWritten).toBe(false);
-  });
-
-  it('still configures Vitest when its command transforms sources', async () => {
-    // The Vitest adapter records through Vitest's own coverage provider, so
-    // transformation is expected rather than disqualifying.
-    const cwd = project({
-      'package.json': pkg({
-        devDependencies: { vitest: '^3.0.0' },
-        scripts: { test: 'vitest run' },
-      }),
-    });
-
-    expect((await init(cwd)).outcome).toBe('configured');
-  });
-
-  it('names the other suites it cannot observe', async () => {
-    const cwd = project({
-      'package.json': pkg({
-        devDependencies: { vitest: '^3.0.0', '@playwright/test': '^1.0.0' },
-      }),
-    });
-
-    const result = await init(cwd);
-
-    expect(result.outcome).toBe('configured');
-    expect(result.adapter).toBe('vitest');
-    expect(result.warnings.join('\n')).toContain('playwright has no adapter yet');
-  });
-
-  it('warns about under-selection when overridden onto a transforming runner', async () => {
-    const cwd = project({
-      'package.json': pkg({ devDependencies: { jest: '^29.0.0' } }),
-    });
-
-    const result = await init(cwd, 'generic');
-
-    expect(result.outcome).toBe('configured');
-    expect(result.adapter).toBe('generic');
-    expect(result.warnings.join('\n')).toMatch(/under-select/i);
-    expect(result.warnings.join('\n')).toMatch(/fail-open/i);
-  });
-});
-
-describe('covsel init — detection misses', () => {
-  it('reports an undetected runner without writing anything', async () => {
+  it('writes nothing when it recognises no runner at all', async () => {
     const cwd = project({
       'package.json': pkg({ devDependencies: { ava: '^6.0.0' } }),
     });
@@ -250,17 +195,6 @@ describe('covsel init — detection misses', () => {
     expect(reportUrl).not.toContain(cwd);
     expect(reportUrl).not.toContain(encodeURIComponent(cwd));
   });
-
-  it('points a known unsupported runner at the existing issue search', async () => {
-    const cwd = project({
-      'package.json': pkg({ devDependencies: { jest: '^29.0.0' } }),
-    });
-
-    const { reportUrl = '' } = await init(cwd);
-
-    expect(reportUrl).toContain('jest');
-    expect(reportUrl).not.toContain('adapter_request.yml');
-  });
 });
 
 describe('covsel init — overrides', () => {
@@ -269,25 +203,19 @@ describe('covsel init — overrides', () => {
       'package.json': pkg({ devDependencies: { ava: '^6.0.0' } }),
     });
 
-    const result = await init(cwd, 'generic');
+    const result = await init(cwd, 'ava');
 
     expect(result.outcome).toBe('configured');
-    expect(result.adapter).toBe('generic');
-    expect((await loadConfig(cwd)).adapter).toBe('generic');
+    expect(result.adapter).toBe('ava');
+    expect((await loadConfig(cwd)).adapter).toBe('ava');
   });
 
-  it('rejects an unknown adapter name without writing anything', async () => {
+  it('honors an explicit adapter over a detected one', async () => {
     const cwd = project({
       'package.json': pkg({ devDependencies: { vitest: '^3.0.0' } }),
     });
 
-    const result = await init(cwd, 'nope');
-
-    expect(result.outcome).toBe('unknown-adapter');
-    expect(result.configWritten).toBe(false);
-    expect(result.warnings.join('\n')).toContain('generic');
-    expect(result.warnings.join('\n')).toContain('vitest');
-    expect(result.warnings.join('\n')).toContain('node-test');
+    expect((await init(cwd, 'generic')).adapter).toBe('generic');
   });
 });
 
@@ -342,6 +270,22 @@ describe('covsel init — idempotence', () => {
     const result = await init(cwd);
 
     expect(result.outcome).toBe('already-configured');
+    expect(result.adapter).toBe('vitest');
     expect(result.configPath).toContain('covsel.config.js');
+  });
+
+  it('reports what an existing config says, not what detection would pick', async () => {
+    const cwd = project({
+      'package.json': pkg({ devDependencies: { vitest: '^3.0.0' } }),
+      '.covsel.json': `${JSON.stringify({ granularity: 'file' })}\n`,
+    });
+
+    const result = await init(cwd);
+
+    expect(result.outcome).toBe('already-configured');
+    expect(result.adapter).toBeUndefined();
+    expect(result.warnings.join('\n')).toContain('names no adapter');
+    expect(result.warnings.join('\n')).toContain('"adapter": "vitest"');
+    expect(readFileSync(join(cwd, '.covsel.json'), 'utf8')).not.toContain('adapter');
   });
 });

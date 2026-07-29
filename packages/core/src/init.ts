@@ -1,49 +1,45 @@
 import { existsSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 
-import {
-  ADAPTERS,
-  type AdapterName,
-  findConfigFile,
-  isAdapterName,
-  loadConfig,
-} from './config.js';
+import { findConfigFile, loadConfig } from './config.js';
 
 /**
- * Project bootstrap: work out which recorder observes this project, persist
- * that decision, and keep the map out of version control.
+ * Project bootstrap: work out which adapter records this project, persist that
+ * choice, and keep the map out of version control.
  *
- * The adapter choice is the one consequential decision in adopting covsel, and
- * it turns on something invisible from the outside — whether the runner
- * executes your sources or transformed copies of them. Get it wrong for a
- * transforming runner and coverage shows no test covering your sources, so a
- * diff touching them selects *nothing*: the fail-closed outcome covsel exists
- * to prevent. So detection never resolves a transforming runner to a recorder
- * that cannot see through the transform. It reports instead, and a caller who
- * knows better can override — loudly, never silently.
+ * covsel ships no adapters — each is a package the project installs — so the
+ * first question in adopting it is which package that is, and the answer comes
+ * from a runner the project already declares. Detection reads it off
+ * `package.json` and writes the name down once, so later commands need no
+ * `--adapter`.
+ *
+ * What this deliberately does not do is guess. A runner covsel has no signature
+ * for is reported, with what an adapter request needs, rather than resolved to
+ * the generic wrap on the theory that something is better than nothing. Whether
+ * a given recording could actually see a project's sources is settled by the
+ * recording itself — a change to a file outside what the map observed falls
+ * open — so there is nothing to be gained here by predicting it, and a wrong
+ * prediction would only push someone away from an adapter that works.
  */
 
 const ISSUES_URL = 'https://github.com/waviisoft/covsel/issues';
 
 interface RunnerSignature {
+  /** How the runner is known to its users. */
   name: string;
-  /** The recorder for this runner, or undefined when none exists yet. */
-  adapter?: AdapterName;
+  /** The `--adapter` name that records it, or undefined when none exists yet. */
+  adapter?: string;
   /** Package names that identify the runner. */
   deps: readonly string[];
   /** Test-script fragments that identify the runner. */
   scripts: readonly RegExp[];
-  /**
-   * True when the runner hands transformed sources to the engine and the
-   * adapter reads the runner's own coverage rather than the process's — so a
-   * transforming test command is expected, not disqualifying.
-   */
-  readsOwnCoverage?: boolean;
+  /** The command `record` and `run` should wrap, for the printed next steps. */
+  command?: string;
 }
 
 /**
- * Runners covsel can name. Anything absent is reported as undetected rather
- * than guessed at: a wrong guess here is a fail-closed map.
+ * Runners covsel can name, and the adapter for each. Anything absent is
+ * reported as undetected rather than guessed at.
  */
 const RUNNERS: readonly RunnerSignature[] = [
   {
@@ -51,59 +47,52 @@ const RUNNERS: readonly RunnerSignature[] = [
     adapter: 'vitest',
     deps: ['vitest'],
     scripts: [/\bvitest\b/],
-    readsOwnCoverage: true,
+    command: 'vitest run',
+  },
+  {
+    name: 'jest',
+    adapter: 'jest',
+    deps: ['jest', 'jest-cli', 'ts-jest', '@jest/core'],
+    scripts: [/\bjest\b/],
+    command: 'jest',
+  },
+  {
+    name: 'cucumber-js',
+    adapter: 'cucumber',
+    deps: ['@cucumber/cucumber'],
+    scripts: [/\bcucumber-js\b/],
+    command: 'cucumber-js',
   },
   {
     name: 'node:test',
     adapter: 'node-test',
     deps: [],
     scripts: [/\bnode\b[^&|;]*--test\b/, /\bnode:test\b/],
-  },
-  { name: 'mocha', adapter: 'generic', deps: ['mocha'], scripts: [/\bmocha\b/] },
-  {
-    name: 'jest',
-    deps: ['jest', 'jest-cli', 'ts-jest', '@jest/core'],
-    scripts: [/\bjest\b/],
+    command: 'node --test',
   },
   {
-    name: 'cucumber-js',
-    deps: ['@cucumber/cucumber'],
-    scripts: [/\bcucumber-js\b/],
+    name: 'mocha',
+    adapter: 'generic',
+    deps: ['mocha'],
+    scripts: [/\bmocha\b/],
+    command: 'mocha',
   },
-  {
-    name: 'playwright',
-    deps: ['@playwright/test'],
-    scripts: [/\bplaywright\b/],
-  },
+  { name: 'playwright', deps: ['@playwright/test'], scripts: [/\bplaywright\b/] },
 ];
 
-/**
- * Loaders and register hooks that compile sources on the way to the engine.
- * Under one of these, process coverage sees the compiled output and attributes
- * nothing back to `src/**`.
- */
-const TRANSFORM_MARKERS: readonly RegExp[] = [
-  /\bts-node\b/,
-  /\btsx\b/,
-  /@swc\/register|\bswc-node\b/,
-  /@babel\/register|\bbabel-register\b/,
-  /\besbuild-register\b/,
-];
-
-/** The canonical recording command per adapter, for the printed next steps. */
-const RUNNER_COMMANDS: Record<string, string> = {
-  vitest: 'vitest run',
-  'node:test': 'node --test',
-  mocha: 'mocha',
-};
+/** Dependency names worth naming in a bug report. */
+const TEST_RELATED =
+  /test|spec|jest|mocha|vitest|cucumber|playwright|ava|tap|karma|jasmine|cypress/i;
 
 /** A runner covsel recognised in the project. */
 export interface DetectedRunner {
   name: string;
-  /** The recorder for this runner, or undefined when none exists yet. */
-  adapter?: AdapterName;
+  /** The `--adapter` name that records it, or undefined when none exists yet. */
+  adapter?: string;
   /** Why covsel believes this runner is in use. */
   evidence: string;
+  /** The command covsel would wrap to record it. */
+  command?: string;
 }
 
 /**
@@ -126,17 +115,17 @@ export type InitOutcome =
   | 'configured'
   /** A config already existed and was left alone. */
   | 'already-configured'
-  /** A runner covsel knows, but has no recorder that can observe it. */
+  /** A runner covsel knows, but no adapter records it yet. */
   | 'unsupported-runner'
   /** No runner covsel recognises. */
-  | 'undetected'
-  /** The caller asked for an adapter that does not exist. */
-  | 'unknown-adapter';
+  | 'undetected';
 
 export interface InitResult {
   outcome: InitOutcome;
-  /** The persisted adapter, when one was written or already configured. */
-  adapter?: AdapterName;
+  /** The persisted adapter name, when one was written or already configured. */
+  adapter?: string;
+  /** Whether that adapter's package is installed, when the caller could check. */
+  adapterInstalled?: boolean;
   /** Where the config lives (or would live). */
   configPath: string;
   configWritten: boolean;
@@ -155,8 +144,14 @@ export interface InitOptions {
   cwd: string;
   /** The covsel version, for the diagnostic block. */
   covselVersion: string;
-  /** An explicit adapter from the caller, unvalidated. */
+  /** An explicit adapter name from the caller, used instead of detection. */
   adapter?: string;
+  /**
+   * Whether an adapter package is installed. Resolving a name to a package is
+   * the consumer's job — the CLI knows the specifiers and the resolution rules —
+   * so init asks rather than guesses, and simply reports less when it cannot.
+   */
+  isAdapterInstalled?: (name: string) => Promise<boolean>;
 }
 
 interface PackageJson {
@@ -190,13 +185,7 @@ function detectPackageManager(cwd: string, pkg: PackageJson | undefined): string
   return 'unknown';
 }
 
-/** True when the test command compiles sources before the engine sees them. */
-export function transformsSources(testScript: string | undefined): boolean {
-  if (testScript === undefined) return false;
-  return TRANSFORM_MARKERS.some((marker) => marker.test(testScript));
-}
-
-/** Every runner covsel can name in this project, most specific evidence first. */
+/** Every runner covsel can name in this project, ones it can record first. */
 export function detectRunners(cwd: string): DetectedRunner[] {
   const pkg = readPackageJson(cwd);
   if (!pkg) return [];
@@ -206,75 +195,52 @@ export function detectRunners(cwd: string): DetectedRunner[] {
   const found: DetectedRunner[] = [];
   for (const runner of RUNNERS) {
     const dep = runner.deps.find((d) => d in deps);
-    if (dep !== undefined) {
-      found.push({
-        name: runner.name,
-        ...(runner.adapter ? { adapter: runner.adapter } : {}),
-        evidence: `${dep} is a dependency`,
-      });
-      continue;
-    }
-    if (testScript !== undefined && runner.scripts.some((s) => s.test(testScript))) {
-      found.push({
-        name: runner.name,
-        ...(runner.adapter ? { adapter: runner.adapter } : {}),
-        evidence: 'the test script invokes it',
-      });
-    }
-  }
-
-  // A runner whose recorder reads process coverage cannot see through a
-  // transform hook, so drop the adapter and let init report it rather than
-  // persist a map that would select nothing.
-  if (!transformsSources(testScript)) return found;
-  return found.map((runner) => {
-    const signature = RUNNERS.find((r) => r.name === runner.name);
-    if (signature?.readsOwnCoverage === true || runner.adapter === undefined) {
-      return runner;
-    }
-    return {
+    const evidence =
+      dep !== undefined
+        ? `${dep} is a dependency`
+        : testScript !== undefined && runner.scripts.some((s) => s.test(testScript))
+          ? 'the test script invokes it'
+          : undefined;
+    if (evidence === undefined) continue;
+    found.push({
       name: runner.name,
-      evidence: `${runner.evidence}, under a source transform`,
-    };
-  });
-}
-
-function gitignoreEntry(storeDir: string): string {
-  return `${storeDir.replace(/\/+$/, '')}/`;
+      ...(runner.adapter !== undefined ? { adapter: runner.adapter } : {}),
+      ...(runner.command !== undefined ? { command: runner.command } : {}),
+      evidence,
+    });
+  }
+  return found;
 }
 
 function ensureGitignored(cwd: string, storeDir: string): boolean {
   const path = join(cwd, '.gitignore');
-  const entry = gitignoreEntry(storeDir);
+  const entry = `${storeDir.replace(/\/+$/, '')}/`;
   const bare = entry.slice(0, -1);
   const existing = existsSync(path) ? readFileSync(path, 'utf8') : undefined;
 
-  if (existing !== undefined) {
-    const present = existing
-      .split('\n')
-      .map((line) => line.trim().replace(/^\//, ''))
-      .some((line) => line === entry || line === bare);
-    if (present) return false;
-    const separator = existing === '' || existing.endsWith('\n') ? '' : '\n';
-    writeFileSync(path, `${existing}${separator}${entry}\n`);
+  if (existing === undefined) {
+    writeFileSync(path, `${entry}\n`);
     return true;
   }
-
-  writeFileSync(path, `${entry}\n`);
+  const present = existing
+    .split('\n')
+    .map((line) => line.trim().replace(/^\//, ''))
+    .some((line) => line === entry || line === bare);
+  if (present) return false;
+  const separator = existing === '' || existing.endsWith('\n') ? '' : '\n';
+  writeFileSync(path, `${existing}${separator}${entry}\n`);
   return true;
 }
 
 function nextCommands(
-  adapter: AdapterName,
+  adapter: string,
   runner: DetectedRunner | undefined,
 ): { record: string; affected: string; run: string } {
-  const command =
-    (runner ? RUNNER_COMMANDS[runner.name] : undefined) ?? '<your test command>';
-  const flag = adapter === 'generic' ? '' : ` --adapter ${adapter}`;
+  const command = runner?.command ?? '<your test command>';
   return {
-    record: `covsel record${flag} -- ${command}`,
+    record: `covsel record --adapter ${adapter} -- ${command}`,
     affected: 'covsel affected',
-    run: `covsel run${flag} -- ${command}`,
+    run: `covsel run --adapter ${adapter} -- ${command}`,
   };
 }
 
@@ -298,9 +264,10 @@ function existingIssuesUrl(runner: string): string {
 }
 
 /**
- * Configure covsel for a project: detect the runner, persist the adapter, and
- * ignore the map directory. Writes nothing when it cannot determine a recorder
- * that would produce a trustworthy map.
+ * Configure covsel for a project: detect the runner, persist the adapter name,
+ * and ignore the map directory. Writes nothing when it cannot name an adapter,
+ * so a project is never left with a config pointing at a runner covsel does not
+ * record.
  */
 export async function initProject(options: InitOptions): Promise<InitResult> {
   const { cwd, covselVersion } = options;
@@ -314,93 +281,76 @@ export async function initProject(options: InitOptions): Promise<InitResult> {
     platform: `${process.platform} ${process.arch}`,
     packageManager: detectPackageManager(cwd, pkg),
     ...(testScript !== undefined ? { testScript } : {}),
-    dependencies: deps.filter((d) =>
-      /test|spec|jest|mocha|vitest|cucumber|playwright|ava|tap|karma|jasmine/i.test(d),
-    ),
+    dependencies: deps.filter((d) => TEST_RELATED.test(d)),
   };
 
+  const detected = detectRunners(cwd);
+  const supported = detected.find((r) => r.adapter !== undefined);
   const base = {
     configPath: join(cwd, '.covsel.json'),
     configWritten: false,
     gitignorePath: join(cwd, '.gitignore'),
     gitignoreUpdated: false,
-    detected: [] as DetectedRunner[],
+    detected,
     warnings: [] as string[],
     diagnostics,
   };
 
-  if (options.adapter !== undefined && !isAdapterName(options.adapter)) {
-    return {
-      ...base,
-      outcome: 'unknown-adapter',
-      warnings: [
-        `unknown adapter '${options.adapter}' — expected one of ${ADAPTERS.join(', ')}`,
-      ],
-    };
-  }
-  const override = options.adapter as AdapterName | undefined;
-
-  const detected = detectRunners(cwd);
-  const existing = findConfigFile(cwd);
-  const config = await loadConfig(cwd);
+  const installed = async (name: string): Promise<{ adapterInstalled?: boolean }> => {
+    if (options.isAdapterInstalled === undefined) return {};
+    return { adapterInstalled: await options.isAdapterInstalled(name) };
+  };
 
   // An existing config is the project's decision of record; init only makes
   // sure the store stays out of version control.
+  const existing = findConfigFile(cwd);
+  const config = await loadConfig(cwd);
   if (existing !== undefined) {
+    // Report what the config actually says, never what detection would have
+    // chosen — "already configured as X" has to be true of the file on disk.
+    const named = config.adapter;
     return {
       ...base,
       outcome: 'already-configured',
-      adapter: config.adapter,
+      ...(named !== undefined ? { adapter: named, ...(await installed(named)) } : {}),
+      warnings:
+        named === undefined && supported !== undefined
+          ? [
+              `${existing} names no adapter, so commands fall back to the default; ` +
+                `add "adapter": "${supported.adapter}" to record ${supported.name} with.`,
+            ]
+          : [],
       configPath: existing,
-      detected,
       gitignoreUpdated: ensureGitignored(cwd, config.store.dir),
-      commands: nextCommands(
-        config.adapter,
-        detected.find((r) => r.adapter !== undefined) ?? detected[0],
-      ),
+      ...(named !== undefined
+        ? { commands: nextCommands(named, supported ?? detected[0]) }
+        : {}),
     };
   }
 
-  const supported = detected.find((r) => r.adapter !== undefined);
-  const adapter = override ?? supported?.adapter;
-
+  const adapter = options.adapter ?? supported?.adapter;
   if (adapter === undefined) {
     const unsupported = detected[0];
     return {
       ...base,
       outcome: unsupported ? 'unsupported-runner' : 'undetected',
-      detected,
       reportUrl: unsupported
         ? existingIssuesUrl(unsupported.name)
         : adapterRequestUrl(diagnostics),
     };
   }
 
-  const warnings: string[] = [];
-  if (override !== undefined && supported === undefined && detected.length > 0) {
-    warnings.push(
-      `${detected.map((r) => r.name).join(', ')} transforms sources before executing ` +
-        `them, and the '${override}' recorder cannot see through that: the map will ` +
-        `under-select, which breaks the fail-open guarantee. Keep running this suite ` +
-        `in full until an adapter exists for it.`,
-    );
-  }
+  // A repo often runs several suites — Vitest for units, Playwright for E2E.
+  // Configuring the one covsel can record says nothing about the others, so
+  // name them rather than let their silence read as coverage.
+  const warnings = detected
+    .filter((r) => r.adapter === undefined)
+    .map((r) => `${r.name} has no adapter yet; keep running that suite in full.`);
   if (adapter === 'vitest' && !deps.includes('@vitest/coverage-v8')) {
     warnings.push(
       'install @vitest/coverage-v8 before recording — the Vitest adapter records ' +
         "through Vitest's own coverage provider.",
     );
-  }
-  // A repo often runs several suites — Vitest for units, Playwright for E2E.
-  // Configuring the one covsel can observe says nothing about the others, so
-  // name them rather than let their silence read as coverage.
-  if (supported !== undefined) {
-    for (const runner of detected) {
-      if (runner.adapter !== undefined) continue;
-      warnings.push(
-        `${runner.name} has no adapter yet; keep running that suite in full.`,
-      );
-    }
   }
 
   writeFileSync(base.configPath, `${JSON.stringify({ adapter }, null, 2)}\n`);
@@ -409,8 +359,8 @@ export async function initProject(options: InitOptions): Promise<InitResult> {
     ...base,
     outcome: 'configured',
     adapter,
+    ...(await installed(adapter)),
     configWritten: true,
-    detected,
     warnings,
     gitignoreUpdated: ensureGitignored(cwd, config.store.dir),
     commands: nextCommands(adapter, supported ?? detected[0]),

@@ -1,5 +1,5 @@
 /**
- * @covsel/adapter-vitest — Vitest support for covsel.
+ * @covsel/adapter-vitest -- Vitest support for covsel.
  *
  * Vitest evaluates transformed sources through its own module runner, so raw
  * NODE_V8_COVERAGE at the process boundary never sees the original `src/**`
@@ -21,9 +21,11 @@ import {
   type ExecRegion,
   hashFileContents,
   makeSourceFilter,
+  OBSERVES_EVERYTHING,
   positionToOffset,
   type Recorder,
   type RecordedUnit,
+  type RecorderInit,
   selectExecutedBlocks,
   type TestId,
   toRepoRelative,
@@ -34,7 +36,16 @@ export const vitestAdapter: Adapter = {
   formatSelection(tests: TestId[]): string[] {
     return [...new Set(tests.map((t) => t.file))];
   },
+  createRecorder(init: RecorderInit): Recorder {
+    return createVitestRecorder(init);
+  },
 };
+
+/**
+ * The export the dynamic resolver reads, so this package is selectable by its
+ * specifier exactly as a third-party adapter is.
+ */
+export const adapter = vitestAdapter;
 
 interface IstanbulPosition {
   line: number;
@@ -99,6 +110,10 @@ export function createVitestRecorder(init: VitestRecorderInit): Recorder {
   const isSource = makeSourceFilter(init.config);
   const wantBlocks = init.config.granularity !== 'file';
   return {
+    // Vitest's V8 provider reports every module its runner loaded, remapped to
+    // the original file, so any source under the repo that a test reaches shows
+    // up in the report regardless of where it lives.
+    observes: OBSERVES_EVERYTHING,
     async record(testFile: string): Promise<RecordedUnit[]> {
       const reportsDir = mkdtempSync(join(tmpdir(), 'covsel-vitest-'));
       const [bin, ...rest] = init.command;
@@ -137,7 +152,7 @@ export function createVitestRecorder(init: VitestRecorderInit): Recorder {
           ) as Record<string, CoverageFinalEntry>;
         } catch {
           throw new Error(
-            `no coverage report produced for ${testFile} — is @vitest/coverage-v8 installed?`,
+            `no coverage report produced for ${testFile} -- is @vitest/coverage-v8 installed?`,
           );
         }
 

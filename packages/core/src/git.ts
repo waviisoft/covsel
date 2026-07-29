@@ -26,6 +26,24 @@ export function gitHeadCommit(cwd: string): string | undefined {
   }
 }
 
+/** True when this checkout actually has the given commit (or ref). */
+export function commitExists(cwd: string, ref: string): boolean {
+  return resolvable(cwd, ref);
+}
+
+/**
+ * True when `cwd` is inside a git work tree. The command also succeeds in a bare
+ * repository and inside `.git/`, printing `false`, so the output is what counts.
+ */
+export function isGitWorkTree(cwd: string): boolean {
+  try {
+    const res = git(cwd, ['rev-parse', '--is-inside-work-tree']);
+    return res.ok && res.stdout.trim() === 'true';
+  } catch {
+    return false;
+  }
+}
+
 /** A ref that exists and can be resolved, or `undefined`. */
 function resolvable(cwd: string, ref: string): boolean {
   try {
@@ -49,6 +67,50 @@ function mergeBase(cwd: string, a: string, b: string): string | undefined {
   } catch {
     return undefined;
   }
+}
+
+/**
+ * True when the work tree differs from HEAD in any way — staged, unstaged, or
+ * untracked. A map recorded from such a tree describes a state no commit names,
+ * yet it is stamped with HEAD, so a later checkout of exactly HEAD would trust a
+ * map that never described it. Callers that record on their own schedule check
+ * this first.
+ *
+ * A git that cannot answer reads as dirty: declining to record leaves the
+ * previous map in place, which over-selects, while recording anyway would write
+ * one that cannot be vouched for.
+ */
+export function isDirtyWorkTree(cwd: string): boolean {
+  try {
+    const res = git(cwd, ['status', '--porcelain']);
+    return !res.ok || res.stdout.trim() !== '';
+  } catch {
+    return true;
+  }
+}
+
+/**
+ * Drop the paths git ignores, keeping the rest in order. A file git ignores can
+ * never show up in a diff, so a change to one cannot affect selection — which is
+ * what keeps a runner's own output from re-triggering a watch loop.
+ *
+ * Tracked files are never dropped: `check-ignore` consults the index, and a
+ * tracked file is not subject to ignore rules. When git cannot answer at all,
+ * every path is kept, so the caller decides on more input rather than less.
+ */
+export function filterUnignored(cwd: string, paths: string[]): string[] {
+  if (paths.length === 0) return [];
+  const res = spawnSync('git', ['check-ignore', '--stdin', '-z'], {
+    cwd,
+    encoding: 'utf8',
+    input: `${paths.join('\0')}\0`,
+    maxBuffer: 64 * 1024 * 1024,
+  });
+  // 0: some paths are ignored. 1: none are. Anything else (128, a signal, git
+  // missing) means git did not answer, so nothing may be dropped.
+  if (res.error || (res.status !== 0 && res.status !== 1)) return paths;
+  const ignored = new Set((res.stdout ?? '').split('\0').filter((p) => p !== ''));
+  return paths.filter((p) => !ignored.has(p));
 }
 
 function kindFromStatusLetter(letter: string): Change['kind'] {
@@ -114,13 +176,32 @@ function parsePorcelain(acc: Map<string, Change>, out: string): void {
   }
 }
 
+export interface DiffOptions {
+  /**
+   * Compare the base's tree to HEAD directly instead of going through their
+   * merge-base. Use this when the base is a state the caller must account for in
+   * full — a map's recorded commit — rather than a branch point. Going through
+   * the merge-base would hide every file that differs between the base and HEAD's
+   * ancestor, which is exactly the coverage the map was recorded against.
+   */
+  exact?: boolean;
+}
+
 /**
- * Produce the set of changed files: committed changes since the merge-base of
- * HEAD and the default branch (or an explicit `since` ref), plus every
- * working-tree change (staged, unstaged, and untracked). Paths are
- * repo-relative with forward slashes.
+ * Produce the set of changed files: committed changes since `since` (by default
+ * the merge-base of HEAD and the default branch), plus every working-tree change
+ * (staged, unstaged, and untracked). Paths are repo-relative with forward
+ * slashes.
+ *
+ * With `exact`, the committed half is `git diff <since> HEAD`, so together with
+ * the working-tree half it covers every file whose content differs between the
+ * base's tree and what is on disk now — in either direction.
  */
-export function diffChanges(cwd: string, since?: string): Change[] {
+export function diffChanges(
+  cwd: string,
+  since?: string,
+  options: DiffOptions = {},
+): Change[] {
   if (!git(cwd, ['rev-parse', '--is-inside-work-tree']).ok) {
     throw new GitUnavailableError('not a git work tree');
   }
@@ -128,8 +209,8 @@ export function diffChanges(cwd: string, since?: string): Change[] {
 
   const base = since ?? defaultBase(cwd);
   if (base !== undefined) {
-    const mb = mergeBase(cwd, base, 'HEAD') ?? base;
-    const committed = git(cwd, ['diff', '--name-status', mb, 'HEAD']);
+    const from = options.exact ? base : (mergeBase(cwd, base, 'HEAD') ?? base);
+    const committed = git(cwd, ['diff', '--name-status', from, 'HEAD']);
     if (committed.ok) parseNameStatus(acc, committed.stdout);
   }
 

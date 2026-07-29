@@ -14,8 +14,20 @@ export default defineConfig({
       '@covsel/adapter-vitest': fileURLToPath(
         new URL('./packages/adapter-vitest/src/index.ts', import.meta.url),
       ),
+      '@covsel/adapter-jest': fileURLToPath(
+        new URL('./packages/adapter-jest/src/index.ts', import.meta.url),
+      ),
       '@covsel/adapter-node-test': fileURLToPath(
         new URL('./packages/adapter-node-test/src/index.ts', import.meta.url),
+      ),
+      '@covsel/adapter-cucumber': fileURLToPath(
+        new URL('./packages/adapter-cucumber/src/index.ts', import.meta.url),
+      ),
+      '@covsel/conformance/vitest': fileURLToPath(
+        new URL('./packages/conformance/src/vitest.ts', import.meta.url),
+      ),
+      '@covsel/conformance': fileURLToPath(
+        new URL('./packages/conformance/src/index.ts', import.meta.url),
       ),
     },
   },

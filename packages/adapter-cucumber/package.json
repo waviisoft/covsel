@@ -1,0 +1,47 @@
+{
+  "name": "@covsel/adapter-cucumber",
+  "version": "0.0.0",
+  "description": "cucumber-js adapter for covsel: scenario-level selection via the inspector snapshot-diff observer",
+  "license": "MIT",
+  "author": "WAVIISoft, LLC",
+  "type": "module",
+  "main": "./dist/index.cjs",
+  "module": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js",
+      "require": "./dist/index.cjs"
+    },
+    "./shim": "./dist/shim.js"
+  },
+  "files": [
+    "dist"
+  ],
+  "scripts": {
+    "build": "tsup src/index.ts --format esm,cjs --dts --sourcemap --shims --clean && cp src/shim.js dist/shim.js",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@covsel/core": "workspace:*"
+  },
+  "engines": {
+    "node": ">=22"
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/waviisoft/covsel.git",
+    "directory": "packages/adapter-cucumber"
+  },
+  "keywords": [
+    "test-impact-analysis",
+    "coverage",
+    "adapter",
+    "cucumber"
+  ],
+  "devDependencies": {
+    "@types/node": "^22.20.1",
+    "@covsel/conformance": "workspace:*"
+  }
+}

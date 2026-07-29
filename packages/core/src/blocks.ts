@@ -18,7 +18,8 @@ export interface SourceBlock {
   probe?: number;
 }
 
-const MODULE_BLOCK = '<module>';
+/** Name of the top-level skeleton block, which runs whenever a file loads. */
+export const MODULE_BLOCK = '<module>';
 
 function isFunctionLike(node: ts.Node): boolean {
   return (

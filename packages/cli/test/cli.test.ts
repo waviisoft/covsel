@@ -54,7 +54,7 @@ describe('covsel cli', () => {
   it('prints help and exits 0 with no args', async () => {
     const { code, out } = await captureStdout(() => main([]));
     expect(code).toBe(0);
-    expect(out).toContain('covsel — runtime-coverage');
+    expect(out).toContain('covsel -- runtime-coverage');
   });
 
   it.each(['-h', '--help'])('prints help for %s', async (flag) => {
@@ -71,8 +71,15 @@ describe('covsel cli', () => {
 
   it('help lists the available commands', async () => {
     const { out } = await captureStdout(() => main(['--help']));
-    for (const cmd of ['record', 'affected', 'run', 'status']) {
+    for (const cmd of ['record', 'affected', 'run', 'watch', 'status']) {
       expect(out).toContain(`covsel ${cmd}`);
+    }
+  });
+
+  it('help documents the watch options', async () => {
+    const { out } = await captureStdout(() => main(['--help']));
+    for (const opt of ['--debounce', '--record', '--no-initial-run']) {
+      expect(out).toContain(opt);
     }
   });
 
@@ -93,6 +100,54 @@ describe('covsel cli', () => {
     expect(code).toBe(1);
     expect(err).toContain('expected a runner command after');
   });
+
+  it('watch without a command after -- errors', async () => {
+    const { code, err } = await captureStderr(() => main(['watch']));
+    expect(code).toBe(1);
+    expect(err).toContain('expected a runner command after');
+  });
+
+  it.each(['-5', 'soon'])('watch rejects a bad --debounce (%s)', async (value) => {
+    const { code, err } = await captureStderr(() =>
+      main(['watch', '--debounce', value, '--', 'node', '--test']),
+    );
+    expect(code).toBe(1);
+    expect(err).toContain('--debounce needs a non-negative number');
+  });
+
+  it('merge without any shard files errors', async () => {
+    const { code, err } = await captureStderr(() => main(['merge']));
+    expect(code).toBe(1);
+    expect(err).toContain('expected shard map files');
+  });
+
+  it('merge rejects --out without a path rather than writing somewhere unexpected', async () => {
+    const { code, err } = await captureStderr(() => main(['merge', 'a.json', '--out']));
+    expect(code).toBe(1);
+    expect(err).toContain('--out needs a file path');
+  });
+
+  it('merge reports an unreadable shard instead of silently dropping it', async () => {
+    const { code, err } = await captureStderr(() =>
+      main(['merge', 'definitely-missing-map.json']),
+    );
+    expect(code).toBe(1);
+    expect(err).toContain('cannot read');
+  });
+
+  it.each(['record', 'affected', 'run', 'watch'])(
+    '%s rejects an adapter that is not installed, and says how to install it',
+    async (cmd) => {
+      const argv = cmd === 'affected' ? [cmd] : [cmd, '--', 'node', '--test'];
+      const { code, err } = await captureStderr(() =>
+        main([...argv.slice(0, 1), '--adapter', 'frobnicate', ...argv.slice(1)]),
+      );
+      expect(code).toBe(1);
+      expect(err).toContain(`covsel ${cmd}:`);
+      expect(err).toContain("adapter 'frobnicate' is not installed");
+      expect(err).toContain('npm install --save-dev @covsel/adapter-frobnicate');
+    },
+  );
 
   it('affected rejects an unsupported --format', async () => {
     const { code, err } = await captureStderr(() =>
@@ -125,7 +180,7 @@ const pkg = (fields: Record<string, unknown>) =>
   `${JSON.stringify({ name: 'fixture', private: true, ...fields })}\n`;
 
 describe('covsel init', () => {
-  it('configures a detected project and prints the next steps', async () => {
+  it('names the adapter, writes the config, and prints the next steps', async () => {
     const result = await inProject(
       { 'package.json': pkg({ devDependencies: { vitest: '^3.0.0' } }) },
       async (cwd) => {
@@ -140,6 +195,19 @@ describe('covsel init', () => {
     expect(JSON.parse(result.config)).toEqual({ adapter: 'vitest' });
   });
 
+  // Every workspace adapter resolves in-process here (vitest aliases them to
+  // source), so a name nothing provides is what exercises the uninstalled path.
+  it('prints how to install an adapter the project does not have', async () => {
+    const { code, out } = await inProject(
+      { 'package.json': pkg({ devDependencies: { vitest: '^3.0.0' } }) },
+      () => capture(() => main(['init', '--adapter', 'not-a-real-runner'])),
+    );
+
+    expect(code).toBe(0);
+    expect(out).toContain('adapter: not-a-real-runner');
+    expect(out).toContain('npm install --save-dev @covsel/adapter-not-a-real-runner');
+  });
+
   it('exits non-zero and points at an adapter request when nothing is detected', async () => {
     const { code, err } = await inProject(
       { 'package.json': pkg({ devDependencies: { ava: '^6.0.0' } }) },
@@ -147,58 +215,48 @@ describe('covsel init', () => {
     );
 
     expect(code).toBe(1);
-    expect(err).toContain('no supported test runner detected');
+    expect(err).toContain('no test runner detected');
     expect(err).toContain('adapter_request.yml');
     expect(err).toContain('covsel init --adapter');
     expect(err).toContain(`covsel:          ${VERSION}`);
   });
 
-  it('refuses a known transforming runner and explains the fail-closed risk', async () => {
+  it('exits non-zero for a runner no adapter records', async () => {
     const { code, err } = await inProject(
-      { 'package.json': pkg({ devDependencies: { jest: '^29.0.0' } }) },
+      { 'package.json': pkg({ devDependencies: { '@playwright/test': '^1.0.0' } }) },
       () => capture(() => main(['init'])),
     );
 
     expect(code).toBe(1);
-    expect(err).toContain('jest');
-    expect(err).toContain('would select nothing');
-    expect(err).toContain('Keep running this suite in full');
-  });
-
-  it('rejects an unknown adapter', async () => {
-    const { code, err } = await inProject(
-      { 'package.json': pkg({ devDependencies: { vitest: '^3.0.0' } }) },
-      () => capture(() => main(['init', '--adapter', 'nope'])),
-    );
-
-    expect(code).toBe(1);
-    expect(err).toContain("unknown adapter 'nope'");
+    expect(err).toContain('no adapter records playwright yet');
+    expect(err).toContain('Keep running that suite in full');
   });
 });
 
 describe('the persisted adapter', () => {
-  it('is what record uses when no flag is given', async () => {
+  it('is what a command uses when no flag is given', async () => {
     const { code, err } = await inProject(
       {
         'package.json': pkg({}),
-        '.covsel.json': `${JSON.stringify({ adapter: 'bogus' })}\n`,
+        '.covsel.json': `${JSON.stringify({ adapter: 'from-config' })}\n`,
       },
       () => capture(() => main(['record', '--', 'true'])),
     );
 
     expect(code).toBe(1);
-    expect(err).toContain("unknown adapter 'bogus' in your covsel config");
+    expect(err).toContain("adapter 'from-config' is not installed");
   });
 
   it('is overridden by an explicit --adapter', async () => {
     const { err } = await inProject(
       {
         'package.json': pkg({}),
-        '.covsel.json': `${JSON.stringify({ adapter: 'bogus' })}\n`,
+        '.covsel.json': `${JSON.stringify({ adapter: 'from-config' })}\n`,
       },
-      () => capture(() => main(['record', '--adapter', 'nope', '--', 'true'])),
+      () => capture(() => main(['record', '--adapter', 'from-flag', '--', 'true'])),
     );
 
-    expect(err).toContain("unknown adapter 'nope' from --adapter");
+    expect(err).toContain("adapter 'from-flag' is not installed");
+    expect(err).not.toContain('from-config');
   });
 });

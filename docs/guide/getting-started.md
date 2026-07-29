@@ -1,41 +1,58 @@
 # Getting started
 
-File-level selection ships today: `covsel record`, `affected`, `run`, and
-`status`. Block-hash granularity and per-test precision are on the
-[roadmap](/guide/roadmap).
+Selection ships today: `covsel record`, `affected`, `run`, `watch`, `status`,
+and `merge` -- with function-level (block-hash) precision, per-test selection for
+node:test, and scenario-level selection for cucumber-js. Running covsel in CI is
+covered in the [CI guide](/guide/ci).
 
 ## Requirements
 
-- Node ≥ 22 (the V8 inspector and `NODE_V8_COVERAGE` are stable there)
+- Node >= 22 (the V8 inspector and `NODE_V8_COVERAGE` are stable there)
 - pnpm (via `corepack enable`) if you are working on covsel itself
 - For Vitest, `@vitest/coverage-v8` in your project (see the
   [Vitest adapter](/guide/adapters/vitest))
 
-## Set up
+## Install
+
+covsel ships no adapters, so install the CLI and the one for your runner. Which
+one is the only decision here, and [Adapters](/guide/adapters/) has the full
+picture:
+
+```bash
+npm install --save-dev covsel @covsel/adapter-generic   # any command, whole-file
+npm install --save-dev covsel @covsel/adapter-vitest    # Vitest
+npm install --save-dev covsel @covsel/adapter-jest      # Jest
+npm install --save-dev covsel @covsel/adapter-node-test # node:test, per test
+npm install --save-dev covsel @covsel/adapter-cucumber  # cucumber-js, per scenario
+```
+
+Adapters are separate packages because most projects need exactly one: bundling
+five runners' worth of code into every install would make you carry four you
+will never load. A name covsel does not find is reported with the package to
+install, so a missing one is never a mystery.
+
+### Let covsel name it
 
 ```bash
 covsel init
 ```
 
-detects your runner, writes a `.covsel.json` recording which adapter observes
-the project, and adds the map directory to `.gitignore`. `record` and `run`
-then need no `--adapter` flag.
+reads your `package.json`, names the adapter for the runner it finds, writes it
+to a `.covsel.json`, and adds the map directory to `.gitignore`. Every later
+command then needs no `--adapter`. If the package is not installed yet, `init`
+prints the command that installs it.
 
-If covsel doesn't recognise your runner it writes nothing and says so, with a
-link for requesting an adapter — pass `covsel init --adapter <name>` to
-configure it yourself anyway.
-
-Runners that transform sources before executing them (Jest today) are never
-configured automatically: process coverage can't see through the transform, so
-the recorded map would say no test covers your sources, and a change to them
-would select nothing. Keep those suites running in full.
+`init` does not guess. A runner it has no signature for is reported, along with
+a link for requesting an adapter and the environment such a request needs — pass
+`covsel init --adapter <name>` to name one yourself.
 
 ## The loop
 
 ```bash
-# 1. Record: build the test → covered-source map (one process per test file)
+# 1. Record: build the test -> covered-source map (one process per test file)
 covsel record -- node --test
 covsel record --adapter vitest -- vitest run   # needs @vitest/coverage-v8
+covsel record --adapter jest -- jest           # coverage is built into Jest
 
 # 2. Affected: print the test files your working-tree diff can affect
 covsel affected
@@ -43,7 +60,14 @@ covsel affected --since origin/main
 
 # 3. Run: run only those tests by wrapping the runner
 covsel run -- node --test
+
+# 4. Watch: keep running the affected tests as you edit
+covsel watch -- node --test
 ```
+
+[Watch mode](/guide/watch) drives the same selection continuously — one run per
+save, debounced, falling open to a full run whenever it cannot tell what a
+change affects.
 
 `covsel affected` prints a newline-separated file list, so you can also pipe it
 into any runner that accepts test files:
@@ -67,20 +91,20 @@ Selection is zero-config, but recording depends on how your runner executes
 code:
 
 - **Runners that execute source directly** (`node --test`, Mocha on plain JS)
-  use the [generic adapter](/guide/adapters/generic) — the default, nothing to
-  install.
-- **Runners that transform sources** (Vitest) need a runner-specific adapter,
-  because raw process coverage can't see transformed code. See
+  use the [generic adapter](/guide/adapters/generic), which wraps any command
+  and is what `--adapter` defaults to.
+- **Runners that transform sources** (Vitest, Jest) need a runner-specific
+  adapter, because raw process coverage can't see transformed code. See
   [Adapters](/guide/adapters/) for the full picture.
 
 ## Configuration
 
-Zero-config works out of the box. To refine, add a `.covsel.json` (or
+Selection needs no configuration once an adapter is installed. To refine, add a `.covsel.json` (or
 `covsel.config.js`) at your repo root:
 
 ```jsonc
 {
-  "adapter": "vitest", // "generic" | "vitest" | "node-test"; --adapter overrides
+  "adapter": "vitest", // the installed adapter to record with; --adapter overrides
   "testGlobs": ["**/*.{test,spec}.?(c|m)[jt]s?(x)"],
   "sourceGlobs": ["**/*"], // repo minus node_modules/dist/coverage/.covsel and tests
   "alwaysRun": ["**/fixtures/**"], // test files that must always run
@@ -92,6 +116,25 @@ Zero-config works out of the box. To refine, add a `.covsel.json` (or
 
 Any change matching `sentinels` forces a full run; see
 [the fail-open guarantee](/guide/fail-open).
+
+### Bundled code
+
+If your tests exercise their sources through a bundle, covsel needs the build's
+source maps to know what that bundle is — a script it cannot map back to a
+source fails the recording rather than crediting nothing. Build with source maps
+on, and tell covsel where to find the assets when the runner only ever names
+them by URL:
+
+```jsonc
+{
+  "sourceMaps": {
+    // Serve-time URLs → the directory holding the built assets.
+    "buildDirs": [{ "urlPrefix": "http://localhost:5173/", "dir": "dist" }],
+    "http": true, // fetch scripts and maps that are not on disk
+    "allowUnmappable": [], // scripts you accept never being able to map
+  },
+}
+```
 
 ### Granularity
 
@@ -113,4 +156,4 @@ pnpm lint && pnpm typecheck
 ```
 
 See [CONTRIBUTING.md](https://github.com/waviisoft/covsel/blob/main/CONTRIBUTING.md)
-for how to write an adapter — the primary community contribution surface.
+for how to write an adapter -- the primary community contribution surface.

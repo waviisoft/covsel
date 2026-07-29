@@ -3,10 +3,17 @@ import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 
 import { blockHashesOf } from './blocks.js';
-import type { CovselConfig } from './config.js';
+import { agreedScope } from './combine.js';
+import { type CovselConfig, type CovselConfigInput, resolveConfig } from './config.js';
 import { discoverTestFiles } from './discover.js';
-import { diffChanges, gitHeadCommit } from './git.js';
-import type { Change } from './interfaces.js';
+import { commitExists, diffChanges, gitHeadCommit, isGitWorkTree } from './git.js';
+import type {
+  Adapter,
+  Change,
+  Recorder,
+  RecordedUnit,
+  SelectionRunInit,
+} from './interfaces.js';
 import { makeMatcher, matchesAny } from './match.js';
 import { V8FileMapper } from './mapper.js';
 import { ProcessObserver } from './observer.js';
@@ -14,43 +21,20 @@ import { hashFileContents, walkFiles } from './paths.js';
 import { FailOpenPolicy, fullRunReason } from './policy.js';
 import {
   type CoverageMap,
-  type CoveredBlock,
-  type CoveredFile,
   type Granularity,
   MAP_SCHEMA_VERSION,
   type MapEntry,
+  OBSERVES_EVERYTHING,
   type TestId,
 } from './schema.js';
 import { FileSelector } from './selector.js';
 import { LocalStore } from './store.js';
 
-/** The sources one observation window executed. */
-export interface RecordedTest {
-  files: CoveredFile[];
-  /** Executed function/module blocks, when recording at block granularity. */
-  blocks: CoveredBlock[];
-}
-
-/** One recorded map entry: a test id and the sources that test executed. */
-export interface RecordedUnit extends RecordedTest {
-  test: TestId;
-}
-
-/**
- * A recorder observes one test file and returns one recorded unit per test it
- * saw — a single whole-file unit for whole-file recorders, or one unit per
- * individual test for per-test recorders. Each recorder obtains its coverage
- * from its own tool — the runner's built-in coverage, or Node's built-in V8
- * engine via `NODE_V8_COVERAGE`.
- */
-export interface Recorder {
-  record(testFile: string): Promise<RecordedUnit[]>;
-}
-
 export interface GenericRecorderInit {
   command: string[];
   cwd: string;
-  config: Pick<CovselConfig, 'sourceGlobs' | 'testGlobs' | 'granularity'>;
+  config: Pick<CovselConfig, 'sourceGlobs' | 'testGlobs' | 'granularity'> &
+    Partial<Pick<CovselConfig, 'sourceMaps'>>;
   env?: NodeJS.ProcessEnv;
 }
 
@@ -64,6 +48,10 @@ export function createGenericRecorder(init: GenericRecorderInit): Recorder {
   const mapper = new V8FileMapper({ cwd: init.cwd, config: init.config });
   const wantBlocks = init.config.granularity !== 'file';
   return {
+    // NODE_V8_COVERAGE is inherited by child processes and dumps every script
+    // they load, so anything the run executes anywhere in the process tree is
+    // visible to this recorder wherever it lives in the repo.
+    observes: OBSERVES_EVERYTHING,
     async record(testFile: string) {
       await observer.startTest({ file: testFile });
       const raw = await observer.endTest({ file: testFile });
@@ -71,6 +59,7 @@ export function createGenericRecorder(init: GenericRecorderInit): Recorder {
       const blocks = wantBlocks ? await mapper.toBlocks(raw) : [];
       return [{ test: { file: testFile }, files, blocks }];
     },
+    unmappableAllowed: () => mapper.takeAllowedUnmappable(),
   };
 }
 
@@ -89,6 +78,7 @@ function assembleMap(
   cwd: string,
   config: Pick<CovselConfig, 'sentinels' | 'granularity'>,
   recordedAt: string,
+  observed: readonly string[],
 ): CoverageMap {
   const commit = gitHeadCommit(cwd);
   // Reflect what was actually recorded: per-test (node:test) recorders capture
@@ -102,6 +92,7 @@ function assembleMap(
     ...(commit ? { commit } : {}),
     recordedAt,
     sentinelHashes: hashSentinels(cwd, config.sentinels),
+    observed: [...observed],
     entries,
   };
 }
@@ -113,6 +104,12 @@ export interface RecordEvent {
   tests?: number;
   sources?: number;
   reason?: string;
+  /**
+   * Scripts this file executed that could not be mapped back to any source and
+   * were accepted under `sourceMaps.allowUnmappable`. Present only when there
+   * were any: each is a gap in what the entry credits.
+   */
+  allowedUnmappable?: string[];
 }
 
 export interface RecordResult {
@@ -134,6 +131,31 @@ export interface RecordInit {
 }
 
 /**
+ * The globs a unit claims to have been observed within that its recorder does
+ * not declare.
+ *
+ * A unit combined from several windows may narrow the recorder's declaration —
+ * it says which of them actually watched this entry — but it may never widen it.
+ * The declaration is the claim the adapter stands behind; a unit reporting more
+ * than that is a contradiction between the two, and the direction it resolves
+ * decides whether a change outside the declaration falls open or is read as a
+ * measurement. Believing the wider claim skips tests, so it is refused.
+ *
+ * Globs are compared as written. Deciding whether one glob's paths all fall
+ * inside another's is not something picomatch can answer, and guessing "covered"
+ * is the guess that lets an over-claim through. `**` is the one exception, since
+ * it matches every path by definition and nothing can exceed it.
+ */
+function overclaimedGlobs(
+  unit: RecordedUnit,
+  declared: readonly string[],
+): readonly string[] {
+  if (unit.observes === undefined || declared.includes('**')) return [];
+  const allowed = new Set(declared);
+  return unit.observes.filter((glob) => !allowed.has(glob));
+}
+
+/**
  * Record a fresh map. Runs the recorder over every discovered test file. If any
  * file fails to record (e.g. a failing test invalidates its coverage), the map
  * is *not* written — a partial map cannot be trusted for selection.
@@ -144,11 +166,21 @@ export async function recordMap(init: RecordInit): Promise<RecordResult> {
   const store = new LocalStore({ cwd, dir: config.store.dir });
   const entries: MapEntry[] = [];
   const failures: { file: string; reason: string }[] = [];
+  const scopes: (readonly string[])[] = [];
 
   const wantBlocks = config.granularity !== 'file';
   for (const file of testFiles) {
     try {
       const units = await recorder.record(file);
+      for (const unit of units) {
+        const overclaimed = overclaimedGlobs(unit, recorder.observes);
+        if (overclaimed.length > 0) {
+          throw new Error(
+            `recorded as observing ${overclaimed.join(', ')}, which the recorder ` +
+              `does not declare (it declares ${[...recorder.observes].join(', ') || 'nothing'})`,
+          );
+        }
+      }
       let sources = 0;
       for (const unit of units) {
         entries.push({
@@ -156,9 +188,20 @@ export async function recordMap(init: RecordInit): Promise<RecordResult> {
           files: unit.files,
           ...(wantBlocks && unit.blocks.length > 0 ? { blocks: unit.blocks } : {}),
         });
+        // A unit combined from several observation windows knows the scope those
+        // windows add up to, which is what its entry was really watched for; a
+        // unit from a single window is covered by the recorder's declaration.
+        scopes.push(unit.observes ?? recorder.observes);
         sources += unit.files.length;
       }
-      init.onEvent?.({ kind: 'recorded', file, tests: units.length, sources });
+      const allowed = recorder.unmappableAllowed?.() ?? [];
+      init.onEvent?.({
+        kind: 'recorded',
+        file,
+        tests: units.length,
+        sources,
+        ...(allowed.length > 0 ? { allowedUnmappable: allowed } : {}),
+      });
     } catch (err) {
       const reason = err instanceof Error ? err.message : String(err);
       failures.push({ file, reason });
@@ -177,7 +220,14 @@ export async function recordMap(init: RecordInit): Promise<RecordResult> {
   }
 
   const recordedAt = init.recordedAt ?? new Date().toISOString();
-  const map = assembleMap(entries, cwd, config, recordedAt);
+  // The map claims one scope for every entry in it, so it may claim no more than
+  // the units agreed on: an entry watched by a narrower set of windows than
+  // another must not be selected against paths its own windows never saw. Units
+  // can only narrow — anything wider than the recorder's declaration already
+  // failed the recording above. With a single-window recorder every unit reports
+  // that declaration, so this is it.
+  const observed = entries.length > 0 ? agreedScope(scopes) : recorder.observes;
+  const map = assembleMap(entries, cwd, config, recordedAt, observed);
   await store.write(map);
   return {
     ok: true,
@@ -225,9 +275,10 @@ export interface AffectedResult {
   /** Selected test files, repo-relative, sorted, deduplicated. */
   tests: string[];
   /**
-   * The selected test units. A unit with a `name` is an individual test (per-test
-   * granularity); a unit without one means the whole file. Adapters use these to
-   * format runner-native, per-test selection.
+   * The selected test units, sorted by file and then by name. A unit with a
+   * `name` is an individual test (per-test granularity); a unit without one
+   * means the whole file. Adapters use these to format runner-native, per-test
+   * selection; collapsing them to their files yields exactly `tests`.
    */
   selected: TestId[];
 }
@@ -236,6 +287,63 @@ export interface SelectInit {
   cwd: string;
   config: CovselConfig;
   since?: string;
+}
+
+type DiffBase =
+  | { kind: 'base'; since?: string; exact?: boolean }
+  | { kind: 'untrusted'; reason: string };
+
+/**
+ * Decide what to diff against. A map describes the repository as it was at the
+ * commit it was recorded on, so that commit — not the merge-base with the
+ * default branch — is the honest starting point: anything changed since then is
+ * outside what the map knows. This matters most in CI, where a map published on
+ * the default branch is restored onto a later commit; diffing only from the
+ * merge-base would silently ignore everything committed in between.
+ *
+ * The comparison against that commit is exact — its tree against what is on disk
+ * now — rather than routed through a merge-base. A merge-base only answers
+ * "where did these branches part", which hides every file the recorded commit
+ * carries that HEAD's history does not: checking out an older commit, resetting
+ * history back, or restoring a map published on a branch tip onto a commit that
+ * branched earlier would all leave the map describing code that is not there.
+ *
+ * An explicit `--since` always wins, and keeps merge-base semantics — it names a
+ * branch point, not a recorded state. When the map records a commit this checkout
+ * does not have (a shallow clone, a rebased or pruned history), or records none
+ * at all inside a git work tree, the staleness window cannot be established and
+ * the map is not trusted.
+ */
+function diffBase(
+  cwd: string,
+  map: CoverageMap | undefined,
+  since: string | undefined,
+): DiffBase {
+  if (since !== undefined) return { kind: 'base', since };
+  if (map === undefined) return { kind: 'base' };
+  if (map.commit === undefined) {
+    return isGitWorkTree(cwd)
+      ? {
+          kind: 'untrusted',
+          reason: 'map records no commit, so changes since it was recorded are unknown',
+        }
+      : { kind: 'base' };
+  }
+  // The commit arrives from a JSON file, which in CI came out of a restored
+  // cache. It is passed to git as an argument, so require it to look like one.
+  if (!/^[0-9a-f]{7,40}$/.test(map.commit)) {
+    return {
+      kind: 'untrusted',
+      reason: 'map records a commit that is not a valid object name',
+    };
+  }
+  if (!commitExists(cwd, map.commit)) {
+    return {
+      kind: 'untrusted',
+      reason: `map was recorded at ${map.commit.slice(0, 12)}, which this checkout does not have`,
+    };
+  }
+  return { kind: 'base', since: map.commit, exact: true };
 }
 
 /**
@@ -255,9 +363,12 @@ export async function selectAffected(init: SelectInit): Promise<AffectedResult> 
     selected: testFiles.map((file) => ({ file })),
   });
 
+  const base = diffBase(cwd, map, init.since);
+  if (base.kind === 'untrusted') return fullRun(base.reason);
+
   let changes;
   try {
-    changes = diffChanges(cwd, init.since);
+    changes = diffChanges(cwd, base.since, { exact: base.exact === true });
   } catch {
     return fullRun('could not compute a git diff');
   }
@@ -274,8 +385,19 @@ export async function selectAffected(init: SelectInit): Promise<AffectedResult> 
   const mandatory = await policy.mandatory(changes);
   const alwaysRun = testFiles.filter((f) => matchesAny(f, config.alwaysRun));
 
+  // A test file the map says nothing about is a test whose coverage is unknown,
+  // not a test that covers nothing. That happens when a recorder yielded no
+  // units for it, or when a merged map is missing a shard — neither of which may
+  // quietly deselect it.
+  const mapped = new Set(map!.entries.map((e) => e.test.file));
+  const unmapped = testFiles.filter((f) => !mapped.has(f));
+
   // Files that must run in full supersede any per-test selection for that file.
-  const wholeFile = new Set<string>([...mandatory.map((t) => t.file), ...alwaysRun]);
+  const wholeFile = new Set<string>([
+    ...mandatory.map((t) => t.file),
+    ...alwaysRun,
+    ...unmapped,
+  ]);
   const selected: TestId[] = [...wholeFile].map((file) => ({ file }));
   const seen = new Set<string>();
   for (const u of units) {
@@ -287,13 +409,125 @@ export async function selectAffected(init: SelectInit): Promise<AffectedResult> 
       u.name !== undefined ? { file: u.file, name: u.name } : { file: u.file },
     );
   }
+  sortUnits(selected);
 
   const tests = new Set<string>(selected.map((t) => t.file));
-  return { fullRun: false, tests: [...tests].sort(), selected };
+  return { fullRun: false, tests: [...tests], selected };
+}
+
+/**
+ * Order test units by file, then by name, so a selection is reproducible and
+ * collapsing it to files yields the same sorted list as `tests`.
+ */
+function sortUnits(units: TestId[]): void {
+  const key = (t: TestId): string => `${t.file}\0${t.name ?? ''}`;
+  units.sort((a, b) => (key(a) < key(b) ? -1 : key(a) > key(b) ? 1 : 0));
+}
+
+/**
+ * Resolve configuration for a run with this adapter: the project's own settings,
+ * with the adapter's `defaultTestGlobs` filling in when the project named no
+ * `testGlobs` of its own. Only the adapter can know that its runner's tests are
+ * not `*.test.*` sources, and only the project can overrule it — so the
+ * capability lives on the adapter and is applied here, once, for every consumer.
+ */
+export function resolveConfigFor(
+  adapter: Adapter,
+  raw: CovselConfigInput = {},
+): CovselConfig {
+  const globs = adapter.defaultTestGlobs;
+  if (globs !== undefined && raw.testGlobs === undefined) {
+    return resolveConfig({ ...raw, testGlobs: [...globs] });
+  }
+  return resolveConfig(raw);
+}
+
+export interface RunSelectedInit extends SelectionRunInit {
+  adapter: Adapter;
+}
+
+/** What handing a selection to the runner produced. */
+export interface SelectionOutcome {
+  /** The runner's exit code — the worst one, if it took more than one invocation. */
+  status: number;
+  /**
+   * What the runner printed, when covsel captured it instead of passing it
+   * through. An adapter that runs the selection itself owns its child's stdio,
+   * so nothing is captured for one of those.
+   */
+  output?: string;
+}
+
+/**
+ * Hand one selection to the runner: the adapter's own narrowing when it has
+ * one, otherwise the command with the adapter's formatted file list appended.
+ * Both the CLI and the conformance suite build every selected invocation here,
+ * so what the suite certifies is what the product runs.
+ */
+export function runSelected(init: RunSelectedInit): SelectionOutcome {
+  const { adapter, selected, command, cwd } = init;
+  const stdio = init.stdio ?? 'inherit';
+  const [bin, ...rest] = command;
+  if (bin === undefined) throw new Error('empty command');
+  // An empty selection means there is nothing to run, not that the run needs no
+  // filter: appending an empty file list would hand the runner its entire suite.
+  // An adapter that narrows the run itself already invokes nothing for an empty
+  // selection, so deciding it here is what keeps the two paths agreeing.
+  if (selected.length === 0) return { status: 0 };
+  if (adapter.runSelection) {
+    return { status: adapter.runSelection({ selected, command, cwd, stdio }) };
+  }
+  const args = [...rest, ...adapter.formatSelection(selected)];
+  // Silencing the runner still has to leave a failure diagnosable, so its output
+  // is captured rather than discarded when it is not being passed through. The
+  // ceiling matches what the adapters allow themselves: a verbose suite's output
+  // is large, and truncating it into an error would obscure the real failure.
+  const res =
+    stdio === 'inherit'
+      ? spawnSync(bin, args, { cwd, stdio: 'inherit' })
+      : spawnSync(bin, args, { cwd, encoding: 'utf8', maxBuffer: 64 * 1024 * 1024 });
+  if (res.error) throw res.error;
+  const output = `${res.stdout ?? ''}${res.stderr ?? ''}`.trim();
+  return { status: res.status ?? 1, ...(output ? { output } : {}) };
 }
 
 export interface RunInit extends SelectInit {
+  adapter: Adapter;
   command: string[];
+}
+
+export interface RunAffectedSelectionInit extends Omit<SelectionRunInit, 'selected'> {
+  adapter: Adapter;
+  selection: AffectedResult;
+}
+
+/**
+ * Run one already-computed selection. A full run invokes the command with no
+ * file filter, so the runner's own full suite is what runs; anything else goes
+ * through the adapter's narrowing. Callers that hold a selection already — a
+ * watch loop reruns one per change — run it here rather than reselecting.
+ */
+export function runAffectedSelection(init: RunAffectedSelectionInit): SelectionOutcome {
+  const { adapter, selection, command, cwd } = init;
+  const [bin, ...rest] = command;
+  if (bin === undefined) throw new Error('empty command');
+  if (selection.fullRun) {
+    const stdio = init.stdio ?? 'inherit';
+    const res =
+      stdio === 'inherit'
+        ? spawnSync(bin, rest, { cwd, stdio: 'inherit' })
+        : spawnSync(bin, rest, { cwd, encoding: 'utf8', maxBuffer: 64 * 1024 * 1024 });
+    if (res.error) throw res.error;
+    const output = `${res.stdout ?? ''}${res.stderr ?? ''}`.trim();
+    return { status: res.status ?? 1, ...(output ? { output } : {}) };
+  }
+  return runSelected({
+    adapter,
+    selected: selection.selected,
+    command,
+    cwd,
+    ...(init.stdio !== undefined ? { stdio: init.stdio } : {}),
+  });
 }
 
 /**
@@ -307,13 +541,12 @@ export async function runAffected(
 ): Promise<number> {
   const selection = await selectAffected(init);
   onSelection?.(selection);
-  const [bin, ...rest] = init.command;
-  if (bin === undefined) throw new Error('empty command');
-  if (!selection.fullRun && selection.tests.length === 0) return 0;
-  const args = selection.fullRun ? rest : [...rest, ...selection.tests];
-  const res = spawnSync(bin, args, { cwd: init.cwd, stdio: 'inherit' });
-  if (res.error) throw res.error;
-  return res.status ?? 1;
+  return runAffectedSelection({
+    adapter: init.adapter,
+    selection,
+    command: init.command,
+    cwd: init.cwd,
+  }).status;
 }
 
 export interface StatusResult {
@@ -322,6 +555,8 @@ export interface StatusResult {
   recordedAt?: string;
   ageMs?: number;
   granularity?: string;
+  /** Globs the recording was able to observe execution within. */
+  observed?: string[];
   entryCount?: number;
   coveredFileCount?: number;
   coveredBlockCount?: number;
@@ -372,13 +607,18 @@ export async function computeStatus(init: StatusInit): Promise<StatusResult> {
 
   let nextIsFullRun = true;
   let nextFullRunReason: string | undefined;
-  try {
-    const changes = diffChanges(cwd);
-    const decision = new FailOpenPolicy(config).evaluate(map, changes);
-    nextIsFullRun = decision === 'full-run';
-    if (nextIsFullRun) nextFullRunReason = fullRunReason(config, map, changes);
-  } catch {
-    nextFullRunReason = 'could not compute a git diff';
+  const base = diffBase(cwd, map, undefined);
+  if (base.kind === 'untrusted') {
+    nextFullRunReason = base.reason;
+  } else {
+    try {
+      const changes = diffChanges(cwd, base.since, { exact: base.exact === true });
+      const decision = new FailOpenPolicy(config).evaluate(map, changes);
+      nextIsFullRun = decision === 'full-run';
+      if (nextIsFullRun) nextFullRunReason = fullRunReason(config, map, changes);
+    } catch {
+      nextFullRunReason = 'could not compute a git diff';
+    }
   }
 
   return {
@@ -387,6 +627,7 @@ export async function computeStatus(init: StatusInit): Promise<StatusResult> {
     recordedAt: map.recordedAt,
     ageMs: now - Date.parse(map.recordedAt),
     granularity: map.granularity,
+    observed: [...map.observed],
     entryCount: map.entries.length,
     coveredFileCount: coveredFiles.size,
     ...(coveredBlocks.size > 0 ? { coveredBlockCount: coveredBlocks.size } : {}),

@@ -3,30 +3,28 @@
 'covsel': minor
 ---
 
-Add `covsel init`: detect the project's test runner, persist which adapter
-observes it, and add the map directory to `.gitignore`. The adapter choice is
-the one consequential decision in adopting covsel and it turns on something
-invisible from outside the runner — whether it executes your sources or
-transformed copies of them — so `init` makes it once, from the project, and
-records it.
+Add `covsel init`: name the adapter for the runner a project already declares,
+write it to the config, and add the map directory to `.gitignore`.
 
-`CovselConfig` gains an `adapter` field (`"generic" | "vitest" | "node-test"`,
-default `"generic"`), which `record` and `run` now use when no `--adapter` flag
-is given; the flag still overrides it, and an adapter name that doesn't exist is
-now a loud error from either source rather than a silent fall back.
+Now that covsel ships no adapters, the first question in adopting it is which
+adapter package to install — a question whose answer is already sitting in
+`package.json`. `init` reads it off the dependencies and test script, writes the
+name down once, and prints the `npm install` command when the package is not
+there yet. A name in the config that nothing provides would otherwise look
+settled right up until the first `record` failed.
 
-`init` never persists a fail-closed setup. A runner that transforms sources
-before executing them is never resolved to a recorder that reads process
-coverage — under one of those, the map would say no test covers your sources, so
-a change to them would select nothing at all. That covers both the runners with
-no adapter yet (Jest, cucumber-js, Playwright) and an otherwise-supported runner
-invoked through a transform hook such as `ts-node` or `tsx`. In those cases
-`init` writes nothing, explains the risk, and points at the tracking issues;
-`--adapter` overrides it for a caller who knows better, with the under-selection
-warning stated rather than implied.
+`CovselConfig` gains an optional `adapter`, which `record`, `affected`, `run`,
+and `watch` fall back to when `--adapter` is not given — the flag still wins, and
+an unset field still means the default. It is the one config field with no
+default in core, because core cannot name an adapter that is certain to be
+installed.
 
-When no runner is recognised at all, `init` prints the environment a useful
-adapter request needs — covsel version, Node version, platform, package manager,
-the test script and test-related dependencies — alongside a prefilled issue
-link. The link itself carries only versions and platform; the project's own
-strings stay in the local output for review, since the tracker is public.
+`init` does not guess. A runner covsel has no signature for is reported rather
+than resolved to the generic wrap on the theory that something beats nothing:
+it writes nothing, prints the environment an adapter request needs — covsel
+version, Node version, platform, package manager, the test script and
+test-related dependencies — and links the prefilled issue. That link carries
+only versions and platform; the project's own strings stay in the local output
+for review, since the tracker is public. `--adapter` names one yourself when you
+know better, and a project running a suite covsel cannot record yet (Playwright)
+is told to keep running it in full.

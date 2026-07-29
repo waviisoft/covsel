@@ -28,7 +28,9 @@ export default defineConfig({
           items: [
             { text: 'What is covsel?', link: '/guide/what-is-covsel' },
             { text: 'Getting started', link: '/guide/getting-started' },
+            { text: 'Watch mode', link: '/guide/watch' },
             { text: 'The fail-open guarantee', link: '/guide/fail-open' },
+            { text: 'Using covsel in CI', link: '/guide/ci' },
           ],
         },
         {
@@ -37,7 +39,10 @@ export default defineConfig({
             { text: 'Overview', link: '/guide/adapters/' },
             { text: 'Generic (any command)', link: '/guide/adapters/generic' },
             { text: 'Vitest', link: '/guide/adapters/vitest' },
+            { text: 'Jest', link: '/guide/adapters/jest' },
             { text: 'node:test', link: '/guide/adapters/node-test' },
+            { text: 'cucumber-js', link: '/guide/adapters/cucumber' },
+            { text: 'Writing an adapter', link: '/guide/adapters/writing-an-adapter' },
           ],
         },
         {

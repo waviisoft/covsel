@@ -1,0 +1,58 @@
+{
+  "name": "@covsel/conformance",
+  "version": "0.0.0",
+  "description": "The shared conformance suite every covsel adapter must pass",
+  "license": "MIT",
+  "author": "WAVIISoft, LLC",
+  "type": "module",
+  "main": "./dist/index.cjs",
+  "module": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js",
+      "require": "./dist/index.cjs"
+    },
+    "./vitest": {
+      "types": "./dist/vitest.d.ts",
+      "import": "./dist/vitest.js"
+    }
+  },
+  "files": [
+    "dist"
+  ],
+  "scripts": {
+    "build": "tsup src/index.ts src/vitest.ts --format esm --dts --sourcemap --clean && tsup src/index.ts --format cjs --dts --sourcemap",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@covsel/core": "workspace:*"
+  },
+  "peerDependencies": {
+    "vitest": ">=2"
+  },
+  "peerDependenciesMeta": {
+    "vitest": {
+      "optional": true
+    }
+  },
+  "engines": {
+    "node": ">=22"
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/waviisoft/covsel.git",
+    "directory": "packages/conformance"
+  },
+  "keywords": [
+    "test-impact-analysis",
+    "coverage",
+    "adapter",
+    "conformance"
+  ],
+  "devDependencies": {
+    "@types/node": "^22.20.1",
+    "vitest": "^4.1.10"
+  }
+}

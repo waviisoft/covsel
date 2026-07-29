@@ -1,37 +1,46 @@
 # covsel
 
-> Runtime-coverage test impact analysis for any JS/TS runner — precise where
+> Runtime-coverage test impact analysis for any JS/TS runner -- precise where
 > static import-graph selection lies, and the only option for runners that have
 > no selection at all.
 
 **Status: early.** The `covsel record`, `affected`, `run`, and `status` loop
-works today, with block-hash (function-level) selection and per-test selection
-for node:test. More runner adapters and the CI map-sharing story are next. Track
-the work in the [issues](https://github.com/waviisoft/covsel/issues), and see
+works today, with block-hash (function-level) selection, per-test selection for
+node:test, scenario-level selection for cucumber-js, and a CI story for
+publishing and merging maps. More runner adapters are next. Track the work in the
+[issues](https://github.com/waviisoft/covsel/issues), and see
 [`DESIGN.md`](./DESIGN.md) for the architecture.
 
 ## The problem
 
 Your CI runs every test on every PR, even when the diff touches three files.
 Existing JS selection (`jest --changedSince`, `vitest --changed`, `nx affected`)
-walks the **static import graph** — which lies on dynamic imports, runtime
+walks the **static import graph** -- which lies on dynamic imports, runtime
 config, DI/plugin coupling, and non-import dependencies. And runners like
 cucumber-js have no selection at all.
 
 covsel takes the approach proven by Python's [pytest-testmon], Java's
 Ekstazi/STARTS, and Ruby's Crystalball: **watch what code each test actually
-executes** (via V8 coverage), persist a test → covered-code map, and — given a
-git diff — run only the tests whose covered code changed.
+executes** (via V8 coverage), persist a test -> covered-code map, and -- given a
+git diff -- run only the tests whose covered code changed.
 
 ## Quickstart
 
+covsel ships no adapters -- install the CLI plus the one for your runner:
+
 ```bash
-# Detect the runner, record which adapter observes this project, ignore the map
+npm install --save-dev covsel @covsel/adapter-generic   # any command, whole-file
+# or @covsel/adapter-vitest , -jest , -node-test , -cucumber
+```
+
+```bash
+# Name the adapter for your runner, write the config, ignore the map
 npx covsel init
 
 # Record a run and build the map (one process per test file)
 npx covsel record -- node --test
 npx covsel record --adapter vitest -- vitest run   # needs @vitest/coverage-v8
+npx covsel record --adapter jest -- jest
 
 # Print the tests your working-tree diff can affect
 npx covsel affected                 # newline-separated test files
@@ -40,19 +49,29 @@ npx covsel affected --since origin/main
 # Run only those tests by wrapping the runner
 npx covsel run -- node --test
 
+# Or leave it running: rerun the affected tests on every save
+npx covsel watch -- node --test
+
+# Runners with no selection of their own: pick individual scenarios
+npx covsel record --adapter cucumber -- cucumber-js
+npx covsel run --adapter cucumber -- cucumber-js
+
 # Inspect the map: age, size, sentinel drift, next action
 npx covsel status
+
+# In CI: merge the maps from a sharded suite before publishing
+npx covsel merge shard-*/map.json --out .covsel/map.json
 ```
 
-Zero config to start — `covsel init` is optional, and only records the adapter
-choice so later commands need no flag. `covsel affected` prints a file list, so
+Zero config to start -- `covsel init` is optional, and only writes down which
+adapter to record with so later commands need no flag. `covsel affected` prints a file list, so
 you can pipe it into any runner that accepts test files:
 `node --test $(covsel affected)`.
 
-Vitest transforms sources before executing them, so raw V8 process coverage
-can't see your `src/**`; `--adapter vitest` records through Vitest's own V8
-coverage provider instead. The generic wrap is for runners that execute source
-directly (e.g. `node --test`, Mocha on plain JS).
+Vitest and Jest transform sources before executing them, so raw V8 process
+coverage can't describe your `src/**`; `--adapter vitest` and `--adapter jest`
+record through the runner's own coverage instead. The generic wrap is for
+runners that execute source directly (e.g. `node --test`, Mocha on plain JS).
 
 ## The fail-open guarantee
 
@@ -64,40 +83,46 @@ have run_. Every design tension resolves toward over-selection:
   invalidate the map and trigger a **full run**.
 - A stale or unreadable map means a **full run**, never a skipped one.
 
-**We never skip a test whose behavior your change could alter — and when we
+**We never skip a test whose behavior your change could alter -- and when we
 can't be sure, we run it.**
 
 ## Supported runners
 
 Runners that execute source directly work today through the generic wrap.
 Runners that transform sources first (Vitest, Jest) need a per-runner recorder
-that reads the runner's own coverage; Vitest is done. Per-test (Level 1)
-selection ships for node:test.
+that reads the runner's own coverage; both are done. Per-test selection ships
+for node:test, and scenario-level selection for cucumber-js.
 
-| Runner                     | Per-file (Level 0) | Per-test (Level 1) |
-| -------------------------- | ------------------ | ------------------ |
-| Any command (generic wrap) | yes (direct-exec)  | —                  |
-| node:test                  | yes (generic)      | yes (`--adapter`)  |
-| Mocha                      | yes (generic, JS)  | later              |
-| Vitest                     | yes (`--adapter`)  | later              |
-| Jest                       | planned (own cov.) | later              |
-| cucumber-js                | planned (generic)  | later (scenario)   |
-| Playwright                 | planned (generic)  | later              |
+| Runner                     | Per-file          | Per-test / scenario |
+| -------------------------- | ----------------- | ------------------- |
+| Any command (generic wrap) | yes (direct-exec) | --                  |
+| node:test                  | yes (generic)     | yes (`--adapter`)   |
+| cucumber-js                | --                | yes (`--adapter`)   |
+| Mocha                      | yes (generic, JS) | later               |
+| Vitest                     | yes (`--adapter`) | later               |
+| Jest                       | yes (`--adapter`) | later               |
+| Playwright                 | planned (generic) | later               |
 
 ## Packages
 
 | Package                     | Purpose                                                                  |
 | --------------------------- | ------------------------------------------------------------------------ |
 | `covsel`                    | The CLI                                                                  |
-| `@covsel/core`              | Observer · Mapper · Store · Selector · Policy + the versioned map schema |
-| `@covsel/adapter-generic`   | Level-0 wrap-any-command adapter                                         |
+| `@covsel/core`              | Observer , Mapper , Store , Selector , Policy + the versioned map schema |
+| `@covsel/adapter-generic`   | Wrap-any-command adapter (whole-file)                                    |
 | `@covsel/adapter-vitest`    | Vitest adapter (records via Vitest's own V8 coverage)                    |
+| `@covsel/adapter-jest`      | Jest adapter (records via Jest's own coverage)                           |
 | `@covsel/adapter-node-test` | node:test adapter (per-test selection via the inspector observer)        |
+| `@covsel/adapter-cucumber`  | cucumber-js adapter (scenario-level selection)                           |
+| `@covsel/conformance`       | The shared suite every adapter must pass                                 |
 | `@covsel/adapter-*`         | Per-runner adapters (community contribution lane)                        |
 
 ## Documentation
 
 Full docs: **https://waviisoft.github.io/covsel/** (source in [`docs/`](./docs)).
+Running covsel in CI -- publishing the map on your default branch, restoring it on
+pull requests, and merging sharded runs -- is covered in the
+[CI guide](https://waviisoft.github.io/covsel/guide/ci).
 
 ## Development
 
@@ -109,13 +134,13 @@ pnpm lint && pnpm typecheck
 pnpm docs:dev      # run the docs site locally
 ```
 
-Node ≥ 22 required. See [CONTRIBUTING.md](./CONTRIBUTING.md).
+Node >= 22 required. See [CONTRIBUTING.md](./CONTRIBUTING.md).
 
 ## Prior art & credits
 
 covsel stands on the shoulders of [pytest-testmon] (Python),
 [Ekstazi](http://ekstazi.org) and STARTS (Java), and
-[Crystalball](https://github.com/toptal/crystalball) (Ruby) — and on
+[Crystalball](https://github.com/toptal/crystalball) (Ruby) -- and on
 `v8-to-istanbul` and the Istanbul ecosystem for source-map remapping.
 
 [pytest-testmon]: https://testmon.org

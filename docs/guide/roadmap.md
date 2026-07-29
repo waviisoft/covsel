@@ -6,29 +6,36 @@ what's up for grabs — see the
 high-level shape; [`DESIGN.md`](https://github.com/waviisoft/covsel/blob/main/DESIGN.md)
 has the full architecture.
 
-## Now — file-level selection (shipped)
+## Now — selection, shipped
 
-The first end-to-end loop, at per-file granularity with zero runner integration:
+The end-to-end loop works, from whole-file down to individual tests:
 
 - Observer for `NODE_V8_COVERAGE` process mode, Mapper from coverage to your
-  source globs, a local Store, a git diff helper, a file-level Selector, and the
-  fail-open Policy (sentinels, new-test detection).
-- The generic wrap-any-command adapter, and a Vitest adapter that records
-  through Vitest's own V8 coverage.
-- CLI: `record`, `affected`, `run`, `status`.
+  source globs, a local Store, a git diff helper, a Selector, and the fail-open
+  Policy (sentinels, new-test detection).
+- Function-level (block-hash) selection, so editing one function only runs the
+  tests that executed it and reformatting runs nothing.
+- Per-test selection via inspector snapshot-diff observation: individual tests
+  for node:test, individual **scenarios** for cucumber-js.
+- Adapters: the generic wrap-any-command adapter, Vitest, Jest, node:test,
+  cucumber-js.
+- A CI story: publish the map on the default branch, restore it on pull requests,
+  and merge the maps from a sharded suite — see [Using covsel in CI](/guide/ci).
+  The store is a directory, so GitHub Actions caching covers it with no extra
+  moving parts.
+- An adapter conformance kit every adapter runs, so a community adapter can prove
+  itself — see [Writing an adapter](/guide/adapters/writing-an-adapter).
+- CLI: `record`, `affected`, `run`, `watch`, `status`, `merge`.
+- [Watch mode](/guide/watch): the same selection driven continuously, one
+  debounced run per save.
 
-Editing one source file selects only the test files that execute it; editing a
-sentinel selects everything; a brand-new test always runs — proven end-to-end by
-[`examples/vitest-basic`](https://github.com/waviisoft/covsel/tree/main/examples/vitest-basic)
-in CI.
+Editing one source selects only the tests that execute it; editing a sentinel
+selects everything; a brand-new test always runs — proven end-to-end in CI by
+the [examples](https://github.com/waviisoft/covsel/tree/main/examples).
 
-## Next — per-test precision and real adapters
+## Next — more adapters
 
-- Inspector snapshot-diff observation for per-test granularity.
-- Adapters for Jest, Mocha, node:test, cucumber-js, and Playwright.
-- CI story: publish the map on the default branch, fetch the merge-base map on a
-  PR, and merge shard maps; Stores for the GitHub Actions cache and S3/GCS.
-- `covsel watch`.
+- Adapters for Mocha and Playwright.
 
 ## Beyond — bundlers, monorepos, ecosystem
 
@@ -36,4 +43,3 @@ in CI.
   coverage.
 - Compose with Nx/Turbo project graphs.
 - fs-read tracking for non-JS dependencies.
-- An optional remote map service.
