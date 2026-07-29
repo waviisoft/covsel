@@ -23,19 +23,24 @@ nowhere".
 
 Exercising the second half needs a fixture that executes code across the
 boundary, so `ConformanceFixture` grows an optional `blindSpot`: a source both
-units execute, plus a `breakingEdit` that makes both of them fail. It is required
-of a fixture used with an adapter whose declared scope does not cover the whole
-fixture — one in which every unit executes only code the recorder can see never
-exercises a narrow declaration, and the suite refuses that combination rather
-than passing it. Nothing lies outside `OBSERVES_EVERYTHING`, so an adapter that
-observes its whole runner needs no such fixture and behaves exactly as before;
-supply one anyway and the recorder is held to having recorded it.
+units execute, plus a `breakingEdit` that makes both of them fail. A recorder
+declaring less than the whole repo must have one outside its scope, since a
+fixture whose units execute nothing out there never exercises the declaration.
+That question is asked of the declaration rather than of the fixture's file list,
+so an asset no unit executes neither demands a blind spot nor stands in for one.
+Nothing lies outside `OBSERVES_EVERYTHING`, so an adapter that observes its whole
+runner needs none — and every adapter shipped here supplies one anyway, which is
+what holds each recorder to having recorded code it claims it could see.
 
 Two fixture properties are proved rather than trusted, the way the shared source
-must be reached indirectly and a `bodyEdit` must reach a function body. The suite
-applies the breaking edit and runs both units: if they still pass, the blind spot
-is code nothing reaches, and the fixture is rejected instead of certifying a
-fall-open nothing exercised. A `blindSpot` naming a test file or a sentinel is
-rejected outright, because a change to either forces a full run whatever the
-recording observed and so could never show that the declared scope was what
-caused one.
+must be reached indirectly and a `bodyEdit` must reach a function body. The blind
+spot is proved load-bearing by difference: both units are run whole and required
+to pass, the breaking edit is applied, and the run is required to fail — a
+non-zero exit alone would also be produced by a runner that runs nothing and
+reports failure. And a `blindSpot` naming a test file or a sentinel is rejected
+outright, because a change to either forces a full run whatever the recording
+observed and so could never show that the declared scope was what caused one.
+
+An adapter that declares a partial scope and reports coverage outside it — safe,
+but inconsistent — newly fails conformance. Report only what the declaration
+covers; widen the declaration only for paths the recorder really would have seen.

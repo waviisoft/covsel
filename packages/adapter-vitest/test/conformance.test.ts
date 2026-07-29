@@ -26,7 +26,10 @@ const suite = (label: string, source: string, fn: string) =>
     `import { ${fn} } from '../${source.replace(/\.ts$/, '.js')}';`,
     `test('${fn}', () => {`,
     `  appendFileSync('${RAN_MARKER_FILE}', '${label}\\n');`,
-    `  expect(typeof ${fn}(1)).toBe('number');`,
+    // Both units feed 2 through the shared source and on into server/logic.ts,
+    // so each one's result depends on code the suite then breaks to prove this
+    // recorder really would have seen it.
+    `  expect(${fn}(1)).toBe(7);`,
     '});',
     '',
   ].join('\n');
@@ -49,8 +52,11 @@ describeAdapterConformance({
       'vitest.config.ts':
         "import { defineConfig } from 'vitest/config';\n" +
         "export default defineConfig({ test: { include: ['test/**/*.test.ts'] } });\n",
+      'server/logic.ts':
+        'export function price(qty: number): number {\n  return qty * 3 + 1;\n}\n',
       'src/shared.ts':
-        'export function shared(x: number): number {\n  return x + 0;\n}\n',
+        "import { price } from '../server/logic.js';\n" +
+        'export function shared(x: number): number {\n  return price(x);\n}\n',
       'src/a.ts': source('alpha', 'x * 2'),
       'src/b.ts': source('beta', 'x + 1'),
       'test/a.test.ts': suite('test/a.test.ts', 'src/a.ts', 'alpha'),
@@ -69,6 +75,10 @@ describeAdapterConformance({
       },
     },
     sharedSource: 'src/shared.ts',
+    blindSpot: {
+      source: 'server/logic.ts',
+      breakingEdit: { find: 'qty * 3 + 1', replace: 'qty * 9 + 1' },
+    },
     newTest: {
       file: 'test/c.test.ts',
       contents:

@@ -118,6 +118,14 @@ function editBody(project: Project, unit: ConformanceUnit): void {
 function breakBlindSpot(project: Project, blind: ConformanceBlindSpot): void {
   const before = readFileSync(join(project.cwd, blind.source), 'utf8');
   const { find, replace } = blind.breakingEdit;
+  // Re-read rather than trust the pre-flight: an edit that silently matched
+  // nothing would leave the units passing and read as a blind spot they do not
+  // execute, blaming the fixture for the wrong thing.
+  if (!before.includes(find)) {
+    throw new Error(
+      `${blind.source} on disk does not contain the breakingEdit text ${JSON.stringify(find)}`,
+    );
+  }
   writeFile(project.cwd, blind.source, before.replace(find, replace));
 }
 
@@ -313,6 +321,25 @@ function entriesFor(map: CoverageMap, unit: ConformanceUnit): { file: string }[]
         (unit.name === undefined || e.test.name === unit.name),
     )
     .flatMap((e) => e.files);
+}
+
+/**
+ * Paths no fixture contains: a top-level file, a nested one, and a dotted
+ * directory. A scope that matches paths it has never heard of is claiming the
+ * whole repo, and nothing can lie outside it; one that does not is claiming a
+ * part, and owes the suite the part it cannot see. Asking the globs this way
+ * keeps the question about what a declaration means rather than how it is
+ * spelled, which comparing it to `**` would not.
+ */
+const OUTSIDE_ANY_FIXTURE = [
+  'covsel-scope-probe.txt',
+  'nowhere/covsel-scope-probe.txt',
+  '.covsel-scope-probe/deep/file.txt',
+];
+
+/** Whether a declared scope claims the whole repo rather than a part of it. */
+function claimsEverything(isObserved: (rel: string) => boolean): boolean {
+  return OUTSIDE_ANY_FIXTURE.every(isObserved);
 }
 
 type Check = (spec: AdapterConformanceSpec) => Promise<string>;
@@ -643,34 +670,55 @@ const CHECKS: { name: string; run: Check }[] = [
           const outside = recorded.find((file) => !isObserved(file));
           if (outside !== undefined) {
             throw new Error(
-              `${entry.test.name ?? entry.test.file} recorded ${outside}, which lies outside the scope this recorder declares it observes (${scope})`,
+              `${entry.test.name ?? entry.test.file} recorded ${outside}, outside the scope this recorder declares it observes (${scope}). ` +
+                `Coverage there is never read, so drop it; widen the declaration only if code running there really would have been seen`,
             );
           }
         }
 
         const blind = spec.fixture.blindSpot;
-        // Over the fixture's own files: the suite writes package.json and
-        // .gitignore itself, and rejecting a declaration for leaving those out
-        // would hold an author to something they did not write.
-        const unseen = Object.keys(spec.fixture.files).filter((rel) => !isObserved(rel));
-        if (unseen.length > 0 && (blind === undefined || isObserved(blind.source))) {
-          throw new Error(
-            `this recorder declares it observes ${scope}, which leaves ${unseen.join(', ')} outside it, and the fixture has no blindSpot out there: a fixture whose units execute only code the recorder can see never exercises the declaration, so a recorder blind past it passes every check`,
-          );
+        if (!claimsEverything(isObserved)) {
+          // Asked of the declaration, not of the fixture's file list. A file no
+          // unit executes — a README, a config — says nothing about what the
+          // recorder can see, so demanding a blind spot because one sits outside
+          // the scope rejects a correct adapter, and demanding none because
+          // every file happens to sit inside lets a narrow claim go untested.
+          if (blind === undefined) {
+            throw new Error(
+              `this recorder declares it observes only ${scope}, and the fixture has no blindSpot. ` +
+                `A fixture whose units execute nothing outside the declaration never exercises it, so a recorder blind past it passes every check`,
+            );
+          }
+          if (isObserved(blind.source)) {
+            throw new Error(
+              `the blindSpot ${blind.source} is inside ${scope}, the scope this recorder declares. ` +
+                `Nothing this fixture executes then lies outside the declaration, so the fall-open it exists to demonstrate is never reached`,
+            );
+          }
         }
         if (blind === undefined) {
-          return `records only within ${scope}, and the fixture has nothing outside it`;
+          return `records only within ${scope}, which is everything`;
         }
 
-        // Prove the blind spot is load-bearing before reading anything into it.
-        // Recording ran these units and required them to pass, so breaking the
-        // code they reach through it must now fail them; a fixture whose units
-        // never execute it certifies nothing, whichever branch follows.
+        // Prove the blind spot is load-bearing before reading anything into it,
+        // and prove it by difference. A non-zero exit on its own means only that
+        // something failed — a runner that runs no tests and reports failure
+        // produces the same one — so the units are first shown passing, and
+        // shown running, with the fixture whole.
+        const whole = runSelected(spec, project, [idOf(a), idOf(b)]);
+        const missing = [a, b].filter((unit) => !whole.ran.includes(label(unit)));
+        if (whole.status !== 0 || missing.length > 0) {
+          throw new Error(
+            `both units must run and pass before the blind spot is broken, or breaking it proves nothing; ` +
+              `ran ${whole.ran.join(', ') || 'nothing'} (${whole.detail})`,
+          );
+        }
         breakBlindSpot(project, blind);
         const broken = runSelected(spec, project, [idOf(a), idOf(b)]);
         if (broken.status === 0) {
           throw new Error(
-            `both units still pass with ${blind.source} broken, so they do not execute it; a blindSpot nothing reaches cannot show what a recorder missed`,
+            `both units still pass with ${blind.source} broken, so they do not execute it; ` +
+              `a blindSpot nothing reaches cannot show what a recorder missed`,
           );
         }
 
@@ -682,7 +730,8 @@ const CHECKS: { name: string; run: Check }[] = [
           for (const unit of [a, b]) {
             if (!entriesFor(map, unit).some((f) => f.file === blind.source)) {
               throw new Error(
-                `${label(unit)} executes ${blind.source} and this recorder declares it observes ${scope}, which covers it, yet recorded nothing of it: a recorder that sees only part of a run has to declare only what it sees, or selection reads its blind spot as "this code ran nowhere"`,
+                `${label(unit)} executes ${blind.source}, which the declared scope (${scope}) covers, yet nothing of it was recorded. ` +
+                  `A recorder that sees only part of a run has to declare only what it sees, or selection reads its blind spot as "this code ran nowhere"`,
               );
             }
           }

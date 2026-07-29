@@ -15,7 +15,10 @@ const test = (label: string, source: string, fn: string) =>
     `import { ${fn} } from '../${source}';`,
     `test('${fn}', () => {`,
     `  appendFileSync('${RAN_MARKER_FILE}', '${label}\\n');`,
-    `  assert.equal(typeof ${fn}(1), 'number');`,
+    // Both units feed 2 through the shared source and on into server/logic.mjs,
+    // so each one's result depends on code the suite then breaks to prove this
+    // recorder really would have seen it.
+    `  assert.equal(${fn}(1), 7);`,
     '});',
     '',
   ].join('\n');
@@ -34,7 +37,10 @@ describeAdapterConformance({
   fixture: {
     command: ['node', '--test'],
     files: {
-      'src/shared.mjs': 'export function shared(x) {\n  return x + 0;\n}\n',
+      'server/logic.mjs': 'export function price(qty) {\n  return qty * 3 + 1;\n}\n',
+      'src/shared.mjs':
+        "import { price } from '../server/logic.mjs';\n" +
+        'export function shared(x) {\n  return price(x);\n}\n',
       'src/a.mjs': source('alpha', 'x * 2'),
       'src/b.mjs': source('beta', 'x + 1'),
       'test/a.test.mjs': test('test/a.test.mjs', 'src/a.mjs', 'alpha'),
@@ -53,6 +59,10 @@ describeAdapterConformance({
       },
     },
     sharedSource: 'src/shared.mjs',
+    blindSpot: {
+      source: 'server/logic.mjs',
+      breakingEdit: { find: 'qty * 3 + 1', replace: 'qty * 9 + 1' },
+    },
     newTest: {
       file: 'test/c.test.mjs',
       contents: "import { test } from 'node:test';\ntest('c', () => {});\n",

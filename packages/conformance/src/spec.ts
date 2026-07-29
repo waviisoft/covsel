@@ -101,12 +101,12 @@ export interface ConformanceFixture {
   /**
    * Code both units execute that a recorder may not be able to observe.
    *
-   * Required of a fixture used with an adapter whose declared scope does not
-   * cover the whole fixture: without it the declaration is never exercised, and
-   * a recorder that sees a fraction of the run reports what a complete one does.
-   * An adapter that observes everything its runner executes needs none — nothing
-   * lies outside `**` — and the suite then treats a supplied one as a source
-   * like any other, which the recorder is held to having recorded.
+   * Required of a fixture used with an adapter declaring less than the whole
+   * repo, and required to lie outside that declaration: without it the
+   * declaration is never exercised, and a recorder that sees a fraction of the
+   * run reports what a complete one does. An adapter that observes everything
+   * its runner executes needs none, since nothing lies outside `**`; supplying
+   * one anyway is what holds it to having recorded code it claims it could see.
    */
   blindSpot?: ConformanceBlindSpot;
   /** A test file that does not exist at record time, added later by the suite. */

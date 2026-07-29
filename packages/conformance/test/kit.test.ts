@@ -362,25 +362,56 @@ describe('the conformance kit', () => {
   }, 180_000);
 
   it('fails a recorder that records a source it declared it could not see', async () => {
+    // Narrowed its declaration and not its recording: it says it watches the
+    // source root and still reports everything its coverage data contained.
     const results = await runAdapterConformance({
-      ...conformingSpec,
-      adapter: declaring(['src/a.mjs', 'src/b.mjs', 'test/**']),
-    });
-    const blind = check(results, 'blind spots');
-    expect(blind?.ok).toBe(false);
-    expect(blind?.detail).toContain('src/shared.mjs');
-  }, 180_000);
-
-  it('rejects a fixture that never exercises a narrow declaration', async () => {
-    // Nothing this fixture's units execute lies outside src/, so the declaration
-    // is never put to the test and a recorder blind past it certifies green.
-    const results = await runAdapterConformance({
-      ...conformingSpec,
+      ...partialViewSpec,
       adapter: declaring(['src/**']),
     });
     const blind = check(results, 'blind spots');
     expect(blind?.ok).toBe(false);
+    expect(blind?.detail).toContain('server/logic.mjs');
+  }, 180_000);
+
+  it('rejects a fixture that never exercises a narrow declaration', async () => {
+    // A declaration narrower than the whole repo, and a fixture with nothing
+    // outside it: the claim is never put to the test, and a recorder blind past
+    // it certifies green. Every file here is inside the declared scope, which is
+    // what makes the fixture's file list the wrong thing to ask.
+    const results = await runAdapterConformance({
+      ...conformingSpec,
+      adapter: declaring(['src/**', 'test/**']),
+    });
+    const blind = check(results, 'blind spots');
+    expect(blind?.ok).toBe(false);
     expect(blind?.detail).toContain('blindSpot');
+  }, 180_000);
+
+  it('rejects a blind spot inside the scope of a partial declaration', async () => {
+    const results = await runAdapterConformance({
+      ...partialViewSpec,
+      adapter: declaring(['src/**', 'test/**', 'server/**']),
+    });
+    const blind = check(results, 'blind spots');
+    expect(blind?.ok).toBe(false);
+    expect(blind?.detail).toContain('server/logic.mjs');
+  }, 180_000);
+
+  it('certifies a partial recorder over a fixture file nothing executes', async () => {
+    // An asset outside the declared scope is not a blind spot: no unit executes
+    // it, so no blindSpot an author could write would exercise the declaration
+    // through it, and demanding one would reject a correct adapter over a README.
+    const results = await runAdapterConformance({
+      ...partialViewSpec,
+      adapter: partialView(['src/**', 'test/**']),
+      fixture: {
+        ...partialViewSpec.fixture,
+        files: { ...partialViewSpec.fixture.files, 'README.md': '# fixture\n' },
+      },
+    });
+    expect(results.filter((r) => !r.ok).map((f) => `${f.check}: ${f.detail}`)).toEqual(
+      [],
+    );
   }, 180_000);
 
   it('rejects a blind spot the fixture does not execute', async () => {
@@ -402,6 +433,45 @@ describe('the conformance kit', () => {
     const blind = check(results, 'blind spots');
     expect(blind?.ok).toBe(false);
     expect(blind?.detail).toContain('server/unused.mjs');
+  }, 180_000);
+
+  it('rejects a blind spot nothing reaches even when the runner reports failure', async () => {
+    // A non-zero exit is not proof that the edit broke anything: a runner that
+    // runs no tests and reports failure produces the same one. The units have to
+    // be shown passing first, and shown running.
+    const results = await runAdapterConformance({
+      ...partialViewSpec,
+      adapter: { ...partialView(['src/**', 'test/**']), runSelection: () => 1 },
+      fixture: {
+        ...partialViewSpec.fixture,
+        files: {
+          ...partialViewSpec.fixture.files,
+          'server/unused.mjs': 'export function idle() {\n  return 1;\n}\n',
+        },
+        blindSpot: {
+          source: 'server/unused.mjs',
+          breakingEdit: { find: 'return 1', replace: 'return missing' },
+        },
+      },
+    });
+    expect(check(results, 'blind spots')?.ok).toBe(false);
+  }, 180_000);
+
+  it('rejects a blind spot naming a test file', async () => {
+    const results = await runAdapterConformance({
+      ...partialViewSpec,
+      fixture: {
+        ...partialViewSpec.fixture,
+        blindSpot: {
+          source: 'test/a.test.mjs',
+          breakingEdit: { find: 'assert.equal', replace: 'assert.notEqual' },
+        },
+      },
+    });
+    // A test file is selected whether or not the recording could observe it, so
+    // it can never show that the declared scope was what caused the full run.
+    expect(check(results, 'records a usable map')?.ok).toBe(false);
+    expect(check(results, 'records a usable map')?.detail).toContain('test/a.test.mjs');
   }, 180_000);
 
   it('rejects a blind spot that would force a full run anyway', async () => {

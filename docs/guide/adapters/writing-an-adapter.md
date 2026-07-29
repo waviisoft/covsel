@@ -142,7 +142,7 @@ describeAdapterConformance({
   adapter: myAdapter,
   fixture: {
     command: ['my-runner'],
-    files: {/* see the four rules below */},
+    files: {/* see the five rules below */},
     units: {
       a: {
         testFile: 'test/a.test.js',
@@ -162,7 +162,7 @@ describeAdapterConformance({
 ```
 
 The fixture is yours because projects differ per runner; the assertions are not.
-Four rules make it work, and the suite enforces the ones it can:
+Five rules make it work, and the suite enforces the ones it can:
 
 - **Two units executing different sources**, so precision is observable.
 - **One `sharedSource` both units reach _through_ their own sources** -- no test
@@ -178,15 +178,19 @@ Four rules make it work, and the suite enforces the ones it can:
 - **A `blindSpot` when your recorder declares less than everything.** A source
   both units execute that lies _outside_ the scope you declare -- the app server a
   browser test drives, an isolate the runner starts on its own -- plus a
-  `breakingEdit`, a change to it that makes both units fail. The suite applies
-  that edit and runs them: if they still pass, your blind spot is code nothing
-  reaches, and it is rejected rather than certifying a fall-open nothing
-  exercised. Then it changes that source and requires selection to report a full
-  run naming it. A fixture in which every unit executes only code the recorder
-  can see never exercises a narrow declaration at all, so the suite refuses that
-  combination instead of passing it. An adapter declaring `OBSERVES_EVERYTHING`
-  needs none; supply one anyway and the suite holds the recorder to having
-  recorded it, because nothing lies outside `**`.
+  `breakingEdit`, a change to it that makes both units fail. The suite proves it
+  by difference: it runs both units whole and requires them to pass, applies the
+  edit, and requires the run to fail. A blind spot they still pass without is
+  code nothing reaches, and it is rejected rather than certifying a fall-open
+  nothing exercised. The same edit is then the diff selection must report a full
+  run for, naming the file. A declaration narrower than the whole repo with
+  nothing outside it for the units to execute is refused rather than passed --
+  the question is asked of the declaration, not of your file list, so an asset no
+  unit executes neither demands a blind spot nor stands in for one. An adapter
+  declaring `OBSERVES_EVERYTHING` needs none, since nothing lies outside `**`;
+  supply one anyway -- the shipped adapters all do -- and the suite holds the
+  recorder to having recorded it, which is what catches a recorder that sees part
+  of a run and claims the whole one.
 - **Every unit appends its own label** -- its `name`, or its `testFile` when it has
   none -- plus a newline to `RAN_MARKER_FILE` when it runs. That is how the suite
   sees which units a selection actually executed, without parsing any runner's
