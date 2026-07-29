@@ -211,7 +211,7 @@ describe('covsel init', () => {
       { 'package.json': pkg({ devDependencies: { vitest: '^3.0.0' } }) },
       async (cwd) => {
         const captured = await capture(() => main(['init', '--no-install']));
-        return { ...captured, config: readFileSync(join(cwd, '.covsel.json'), 'utf8') };
+        return { ...captured, config: readFileSync(join(cwd, 'covsel.json'), 'utf8') };
       },
     );
 
@@ -289,7 +289,7 @@ describe('covsel init', () => {
     const { code, out } = await inProject(
       {
         'package.json': pkg({ devDependencies: { jest: '^29.0.0' } }),
-        '.covsel.json': `${JSON.stringify({ adapter: 'jest' })}\n`,
+        'covsel.json': `${JSON.stringify({ adapter: 'jest' })}\n`,
         '.gitignore': '.covsel/\n',
       },
       () => capture(() => main(['init'])),
@@ -321,7 +321,7 @@ describe('covsel init', () => {
       async (cwd) => {
         await capture(() => main(['init']));
         return {
-          config: existsSync(join(cwd, '.covsel.json')),
+          config: existsSync(join(cwd, 'covsel.json')),
           gitignore: existsSync(join(cwd, '.gitignore')),
         };
       },
@@ -347,7 +347,7 @@ describe('the persisted adapter', () => {
     const { code, err } = await inProject(
       {
         'package.json': pkg({}),
-        '.covsel.json': `${JSON.stringify({ adapter: 'from-config' })}\n`,
+        'covsel.json': `${JSON.stringify({ adapter: 'from-config' })}\n`,
       },
       () => capture(() => main(['record', '--', 'true'])),
     );
@@ -360,7 +360,7 @@ describe('the persisted adapter', () => {
     const { err } = await inProject(
       {
         'package.json': pkg({}),
-        '.covsel.json': `${JSON.stringify({ adapter: 'from-config' })}\n`,
+        'covsel.json': `${JSON.stringify({ adapter: 'from-config' })}\n`,
       },
       () => capture(() => main(['record', '--adapter', 'from-flag', '--', 'true'])),
     );

@@ -73,7 +73,7 @@ describe('covsel init — naming the adapter', () => {
 
     expect(result.outcome).toBe('configure');
     expect(result.adapter).toBe(adapter);
-    expect(JSON.parse(readFileSync(join(cwd, '.covsel.json'), 'utf8'))).toEqual({
+    expect(JSON.parse(readFileSync(join(cwd, 'covsel.json'), 'utf8'))).toEqual({
       adapter,
     });
     expect((await loadConfig(cwd)).adapter).toBe(adapter);
@@ -246,7 +246,7 @@ describe('covsel init — planning is not doing', () => {
 
     expect(planned.needsConfig).toBe(true);
     expect(planned.needsGitignore).toBe(true);
-    expect(existsSync(join(cwd, '.covsel.json'))).toBe(false);
+    expect(existsSync(join(cwd, 'covsel.json'))).toBe(false);
     expect(existsSync(join(cwd, '.gitignore'))).toBe(false);
   });
 
@@ -258,14 +258,14 @@ describe('covsel init — planning is not doing', () => {
     const applied = await applyInit(cwd, await plan(cwd));
 
     expect(applied).toEqual({ configWritten: false, gitignoreUpdated: false });
-    expect(existsSync(join(cwd, '.covsel.json'))).toBe(false);
+    expect(existsSync(join(cwd, 'covsel.json'))).toBe(false);
     expect(existsSync(join(cwd, '.gitignore'))).toBe(false);
   });
 
   it('still ignores the map for a project configured before that was habit', async () => {
     const cwd = project({
       'package.json': pkg({ devDependencies: { vitest: '^3.0.0' } }),
-      '.covsel.json': `${JSON.stringify({ adapter: 'vitest' })}\n`,
+      'covsel.json': `${JSON.stringify({ adapter: 'vitest' })}\n`,
     });
 
     const applied = await applyInit(cwd, await plan(cwd));
@@ -351,13 +351,13 @@ describe('covsel init — idempotence', () => {
       'package.json': pkg({ devDependencies: { vitest: '^3.0.0' } }),
     });
     await init(cwd);
-    const before = readFileSync(join(cwd, '.covsel.json'), 'utf8');
+    const before = readFileSync(join(cwd, 'covsel.json'), 'utf8');
 
     const second = await init(cwd);
 
     expect(second.outcome).toBe('already-configured');
     expect(second.configWritten).toBe(false);
-    expect(readFileSync(join(cwd, '.covsel.json'), 'utf8')).toBe(before);
+    expect(readFileSync(join(cwd, 'covsel.json'), 'utf8')).toBe(before);
   });
 
   it('never duplicates the .gitignore entry', async () => {
@@ -379,7 +379,7 @@ describe('covsel init — idempotence', () => {
   it('honors a non-default store directory when ignoring the map', async () => {
     const cwd = project({
       'package.json': pkg({ devDependencies: { vitest: '^3.0.0' } }),
-      '.covsel.json': `${JSON.stringify({ store: { dir: '.cache/covsel' } })}\n`,
+      'covsel.json': `${JSON.stringify({ store: { dir: '.cache/covsel' } })}\n`,
     });
 
     await init(cwd);
@@ -403,7 +403,7 @@ describe('covsel init — idempotence', () => {
   it('reports what an existing config says, not what detection would pick', async () => {
     const cwd = project({
       'package.json': pkg({ devDependencies: { vitest: '^3.0.0' } }),
-      '.covsel.json': `${JSON.stringify({ granularity: 'file' })}\n`,
+      'covsel.json': `${JSON.stringify({ granularity: 'file' })}\n`,
     });
 
     const result = await init(cwd);
@@ -412,6 +412,6 @@ describe('covsel init — idempotence', () => {
     expect(result.adapter).toBeUndefined();
     expect(result.warnings.join('\n')).toContain('names no adapter');
     expect(result.warnings.join('\n')).toContain('"adapter": "vitest"');
-    expect(readFileSync(join(cwd, '.covsel.json'), 'utf8')).not.toContain('adapter');
+    expect(readFileSync(join(cwd, 'covsel.json'), 'utf8')).not.toContain('adapter');
   });
 });

@@ -6,7 +6,7 @@
 Add `covsel init`: set a project up for covsel in one command. It reads
 `package.json` to work out which runner the project uses, shows what it found,
 and — once you confirm — installs that runner's adapter with the project's own
-package manager, writes the adapter to a `.covsel.json`, and keeps the map
+package manager, writes the adapter to a `covsel.json`, and keeps the map
 directory out of version control.
 
 Now that covsel ships no adapters, which package to install is the first

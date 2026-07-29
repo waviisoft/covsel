@@ -31,7 +31,7 @@ covsel init: detected vitest — vitest is a dependency (adapter vitest)
 
 Plan:
   install  @covsel/adapter-vitest, @vitest/coverage-v8 (pnpm)
-  write    .covsel.json (adapter: vitest)
+  write    covsel.json (adapter: vitest)
   ignore   the map directory in .gitignore
 
 Set covsel up this way? [Y/n]
@@ -125,7 +125,7 @@ code:
 
 ## Configuration
 
-Selection needs no configuration once an adapter is installed. To refine, add a `.covsel.json` (or
+Selection needs no configuration once an adapter is installed. To refine, add a `covsel.json` (or
 `covsel.config.js`) at your repo root:
 
 ```jsonc

@@ -342,7 +342,7 @@ export async function planInit(options: InitOptions): Promise<InitPlan> {
   const base = {
     missingSupport: [] as string[],
     packageManager,
-    configPath: existing ?? join(cwd, '.covsel.json'),
+    configPath: existing ?? join(cwd, 'covsel.json'),
     needsConfig: false,
     gitignorePath: join(cwd, '.gitignore'),
     needsGitignore: !isGitignored(cwd, config.store.dir),

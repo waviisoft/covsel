@@ -104,7 +104,7 @@ export function resolveConfig(partial?: CovselConfigInput): CovselConfig {
 
 /** Config file names looked up, in priority order. */
 export const CONFIG_FILES = [
-  '.covsel.json',
+  'covsel.json',
   'covsel.config.js',
   'covsel.config.mjs',
   'covsel.config.cjs',
