@@ -3,7 +3,7 @@ import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 
 import { blockHashesOf } from './blocks.js';
-import { type CovselConfig, resolveConfig } from './config.js';
+import { type CovselConfig, type CovselConfigInput, resolveConfig } from './config.js';
 import { discoverTestFiles } from './discover.js';
 import { commitExists, diffChanges, gitHeadCommit, isGitWorkTree } from './git.js';
 import type { Adapter, Change, Recorder, SelectionRunInit } from './interfaces.js';
@@ -26,7 +26,8 @@ import { LocalStore } from './store.js';
 export interface GenericRecorderInit {
   command: string[];
   cwd: string;
-  config: Pick<CovselConfig, 'sourceGlobs' | 'testGlobs' | 'granularity'>;
+  config: Pick<CovselConfig, 'sourceGlobs' | 'testGlobs' | 'granularity'> &
+    Partial<Pick<CovselConfig, 'sourceMaps'>>;
   env?: NodeJS.ProcessEnv;
 }
 
@@ -51,6 +52,7 @@ export function createGenericRecorder(init: GenericRecorderInit): Recorder {
       const blocks = wantBlocks ? await mapper.toBlocks(raw) : [];
       return [{ test: { file: testFile }, files, blocks }];
     },
+    unmappableAllowed: () => mapper.takeAllowedUnmappable(),
   };
 }
 
@@ -95,6 +97,12 @@ export interface RecordEvent {
   tests?: number;
   sources?: number;
   reason?: string;
+  /**
+   * Scripts this file executed that could not be mapped back to any source and
+   * were accepted under `sourceMaps.allowUnmappable`. Present only when there
+   * were any: each is a gap in what the entry credits.
+   */
+  allowedUnmappable?: string[];
 }
 
 export interface RecordResult {
@@ -140,7 +148,14 @@ export async function recordMap(init: RecordInit): Promise<RecordResult> {
         });
         sources += unit.files.length;
       }
-      init.onEvent?.({ kind: 'recorded', file, tests: units.length, sources });
+      const allowed = recorder.unmappableAllowed?.() ?? [];
+      init.onEvent?.({
+        kind: 'recorded',
+        file,
+        tests: units.length,
+        sources,
+        ...(allowed.length > 0 ? { allowedUnmappable: allowed } : {}),
+      });
     } catch (err) {
       const reason = err instanceof Error ? err.message : String(err);
       failures.push({ file, reason });
@@ -365,7 +380,7 @@ function sortUnits(units: TestId[]): void {
  */
 export function resolveConfigFor(
   adapter: Adapter,
-  raw: Partial<CovselConfig> = {},
+  raw: CovselConfigInput = {},
 ): CovselConfig {
   const globs = adapter.defaultTestGlobs;
   if (globs !== undefined && raw.testGlobs === undefined) {
