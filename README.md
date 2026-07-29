@@ -96,7 +96,14 @@ for node:test, and scenario-level selection for cucumber-js.
 | Mocha                      | yes (generic, JS) | later               |
 | Vitest                     | yes (`--adapter`) | later               |
 | Jest                       | yes (`--adapter`) | later               |
-| Playwright                 | planned (generic) | later               |
+| Playwright                 | no (see below)    | later               |
+
+**Playwright and other browser-driving runners are not supported yet, and the
+generic wrap is not a workaround.** The generic wrap observes only the process it
+starts, which for a UI test is the spec — not the browser rendering your app, nor
+the server behind it. A map recorded that way says your tests cover none of
+`src/**`, so a diff touching app code selects nothing. Keep running those suites
+in full. Tracked in [#12](https://github.com/waviisoft/covsel/issues/12).
 
 ## Packages
 

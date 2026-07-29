@@ -35,7 +35,18 @@ the [examples](https://github.com/waviisoft/covsel/tree/main/examples).
 
 ## Next — more adapters
 
-- Adapters for Mocha and Playwright.
+- An adapter for Mocha.
+- An adapter for Playwright, and with it UI test selection. This is the one
+  adapter that cannot be a thin shim: a UI test executes in the browser and
+  usually an application server, so recording it means observing several V8
+  isolates and projecting bundled coverage back to your sources. Most of the core
+  work that needs is done — unmappable scripts now fail recording, a recorder
+  declares what it could not see, several observation windows fold into one unit,
+  and conformance holds an adapter to its declared scope. Projecting bundled
+  coverage ranges through source maps is the remaining piece. Until it ships, the
+  generic wrap is not a substitute: it observes only the spec process, so the map
+  would credit your tests with covering none of your app. See
+  [#12](https://github.com/waviisoft/covsel/issues/12).
 
 ## Beyond — bundlers, monorepos, ecosystem
 

@@ -29,7 +29,7 @@ features:
     details: >-
       It depends only on the two things every JS/TS runner shares: V8 can
       observe the code, and every runner accepts a list of test files. Vitest,
-      Jest, Mocha, node:test, cucumber-js, Playwright.
+      Jest, Mocha, node:test, cucumber-js.
   - title: Fails open, loudly
     details: >-
       The catastrophic failure is skipping a test that should have run. Every

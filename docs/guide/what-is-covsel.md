@@ -37,18 +37,29 @@ it's opt-in. See [Architecture](/guide/architecture) for the layered design.
 
 Runners that execute source directly work today through the generic wrap.
 Runners that transform sources first (Vitest, Jest) need a per-runner recorder
-that reads the runner's own coverage -- Vitest is done. Per-test precision comes
-later. See [Adapters](/guide/adapters/) for how each is observed.
+that reads the runner's own coverage; both are done. Per-test selection ships for
+node:test, and scenario-level selection for cucumber-js. See
+[Adapters](/guide/adapters/) for how each is observed.
 
-| Runner                     | Per-file               | Per-test         |
-| -------------------------- | ---------------------- | ---------------- |
-| Any command (generic wrap) | yes (direct-exec)      | --               |
-| node:test                  | yes (generic)          | later            |
-| Mocha                      | yes (generic, JS)      | later            |
-| Vitest                     | yes (`--adapter`)      | later            |
-| Jest                       | planned (own coverage) | later            |
-| cucumber-js                | planned (generic)      | later (scenario) |
-| Playwright                 | planned (generic)      | later            |
+| Runner                     | Per-file          | Per-test / scenario |
+| -------------------------- | ----------------- | ------------------- |
+| Any command (generic wrap) | yes (direct-exec) | --                  |
+| node:test                  | yes (generic)     | yes (`--adapter`)   |
+| cucumber-js                | --                | yes (`--adapter`)   |
+| Mocha                      | yes (generic, JS) | later               |
+| Vitest                     | yes (`--adapter`) | later               |
+| Jest                       | yes (`--adapter`) | later               |
+| Playwright                 | no (see below)    | later               |
+
+::: warning Browser-driving runners are not supported yet
+Playwright is not supported, and the generic wrap is **not** a workaround for it.
+The generic wrap observes only the process it starts, which for a UI test is the
+spec — not the browser rendering your app, nor the server behind it. A map
+recorded that way says your tests cover none of `src/**`, so a diff touching app
+code selects nothing rather than falling open. Keep running those suites in full
+until an adapter ships; the work is tracked in
+[#12](https://github.com/waviisoft/covsel/issues/12).
+:::
 
 ## Prior art & credits
 

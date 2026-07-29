@@ -73,19 +73,34 @@ of covsel is identical regardless of which path recorded the map.
 
 ## Available adapters
 
-| Adapter (install separately) | Runner                   | How it records                     | Status    |
-| ---------------------------- | ------------------------ | ---------------------------------- | --------- |
-| `@covsel/adapter-generic`    | any direct-exec command  | `NODE_V8_COVERAGE` process         | published |
-| `@covsel/adapter-vitest`     | Vitest                   | Vitest's own V8 coverage           | published |
-| `@covsel/adapter-jest`       | Jest                     | Jest's own coverage                | published |
-| `@covsel/adapter-node-test`  | node:test                | inspector snapshot-diff (per-test) | published |
-| `@covsel/adapter-cucumber`   | cucumber-js              | inspector snapshot-diff (scenario) | published |
-| _(planned)_                  | Mocha , Playwright , ... | generic wrap / lifecycle shim      | later     |
+| Adapter (install separately) | Runner                  | How it records                     | Status    |
+| ---------------------------- | ----------------------- | ---------------------------------- | --------- |
+| `@covsel/adapter-generic`    | any direct-exec command | `NODE_V8_COVERAGE` process         | published |
+| `@covsel/adapter-vitest`     | Vitest                  | Vitest's own V8 coverage           | published |
+| `@covsel/adapter-jest`       | Jest                    | Jest's own coverage                | published |
+| `@covsel/adapter-node-test`  | node:test               | inspector snapshot-diff (per-test) | published |
+| `@covsel/adapter-cucumber`   | cucumber-js             | inspector snapshot-diff (scenario) | published |
+| _(planned)_                  | Mocha, ...              | generic wrap / lifecycle shim      | later     |
+| _(blocked)_                  | Playwright              | browser + server windows           | [#12]     |
+
+[#12]: https://github.com/waviisoft/covsel/issues/12
 
 The generic, Vitest, and Jest adapters record at whole-file granularity. The
 node:test and cucumber-js adapters record each **test** or **scenario**
 individually and run only the affected ones -- which is the only selection
 cucumber-js has.
+
+Playwright is listed separately because the generic wrap is not a stepping stone
+to it. Every adapter above observes code running in the process tree the recorder
+controls; a UI test executes in the browser and usually an application server as
+well, neither of which the wrap can see. Recording one that way produces a map
+that is non-empty and internally consistent while missing all of `src/**`, so a
+diff touching app code selects nothing rather than falling open. Until an adapter
+ships, keep running those suites in full. What it still needs is projecting
+bundled coverage back to your original sources; the rest of the groundwork — a
+recorder declaring what it could not see, several observation windows folding
+into one unit, and unmappable scripts failing the recording — is in place. The
+plan and its remaining blocker are tracked in [#12].
 
 ## Writing an adapter
 
