@@ -86,13 +86,6 @@ node:test and cucumber-js adapters record each **test** or **scenario**
 individually and run only the affected ones -- which for cucumber-js is the only
 selection it has natively.
 
-Every adapter above observes the code under test in the process tree its recorder
-starts. A runner that drives a browser executes the code under test somewhere
-else — in the browser, and often in a separate application server — so no adapter
-here covers one. The generic wrap is not a substitute: pointed at such a suite it
-observes only the test process, and records that your tests cover none of your
-application, which a later diff reads as nothing to run.
-
 ## Writing an adapter
 
 Adapters are the primary community contribution surface. Each is one exported

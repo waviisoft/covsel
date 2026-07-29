@@ -50,13 +50,6 @@ node:test, and scenario-level selection for cucumber-js. See
 | Vitest                     | yes (`--adapter`) | no                  |
 | Jest                       | yes (`--adapter`) | no                  |
 
-Every adapter observes the code under test in the process tree it starts. A runner
-that drives a browser executes the code under test somewhere else — in the
-browser, and often in a separate application server — so it is not in this table
-and not supported. The generic wrap is not a substitute: pointed at such a suite
-it observes only the test process, and records that your tests cover none of your
-application.
-
 ## Prior art & credits
 
 covsel stands on the shoulders of [pytest-testmon](https://testmon.org)

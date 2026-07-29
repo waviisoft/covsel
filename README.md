@@ -97,10 +97,6 @@ for node:test, and scenario-level selection for cucumber-js.
 | Vitest                     | yes (`--adapter`) | no                  |
 | Jest                       | yes (`--adapter`) | no                  |
 
-Every adapter observes the code under test in the process tree it starts, so a
-runner that drives a browser — the app running in Chromium, or a separate
-application server — is not covered by this table and not supported.
-
 ## Packages
 
 | Package                     | Purpose                                                                  |
