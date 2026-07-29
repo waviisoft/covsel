@@ -25,7 +25,7 @@ have run_. So every design tension resolves toward **over-selection**:
   that can be named, and an entry that credits nothing is read as a test that
   covers nothing.
 - Non-JS dependencies coverage can't see (fixtures, snapshots, templates) are
-  handled by user-declared `alwaysRun` globs — and, later, by tracking fs reads.
+  handled by user-declared `alwaysRun` globs.
 
 > **Headline guarantee:** we never skip a test whose behavior your change could
 > alter — and when we can't be sure, we run it.

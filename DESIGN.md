@@ -227,33 +227,7 @@ covsel/
 
 ---
 
-## 6. Roadmap
-
-Tracked in the open on the
-[issue tracker](https://github.com/waviisoft/covsel/issues); the docs
-[roadmap](https://waviisoft.github.io/covsel/guide/roadmap) is the reader-facing
-version. The shape:
-
-- **Now -- foundations.** Repo, toolchain, and CI in place; versioned map schema;
-  published layer interfaces; the CLI shell; an integration test proving the
-  per-file coverage-observation mechanism.
-- **Next -- file-level selection (the MVP).** Observer (`NODE_V8_COVERAGE` process
-  mode), Mapper (coverage -> source globs), local Store, file-level Selector,
-  fail-open Policy (sentinels, new-test detection); the generic and Vitest
-  adapters; `record` / `affected` / `run` / `status`; a golden example proving
-  the loop in CI. **Done when** editing one source file selects only the tests
-  that execute it, editing a sentinel selects everything, and a new test always
-  runs.
-- **Later -- per-test precision + real adapters.** Inspector snapshot-diff
-  observation; block-hash granularity; `covsel watch`; adapters for Jest, Mocha,
-  node:test, cucumber-js, Playwright; the CI publish/fetch/shard-merge story.
-- **Beyond -- bundlers, monorepos, ecosystem.** Bundler source-map plugins for
-  browser coverage; composition with Nx/Turbo project graphs; fs-read tracking
-  for non-JS dependencies.
-
----
-
-## 7. Validation strategy
+## 6. Validation strategy
 
 - **Coverage-observation guard.** An integration test in `@covsel/core` runs test
   files under `NODE_V8_COVERAGE` and asserts each maps to exactly the sources it
@@ -272,7 +246,7 @@ version. The shape:
 
 ---
 
-## 8. Governance & community
+## 7. Governance & community
 
 - **Maintainer model:** a small core team owns `core` + release; adapters are the
   open contribution lane.
@@ -285,7 +259,7 @@ version. The shape:
 
 ---
 
-## 9. Risks & open questions
+## 8. Risks & open questions
 
 | Risk / question                                     | Mitigation / current stance                                               |
 | --------------------------------------------------- | ------------------------------------------------------------------------- |

@@ -4,7 +4,7 @@ covsel is a set of layers with narrow contracts. Only the top layer is ever
 runner-specific, and it's optional.
 
 ```
-Adapters      generic-wrap, vitest, jest, mocha, node:test, cucumber, playwright
+Adapters      generic-wrap, vitest, jest, node:test, cucumber
    (thin, per-runner, OPTIONAL -- only for per-test precision & native selection syntax)
 Observer      V8 inspector snapshot-diff | NODE_V8_COVERAGE (process) | istanbul
    (shared -- turns "a test ran" into a set of executed source ranges)

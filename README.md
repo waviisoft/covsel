@@ -4,11 +4,11 @@
 > static import-graph selection lies, and the only option for runners that have
 > no selection at all.
 
-**Status: early.** The `covsel record`, `affected`, `run`, and `status` loop
-works today, with block-hash (function-level) selection, per-test selection for
-node:test, scenario-level selection for cucumber-js, and a CI story for
-publishing and merging maps. More runner adapters are next. Track the work in the
-[issues](https://github.com/waviisoft/covsel/issues), and see
+**Status: early.** The `covsel init`, `record`, `affected`, `run`, `watch`,
+`status`, and `merge` commands work today, with block-hash (function-level)
+selection, per-test selection for node:test, scenario-level selection for
+cucumber-js, and a CI story for publishing and merging maps. Track the work in
+the [issues](https://github.com/waviisoft/covsel/issues), and see
 [`DESIGN.md`](./DESIGN.md) for the architecture.
 
 ## The problem
@@ -102,11 +102,10 @@ for node:test, and scenario-level selection for cucumber-js.
 | -------------------------- | ----------------- | ------------------- |
 | Any command (generic wrap) | yes (direct-exec) | --                  |
 | node:test                  | yes (generic)     | yes (`--adapter`)   |
-| cucumber-js                | --                | yes (`--adapter`)   |
-| Mocha                      | yes (generic, JS) | later               |
-| Vitest                     | yes (`--adapter`) | later               |
-| Jest                       | yes (`--adapter`) | later               |
-| Playwright                 | planned (generic) | later               |
+| cucumber-js                | yes (`--adapter`) | yes (`--adapter`)   |
+| Mocha                      | yes (generic, JS) | no                  |
+| Vitest                     | yes (`--adapter`) | no                  |
+| Jest                       | yes (`--adapter`) | no                  |
 
 ## Packages
 
