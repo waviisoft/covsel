@@ -7,6 +7,7 @@ import { pathToFileURL } from 'node:url';
 import { afterEach, describe, expect, it } from 'vitest';
 
 import {
+  type CovselConfig,
   decodeDataSourceMap,
   type RawCoverage,
   readSourceMappingURL,
@@ -41,20 +42,32 @@ function write(cwd: string, rel: string, content: string): void {
 
 const APP = `export function greet(name) {\n  return \`hello \${name}\`;\n}\n`;
 
-function mapJson(sources: string[]): string {
-  return JSON.stringify({ version: 3, file: 'app.js', sources, names: [], mappings: '' });
+/**
+ * A source map. `contents` publishes `sourcesContent`, which is what lets an
+ * unanchored resolution confirm a source rather than guess at it.
+ */
+function mapJson(sources: string[], contents?: (string | null)[]): string {
+  return JSON.stringify({
+    version: 3,
+    file: 'app.js',
+    sources,
+    ...(contents ? { sourcesContent: contents } : {}),
+    names: [],
+    mappings: '',
+  });
 }
 
 /** A repo whose `src/app.mjs` was built into `dist/assets/app.js`. */
 function fixture(
   sources: string[],
   comment = '//# sourceMappingURL=app.js.map\n',
+  contents?: (string | null)[],
 ): string {
   const cwd = mkdtempSync(join(tmpdir(), 'covsel-sourcemap-'));
   dirs.push(cwd);
   write(cwd, 'src/app.mjs', APP);
   write(cwd, 'dist/assets/app.js', APP + comment);
-  write(cwd, 'dist/assets/app.js.map', mapJson(sources));
+  write(cwd, 'dist/assets/app.js.map', mapJson(sources, contents));
   return cwd;
 }
 
@@ -143,10 +156,13 @@ describe('resolving a script to its sources', () => {
     expect(await resolver.resolve({ url })).toEqual({
       kind: 'mapped',
       sources: ['src/app.mjs'],
+      unresolved: [],
     });
   });
 
-  it('drops sources the repository does not hold', async () => {
+  it('drops a source that is definitely not this repository’s', async () => {
+    // Someone else's absolute build path is not missing coverage — it is not
+    // ours. Contrast with the test below, where the source could be a repo file.
     const cwd = fixture(['../../src/app.mjs', '/elsewhere/vendor.js']);
     const resolver = new SourceMapResolver({ cwd });
     const url = pathToFileURL(join(cwd, 'dist/assets/app.js')).href;
@@ -154,6 +170,38 @@ describe('resolving a script to its sources', () => {
     expect(await resolver.resolve({ url })).toEqual({
       kind: 'mapped',
       sources: ['src/app.mjs'],
+      unresolved: [],
+    });
+  });
+
+  it('reports a source that should be here but is not, instead of dropping it', async () => {
+    // The silent version of this is the whole bug: one source of many resolving
+    // would otherwise count as a success, and the sources it could not find
+    // would be missing from the entry with nothing to say so.
+    const cwd = fixture(['../../src/app.mjs', '../../src/gone.mjs']);
+    const resolver = new SourceMapResolver({ cwd });
+    const url = pathToFileURL(join(cwd, 'dist/assets/app.js')).href;
+
+    expect(await resolver.resolve({ url })).toEqual({
+      kind: 'mapped',
+      sources: ['src/app.mjs'],
+      unresolved: ['../../src/gone.mjs'],
+    });
+  });
+
+  it('ignores the synthetic modules a bundler lists beside real files', async () => {
+    const cwd = fixture([
+      '../../src/app.mjs',
+      'vite/preload-helper',
+      '\u0000commonjsHelpers.js',
+    ]);
+    const resolver = new SourceMapResolver({ cwd });
+    const url = pathToFileURL(join(cwd, 'dist/assets/app.js')).href;
+
+    expect(await resolver.resolve({ url })).toEqual({
+      kind: 'mapped',
+      sources: ['src/app.mjs'],
+      unresolved: [],
     });
   });
 
@@ -164,14 +212,17 @@ describe('resolving a script to its sources', () => {
     const resolver = new SourceMapResolver({ cwd });
     const url = pathToFileURL(join(cwd, 'dist/assets/app.js')).href;
 
-    expect(await resolver.resolve({ url })).toEqual({ kind: 'unmapped' });
+    expect(await resolver.resolve({ url })).toMatchObject({
+      kind: 'unmapped',
+      reason: expect.stringContaining('declares no sourceMappingURL'),
+    });
   });
 
   it('uses the script text the observation carried, without going back for it', async () => {
     // Browser coverage hands over the script it profiled, which is the only copy
     // a recorder gets when the page built it in memory.
     const cwd = fixture(['../../src/app.mjs']);
-    const inline = `data:application/json;base64,${Buffer.from(mapJson(['src/app.mjs'])).toString('base64')}`;
+    const inline = `data:application/json;base64,${Buffer.from(mapJson(['src/app.mjs'], [APP])).toString('base64')}`;
     const resolver = new SourceMapResolver({ cwd, http: false });
 
     expect(
@@ -179,7 +230,7 @@ describe('resolving a script to its sources', () => {
         url: 'http://localhost:5173/assets/index-abc.js',
         source: `${APP}//# sourceMappingURL=${inline}\n`,
       }),
-    ).toEqual({ kind: 'mapped', sources: ['src/app.mjs'] });
+    ).toEqual({ kind: 'mapped', sources: ['src/app.mjs'], unresolved: [] });
   });
 
   it('reads a served script from the build directory it was built into', async () => {
@@ -192,7 +243,21 @@ describe('resolving a script to its sources', () => {
 
     expect(
       await resolver.resolve({ url: 'http://localhost:5173/assets/app.js?t=17' }),
-    ).toEqual({ kind: 'mapped', sources: ['src/app.mjs'] });
+    ).toEqual({ kind: 'mapped', sources: ['src/app.mjs'], unresolved: [] });
+  });
+
+  it('will not let one build directory claim another origin’s assets', async () => {
+    const cwd = fixture(['../../src/app.mjs']);
+    const resolver = new SourceMapResolver({
+      cwd,
+      buildDirs: [{ urlPrefix: 'http://localhost:5173', dir: 'dist' }],
+      http: false,
+    });
+
+    // A different port that merely starts with the same characters.
+    expect(
+      await resolver.resolve({ url: 'http://localhost:51730/assets/app.js' }),
+    ).toMatchObject({ kind: 'unmapped' });
   });
 
   it('will not let a served path walk out of the directory it was mapped onto', async () => {
@@ -204,56 +269,149 @@ describe('resolving a script to its sources', () => {
       http: false,
     });
 
-    expect(await resolver.resolve({ url: 'http://localhost:5173/../secret.js' })).toEqual(
-      { kind: 'unmapped' },
-    );
+    expect(
+      await resolver.resolve({ url: 'http://localhost:5173/../secret.js' }),
+    ).toMatchObject({ kind: 'unmapped' });
   });
 
-  it('fetches the script and its map over HTTP when they are not on disk', async () => {
+  it('fetches the script and its map over HTTP, confirming sources by content', async () => {
     // What a browser recorder has: a URL, a dev server, and nothing local that
-    // corresponds to it. Sources named from the server root are looked for at
-    // the repository root, which is the shape a dev server publishes.
-    const cwd = fixture(['/src/app.mjs']);
+    // corresponds to it. A served path is only a guess at where the source lives
+    // in the repository, so the content the build published is what settles it.
+    const cwd = fixture(['/src/app.mjs'], undefined, [APP]);
     const base = await serve(join(cwd, 'dist'));
     const resolver = new SourceMapResolver({ cwd });
 
     expect(await resolver.resolve({ url: `${base}assets/app.js` })).toEqual({
       kind: 'mapped',
       sources: ['src/app.mjs'],
+      unresolved: [],
+    });
+  }, 20_000);
+
+  it('will not credit a same-named file when nothing confirms the guess', async () => {
+    const cwd = fixture(['/src/app.mjs']);
+    const base = await serve(join(cwd, 'dist'));
+    const resolver = new SourceMapResolver({ cwd });
+
+    expect(await resolver.resolve({ url: `${base}assets/app.js` })).toEqual({
+      kind: 'mapped',
+      sources: [],
+      unresolved: ['/src/app.mjs'],
+    });
+  }, 20_000);
+
+  it('will not credit a file whose content is not what was built', async () => {
+    // The monorepo shape: the served source is `apps/web/src/app.mjs`, and an
+    // unrelated `src/app.mjs` sits at the repo root. Crediting the root file
+    // would lose every change to the one the test actually executed.
+    const cwd = fixture(['/src/app.mjs'], undefined, [
+      'export function greet() {\n  return 42;\n}\n',
+    ]);
+    const base = await serve(join(cwd, 'dist'));
+    const resolver = new SourceMapResolver({ cwd });
+
+    expect(await resolver.resolve({ url: `${base}assets/app.js` })).toEqual({
+      kind: 'mapped',
+      sources: [],
+      unresolved: ['/src/app.mjs'],
     });
   }, 20_000);
 
   it('does not reach the network when HTTP loading is turned off', async () => {
-    const cwd = fixture(['/src/app.mjs']);
+    const cwd = fixture(['/src/app.mjs'], undefined, [APP]);
     const base = await serve(join(cwd, 'dist'));
     const resolver = new SourceMapResolver({ cwd, http: false });
 
-    expect(await resolver.resolve({ url: `${base}assets/app.js` })).toEqual({
+    expect(await resolver.resolve({ url: `${base}assets/app.js` })).toMatchObject({
       kind: 'unmapped',
     });
   }, 20_000);
+
+  it('does not follow a sourceMappingURL to another host', async () => {
+    // The comment is content covsel did not write. Following it anywhere would
+    // turn recording into a request generator pointed wherever a bundle says.
+    const asked: string[] = [];
+    const cwd = fixture(['../../src/app.mjs']);
+    const resolver = new SourceMapResolver({
+      cwd,
+      fetchText: async (url) => {
+        asked.push(url);
+        if (url.endsWith('/app.js')) {
+          return `${APP}//# sourceMappingURL=http://169.254.169.254/latest/meta-data\n`;
+        }
+        return undefined;
+      },
+    });
+
+    expect(
+      await resolver.resolve({ url: 'http://localhost:5173/assets/app.js' }),
+    ).toEqual({
+      kind: 'unmapped',
+      reason: expect.stringContaining('169.254.169.254'),
+    });
+    expect(asked.some((url) => url.includes('169.254.169.254'))).toBe(false);
+  });
+
+  it('resolves a webpack-style source whose authority is part of the path', async () => {
+    const cwd = fixture(['webpack://app/./lib/util.mjs'], undefined, [APP]);
+    write(cwd, 'app/lib/util.mjs', APP);
+    const resolver = new SourceMapResolver({ cwd });
+    const url = pathToFileURL(join(cwd, 'dist/assets/app.js')).href;
+
+    expect(await resolver.resolve({ url })).toEqual({
+      kind: 'mapped',
+      sources: ['app/lib/util.mjs'],
+      unresolved: [],
+    });
+  });
+
+  it('reports a webpack-style source it cannot place either way', async () => {
+    const cwd = fixture(['webpack://app/./src/missing.mjs'], undefined, [APP]);
+    const resolver = new SourceMapResolver({ cwd });
+    const url = pathToFileURL(join(cwd, 'dist/assets/app.js')).href;
+
+    expect(await resolver.resolve({ url })).toEqual({
+      kind: 'mapped',
+      sources: [],
+      unresolved: ['webpack://app/./src/missing.mjs'],
+    });
+  });
+
+  it('does not read an unrelated JSON body as a source map', async () => {
+    const cwd = fixture(['../../src/app.mjs']);
+    write(cwd, 'dist/assets/app.js.map', '{"error":"not found"}');
+    const resolver = new SourceMapResolver({ cwd });
+    const url = pathToFileURL(join(cwd, 'dist/assets/app.js')).href;
+
+    expect(await resolver.resolve({ url })).toMatchObject({ kind: 'unmapped' });
+  });
 });
 
 describe('mapping coverage for scripts a runner only names by URL', () => {
   const config = resolveConfig({ sourceGlobs: ['src/**'] });
-  const coverage = (url: string): RawCoverage => ({
-    scripts: [
-      { url, functions: [{ ranges: [{ startOffset: 0, endOffset: 10, count: 1 }] }] },
-    ],
+  const coverage = (...urls: string[]): RawCoverage => ({
+    scripts: urls.map((url) => ({
+      url,
+      functions: [{ ranges: [{ startOffset: 0, endOffset: 10, count: 1 }] }],
+    })),
   });
-
-  it('records the sources behind a served bundle', async () => {
-    const cwd = fixture(['../../src/app.mjs']);
-    const mapper = new V8FileMapper({
+  const withSourceMaps = (
+    cwd: string,
+    sourceMaps: Partial<CovselConfig['sourceMaps']>,
+  ): V8FileMapper =>
+    new V8FileMapper({
       cwd,
       config: {
         ...config,
-        sourceMaps: {
-          buildDirs: [{ urlPrefix: 'http://localhost:5173/', dir: 'dist' }],
-          http: false,
-          allowUnmappable: [],
-        },
+        sourceMaps: { buildDirs: [], http: false, allowUnmappable: [], ...sourceMaps },
       },
+    });
+
+  it('records the sources behind a served bundle', async () => {
+    const cwd = fixture(['../../src/app.mjs']);
+    const mapper = withSourceMaps(cwd, {
+      buildDirs: [{ urlPrefix: 'http://localhost:5173/', dir: 'dist' }],
     });
 
     const files = await mapper.toFiles(coverage('http://localhost:5173/assets/app.js'));
@@ -262,13 +420,7 @@ describe('mapping coverage for scripts a runner only names by URL', () => {
 
   it('fails naming the script when there is no way back to its sources', async () => {
     const cwd = fixture(['../../src/app.mjs']);
-    const mapper = new V8FileMapper({
-      cwd,
-      config: {
-        ...config,
-        sourceMaps: { buildDirs: [], http: false, allowUnmappable: [] },
-      },
-    });
+    const mapper = withSourceMaps(cwd, {});
 
     await expect(
       mapper.toFiles(coverage('http://localhost:5173/assets/app.js')),
@@ -278,35 +430,71 @@ describe('mapping coverage for scripts a runner only names by URL', () => {
     ).rejects.toThrow(/http:\/\/localhost:5173\/assets\/app\.js/);
   });
 
-  it('accepts one the project listed, and reports it', async () => {
-    const cwd = fixture(['../../src/app.mjs']);
-    const mapper = new V8FileMapper({
-      cwd,
-      config: {
-        ...config,
-        sourceMaps: {
-          buildDirs: [],
-          http: false,
-          allowUnmappable: ['https://cdn.example.com/**'],
-        },
-      },
+  it('fails when only some of a map’s sources could be located', async () => {
+    // A partly resolved map used to count as a success, which put the missing
+    // sources nowhere: the entry looked complete and was not.
+    const cwd = fixture(['../../src/app.mjs', '../../src/gone.mjs']);
+    const mapper = withSourceMaps(cwd, {
+      buildDirs: [{ urlPrefix: 'http://localhost:5173/', dir: 'dist' }],
     });
 
-    const files = await mapper.toFiles(coverage('https://cdn.example.com/widget.js'));
-    expect(files).toEqual([]);
-    expect(mapper.allowedUnmappable()).toEqual(['https://cdn.example.com/widget.js']);
+    await expect(
+      mapper.toFiles(coverage('http://localhost:5173/assets/app.js')),
+    ).rejects.toThrow(/could not locate: \.\.\/\.\.\/src\/gone\.mjs/);
+  });
+
+  it('still records a repo file whose own map cannot be resolved', async () => {
+    // The script is its own source, so the entry credits it either way. Failing
+    // here would break projects that record fine today over a stale sidecar.
+    const cwd = fixture(['../../src/app.mjs']);
+    write(cwd, 'src/app.mjs', `${APP}//# sourceMappingURL=app.mjs.map\n`);
+    write(cwd, 'src/app.mjs.map', mapJson(['./gone.ts']));
+    const mapper = withSourceMaps(cwd, {});
+
+    const files = await mapper.toFiles(
+      coverage(pathToFileURL(join(cwd, 'src/app.mjs')).href),
+    );
+    expect(files.map((f) => f.file)).toEqual(['src/app.mjs']);
+  });
+
+  it('accepts one the project listed, and reports it', async () => {
+    const cwd = fixture(['../../src/app.mjs']);
+    const mapper = withSourceMaps(cwd, {
+      buildDirs: [{ urlPrefix: 'http://localhost:5173/', dir: 'dist' }],
+      allowUnmappable: ['https://cdn.example.com/**'],
+    });
+
+    // The accepted script must not take the rest of the entry down with it.
+    const files = await mapper.toFiles(
+      coverage(
+        'https://cdn.example.com/widget.js',
+        'http://localhost:5173/assets/app.js',
+      ),
+    );
+    expect(files.map((f) => f.file)).toEqual(['src/app.mjs']);
+    expect(mapper.takeAllowedUnmappable()).toEqual(['https://cdn.example.com/widget.js']);
+  });
+
+  it('hands each unit its own accepted scripts rather than only the last', async () => {
+    const cwd = fixture(['../../src/app.mjs']);
+    const mapper = withSourceMaps(cwd, {
+      allowUnmappable: ['https://cdn.example.com/**'],
+    });
+
+    await mapper.toFiles(coverage('https://cdn.example.com/a.js'));
+    expect(mapper.takeAllowedUnmappable()).toEqual(['https://cdn.example.com/a.js']);
+    await mapper.toFiles(coverage('https://cdn.example.com/b.js'));
+    expect(mapper.takeAllowedUnmappable()).toEqual(['https://cdn.example.com/b.js']);
+    expect(mapper.takeAllowedUnmappable()).toEqual([]);
   });
 
   it('leaves the runtime’s own scripts alone', async () => {
     const cwd = fixture(['../../src/app.mjs']);
     const mapper = new V8FileMapper({ cwd, config });
 
-    const files = await mapper.toFiles({
-      scripts: [
-        ...coverage('node:internal/modules/esm/loader').scripts,
-        ...coverage('evalmachine.<anonymous>').scripts,
-      ],
-    });
+    const files = await mapper.toFiles(
+      coverage('node:internal/modules/esm/loader', 'evalmachine.<anonymous>'),
+    );
     expect(files).toEqual([]);
   });
 });

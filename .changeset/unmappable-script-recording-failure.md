@@ -31,10 +31,24 @@ through a `sourceMappingURL` comment naming a sidecar, the same comment carrying
 the map inline as a `data:` URI, the conventional `<script>.map` neighbour when
 a build stripped the comment, an HTTP fetch for scripts a browser loaded from a
 dev server, and `sourceMaps.buildDirs`, which maps a serve-time URL prefix onto
-the directory holding the built assets. A served path may not walk out of the
-directory it was mapped onto. Only the `sources` list is read: until executed
-ranges are projected through the mappings, a mapped script credits every source
-it was built from, which over-selects rather than under-selects.
+the directory holding the built assets. Only the `sources` list is read: until
+executed ranges are projected through the mappings, a mapped script credits
+every source it was built from, which over-selects rather than under-selects.
+
+A source is located or reported, never guessed at. A map read from disk places
+its sources exactly, relative to itself; one fetched over HTTP has no such
+anchor, so each source is confirmed against the text the build published in
+`sourcesContent` before being credited — a served path that merely matches a
+same-named file would otherwise credit the wrong file and lose every change to
+the right one. A source that cannot be confirmed, or that should be in the
+repository but is not where the map says, fails the recording alongside a map
+with no sources at all: a partly resolved map used to count as a success, which
+put the sources it could not find nowhere.
+
+Loading is bounded, because a `sourceMappingURL` is content covsel did not
+write: a map is fetched only from the origin that served the script, with a
+timeout, a size ceiling, and no redirects, and a served path may not walk out of
+the build directory it was mapped onto.
 
 Scripts that will never be mappable — a third-party widget on the page under
 test — can be accepted with `sourceMaps.allowUnmappable`, matched strictly so a

@@ -52,7 +52,7 @@ export function createGenericRecorder(init: GenericRecorderInit): Recorder {
       const blocks = wantBlocks ? await mapper.toBlocks(raw) : [];
       return [{ test: { file: testFile }, files, blocks }];
     },
-    unmappableAllowed: () => mapper.allowedUnmappable(),
+    unmappableAllowed: () => mapper.takeAllowedUnmappable(),
   };
 }
 

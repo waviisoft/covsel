@@ -8,7 +8,6 @@ import {
   type CoverageMap,
   type CovselConfig,
   createGenericRecorder,
-  MAP_SCHEMA_VERSION,
   type RecordEvent,
   recordMap,
   type RecordResult,
@@ -22,6 +21,10 @@ import {
  * is indistinguishable from a test that genuinely covers nothing — and selection
  * reads it the second way. The entry exists, so the unmapped-test guard does not
  * fire, and editing the file every test executes selects nothing at all.
+ *
+ * Nothing downstream of recording can recover that difference — an entry that
+ * credits nothing and a test that covers nothing are the same bytes — which is
+ * why the failure belongs at record time and these tests assert on recording.
  *
  * The fixture is the shape a default `vite build` leaves behind: tests that
  * exercise their sources only through a bundle, with the build's source maps
@@ -184,38 +187,6 @@ describe('an executed script that cannot be mapped is a recording failure', () =
     expect(selection.tests).toEqual(['test/a.test.mjs', 'test/b.test.mjs']);
   }, 60_000);
 
-  it('is why the failure has to happen at record time', async () => {
-    // The map a build with no source maps used to produce: entries that exist
-    // and credit nothing. Selection cannot tell that apart from a test that
-    // genuinely covers nothing, so its unmapped-test guard does not fire and the
-    // change to the file every test executes selects zero tests. Nothing
-    // downstream of recording can recover the difference.
-    const cwd = buildFixture('none');
-    const config = resolveConfig();
-    const empty: CoverageMap = {
-      schemaVersion: MAP_SCHEMA_VERSION,
-      granularity: 'file',
-      commit: spawnSync('git', ['rev-parse', 'HEAD'], {
-        cwd,
-        encoding: 'utf8',
-      }).stdout.trim(),
-      recordedAt: new Date().toISOString(),
-      sentinelHashes: {},
-      observed: ['**'],
-      entries: [
-        { test: { file: 'test/a.test.mjs' }, files: [] },
-        { test: { file: 'test/b.test.mjs' }, files: [] },
-      ],
-    };
-    mkdirSync(join(cwd, '.covsel'), { recursive: true });
-    writeFileSync(join(cwd, '.covsel', 'map.json'), JSON.stringify(empty));
-    write(cwd, 'src/shared.mjs', 'export function tag(s) {\n  return `[x] ${s}`;\n}\n');
-
-    const selection = await selectAffected({ cwd, config });
-    expect(selection.fullRun).toBe(false);
-    expect(selection.tests).toEqual([]);
-  }, 60_000);
-
   it('fails when the source map resolves to no source in the repository', async () => {
     const cwd = buildFixture('foreign');
     const { result } = await record(cwd, resolveConfig());
@@ -249,6 +220,29 @@ describe('a source map the build did publish is resolved', () => {
       expect(selection.tests).toEqual(['test/a.test.mjs', 'test/b.test.mjs']);
     }, 60_000);
   }
+});
+
+describe('what the recording still credits', () => {
+  it('records a source that executed directly, stray sidecar map or not', async () => {
+    // The guard against this change ever crediting less than it used to: a file
+    // the runner executed from the repository is its own source, and a source
+    // map beside it that leads nowhere may not take that away.
+    const cwd = buildFixture('sidecar', {
+      'src/direct.mjs': `export function direct() {\n  return 'direct';\n}\n//# sourceMappingURL=direct.mjs.map\n`,
+      'src/direct.mjs.map': JSON.stringify({
+        version: 3,
+        file: 'direct.mjs',
+        sources: ['./gone.ts'],
+        names: [],
+        mappings: '',
+      }),
+      'test/direct.test.mjs': `import assert from 'node:assert/strict';\nimport { test } from 'node:test';\nimport { direct } from '../src/direct.mjs';\ntest('direct', () => assert.equal(direct(), 'direct'));\n`,
+    });
+    const { result } = await record(cwd, resolveConfig());
+
+    expect(result.ok).toBe(true);
+    expect(coveredBy(result.map!, 'test/direct.test.mjs')).toEqual(['src/direct.mjs']);
+  }, 60_000);
 });
 
 describe('a script that is legitimately outside the source globs', () => {

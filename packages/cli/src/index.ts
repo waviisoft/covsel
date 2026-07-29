@@ -1,4 +1,4 @@
-import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 
 import {
@@ -157,6 +157,15 @@ async function cmdRecord(argv: string[]): Promise<number> {
       `covsel record: ${result.failures.length} test file(s) failed; map not written ` +
         `(a partial map cannot be trusted).\n`,
     );
+    // Refusing to write is only half the story when a map is already there: the
+    // old one keeps driving selection, and it is the one recorded before
+    // whatever just failed.
+    if (existsSync(result.mapPath)) {
+      err(
+        `covsel record: the previous map at ${result.mapPath} is unchanged and ` +
+          `still what covsel affected uses.\n`,
+      );
+    }
     return 1;
   }
   err(`covsel record: wrote ${result.recorded} entries to ${result.mapPath}\n`);
