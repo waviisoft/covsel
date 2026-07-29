@@ -123,6 +123,16 @@ describe('covsel init — naming the adapter', () => {
     expect((await plan(cwd)).missingSupport).toEqual([]);
   });
 
+  it('keys support packages on the chosen adapter, not the detected runner', async () => {
+    const cwd = project({
+      'package.json': pkg({ devDependencies: { vitest: '^3.0.0' } }),
+    });
+
+    // Overriding onto the generic wrap means not recording through Vitest's
+    // coverage provider, so installing it would be noise.
+    expect((await plan(cwd, 'generic')).missingSupport).toEqual([]);
+  });
+
   it('names the other suites it cannot record', async () => {
     const cwd = project({
       'package.json': pkg({

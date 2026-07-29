@@ -356,11 +356,16 @@ export async function planInit(options: InitOptions): Promise<InitPlan> {
       ? {}
       : { adapterInstalled: await options.isAdapterInstalled(name) };
 
-  // Packages the runner needs beyond the adapter. Installing the adapter alone
-  // and stopping would leave recording broken in a way that only shows up at
-  // record time, so they are part of the same plan.
-  const supportFor = (runner: DetectedRunner | undefined): string[] => {
-    const signature = RUNNERS.find((r) => r.name === runner?.name);
+  // Packages the adapter needs beyond itself. Installing the adapter alone and
+  // stopping would leave recording broken in a way that only shows up at record
+  // time, so they are part of the same plan.
+  //
+  // Keyed on the adapter rather than the detected runner: someone who overrides
+  // a Vitest project onto the generic wrap is not going to record through
+  // Vitest's coverage provider, so installing it would be noise.
+  const supportFor = (adapterName: string | undefined): string[] => {
+    if (adapterName === undefined) return [];
+    const signature = RUNNERS.find((r) => r.adapter === adapterName);
     return (signature?.support ?? []).filter((p) => !deps.includes(p));
   };
 
@@ -372,7 +377,7 @@ export async function planInit(options: InitOptions): Promise<InitPlan> {
       ...base,
       outcome: 'already-configured',
       ...(named !== undefined ? { adapter: named, ...(await withInstalled(named)) } : {}),
-      missingSupport: supportFor(supported),
+      missingSupport: supportFor(named),
       warnings:
         named === undefined && supported !== undefined
           ? [
@@ -410,7 +415,7 @@ export async function planInit(options: InitOptions): Promise<InitPlan> {
     outcome: 'configure',
     adapter,
     ...(await withInstalled(adapter)),
-    missingSupport: supportFor(supported),
+    missingSupport: supportFor(adapter),
     needsConfig: true,
     warnings,
     commands: nextCommands(adapter, supported ?? detected[0]),

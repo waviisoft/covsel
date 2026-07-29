@@ -63,9 +63,10 @@ Options:
 
 init detects the runner, installs its adapter, and writes the adapter to the
 config so later commands need no --adapter. record wraps a runner and observes
-each test file in its own process to learn which sources it executes. affected prints those test files a diff can affect,
-so \`<runner> $(covsel affected)\` runs only what is needed. watch drives the same
-selection continuously, running the affected tests on every save.
+each test file in its own process to learn which sources it executes. affected
+prints those test files a diff can affect, so \`<runner> $(covsel affected)\` runs
+only what is needed. watch drives the same selection continuously, running the
+affected tests on every save.
 
 covsel never skips a test whose behavior your change could alter -- and when it
 can't be sure, it runs it (fail-open). Map schema v${MAP_SCHEMA_VERSION}.
@@ -195,6 +196,21 @@ async function confirm(question: string): Promise<boolean> {
   }
 }
 
+/**
+ * What covsel is and what setting it up involves, for the reader who typed
+ * `covsel init` on a recommendation and has not read the docs. Printed only
+ * when there is something to do, so a repeat run stays quiet.
+ */
+function printIntro(): void {
+  out('covsel — run only the tests your changes can affect\n\n');
+  out(
+    'It records which sources each test actually executes, then uses a git diff\n' +
+      'to select the tests whose covered code changed. Watching a runner takes an\n' +
+      'adapter built for it, and that is the one thing setup has to get right:\n' +
+      'this reads your package.json to work out which one, then sets it up.\n\n',
+  );
+}
+
 /** Show the plan before carrying it out — this is what there is to confirm. */
 function describePlan(plan: InitPlan, packages: string[]): void {
   for (const runner of plan.detected) {
@@ -239,6 +255,24 @@ async function cmdInit(argv: string[]): Promise<number> {
     ...(adapter !== undefined ? { adapter } : {}),
   });
 
+  // covsel ships no adapters, so the package is as much a part of being set up
+  // as the config is: a config naming an adapter nobody installed reads as done
+  // and fails at the first record.
+  const packages = noInstall
+    ? []
+    : [
+        ...(plan.adapter !== undefined && plan.adapterInstalled === false
+          ? [adapterSpecifiers(plan.adapter)[0] ?? plan.adapter]
+          : []),
+        ...plan.missingSupport,
+      ];
+  const alreadySetUp = !plan.needsConfig && !plan.needsGitignore && packages.length === 0;
+
+  // Everything below either changes the project or explains why it cannot, so
+  // the reader deserves to know what covsel is first. The already-set-up run is
+  // the one that changes nothing, and repeat runs should stay quiet.
+  if (!alreadySetUp) printIntro();
+
   if (plan.outcome === 'unsupported-runner') {
     const names = plan.detected.map((r) => r.name).join(', ');
     err(
@@ -267,19 +301,7 @@ async function cmdInit(argv: string[]): Promise<number> {
 
   for (const warning of plan.warnings) err(`covsel init: warning — ${warning}\n`);
 
-  // covsel ships no adapters, so the package is as much a part of being set up
-  // as the config is: a config naming an adapter nobody installed reads as done
-  // and fails at the first record.
-  const packages = noInstall
-    ? []
-    : [
-        ...(plan.adapter !== undefined && plan.adapterInstalled === false
-          ? [adapterSpecifiers(plan.adapter)[0] ?? plan.adapter]
-          : []),
-        ...plan.missingSupport,
-      ];
-
-  if (!plan.needsConfig && !plan.needsGitignore && packages.length === 0) {
+  if (alreadySetUp) {
     out(
       `covsel init: already set up — ${plan.configPath} (adapter: ${plan.adapter ?? 'unset'})\n`,
     );

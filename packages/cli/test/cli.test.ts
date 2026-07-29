@@ -1,7 +1,15 @@
-import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import {
+  chmodSync,
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  writeFileSync,
+} from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { afterAll, describe, expect, it, vi } from 'vitest';
+import { afterAll, afterEach, describe, expect, it, vi } from 'vitest';
 import { MAP_SCHEMA_VERSION } from '@covsel/core';
 import { VERSION, main } from '../src/index.js';
 
@@ -25,6 +33,10 @@ async function inProject<T>(
     process.chdir(original);
   }
 }
+
+afterEach(() => {
+  vi.unstubAllEnvs();
+});
 
 afterAll(() => {
   for (const dir of dirs) rmSync(dir, { recursive: true, force: true });
@@ -179,6 +191,20 @@ async function capture(
 const pkg = (fields: Record<string, unknown>) =>
   `${JSON.stringify({ name: 'fixture', private: true, ...fields })}\n`;
 
+/**
+ * Put a fake package manager first on PATH, so an install is observable without
+ * reaching the network. Returns the file it logs its arguments to.
+ */
+function stubPackageManager(cwd: string, name: string, exitCode = 0): string {
+  const bin = join(cwd, 'stub-bin');
+  const log = join(cwd, 'install.log');
+  mkdirSync(bin, { recursive: true });
+  writeFileSync(join(bin, name), `#!/bin/sh\necho "$@" >> ${log}\nexit ${exitCode}\n`);
+  chmodSync(join(bin, name), 0o755);
+  vi.stubEnv('PATH', `${bin}:${process.env['PATH'] ?? ''}`);
+  return log;
+}
+
 describe('covsel init', () => {
   it('names the adapter, writes the config, and prints the next steps', async () => {
     const result = await inProject(
@@ -190,6 +216,7 @@ describe('covsel init', () => {
     );
 
     expect(result.code).toBe(0);
+    expect(result.out).toContain('run only the tests your changes can affect');
     expect(result.out).toContain('detected vitest');
     expect(result.out).toContain('vitest is a dependency');
     expect(result.out).toContain('adapter: vitest');
@@ -199,22 +226,52 @@ describe('covsel init', () => {
 
   // Every workspace adapter resolves in-process here (vitest aliases them to
   // source), so a name nothing provides is what exercises the uninstalled path.
-  it('plans the install of an adapter the project does not have', async () => {
-    const { out } = await inProject(
-      { 'package.json': pkg({ devDependencies: { vitest: '^3.0.0' } }) },
-      () => capture(() => main(['init', '--adapter', 'not-a-real-runner', '-y'])),
+  it('installs the adapter with the project package manager', async () => {
+    const { out, installed } = await inProject(
+      {
+        'package.json': pkg({ devDependencies: { vitest: '^3.0.0' } }),
+        'pnpm-lock.yaml': '',
+      },
+      async (cwd) => {
+        const log = stubPackageManager(cwd, 'pnpm');
+        const captured = await capture(() =>
+          main(['init', '--adapter', 'not-a-real-runner', '-y']),
+        );
+        return { ...captured, installed: readFileSync(log, 'utf8').trim() };
+      },
     );
 
-    expect(out).toContain('install  @covsel/adapter-not-a-real-runner');
+    expect(out).toContain('  install  @covsel/adapter-not-a-real-runner');
+    expect(installed).toBe('add --save-dev @covsel/adapter-not-a-real-runner');
   });
 
-  it('plans the install of what the runner needs beyond the adapter', async () => {
-    const { out } = await inProject(
+  it('reports an install that failed without pretending setup finished', async () => {
+    const { code, err } = await inProject(
       { 'package.json': pkg({ devDependencies: { vitest: '^3.0.0' } }) },
-      () => capture(() => main(['init'])),
+      async (cwd) => {
+        stubPackageManager(cwd, 'npm', 1);
+        return capture(() => main(['init', '--adapter', 'not-a-real-runner', '-y']));
+      },
     );
 
-    expect(out).toContain('@vitest/coverage-v8');
+    expect(code).toBe(1);
+    expect(err).toContain('the install failed');
+    expect(err).toContain('npm install --save-dev @covsel/adapter-not-a-real-runner');
+  });
+
+  it('installs what the runner needs beyond the adapter', async () => {
+    const { installed } = await inProject(
+      { 'package.json': pkg({ devDependencies: { vitest: '^3.0.0' } }) },
+      async (cwd) => {
+        const log = stubPackageManager(cwd, 'npm');
+        await capture(() => main(['init', '-y']));
+        return { installed: readFileSync(log, 'utf8').trim() };
+      },
+    );
+
+    // The Vitest adapter records through Vitest's own coverage provider, so
+    // installing the adapter alone would leave recording broken.
+    expect(installed).toContain('@vitest/coverage-v8');
   });
 
   it('installs nothing under --no-install', async () => {
@@ -224,7 +281,7 @@ describe('covsel init', () => {
     );
 
     expect(code).toBe(0);
-    expect(out).not.toContain('install ');
+    expect(out).not.toContain('  install  ');
     expect(out).not.toContain('@vitest/coverage-v8');
   });
 
@@ -241,6 +298,8 @@ describe('covsel init', () => {
     expect(code).toBe(0);
     expect(out).toContain('already set up');
     expect(out).toContain('covsel record --adapter jest');
+    // A repeat run has nothing to explain and should stay quiet.
+    expect(out).not.toContain('run only the tests your changes can affect');
   });
 
   it('exits non-zero and points at an adapter request when nothing is detected', async () => {
