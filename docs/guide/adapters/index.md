@@ -80,28 +80,18 @@ of covsel is identical regardless of which path recorded the map.
 | `@covsel/adapter-jest`       | Jest                    | Jest's own coverage                | published |
 | `@covsel/adapter-node-test`  | node:test               | inspector snapshot-diff (per-test) | published |
 | `@covsel/adapter-cucumber`   | cucumber-js             | inspector snapshot-diff (scenario) | published |
-| _(planned)_                  | Mocha, ...              | generic wrap / lifecycle shim      | later     |
-| _(blocked)_                  | Playwright              | browser + server windows           | blocked   |
 
 The generic, Vitest, and Jest adapters record at whole-file granularity. The
 node:test and cucumber-js adapters record each **test** or **scenario**
 individually and run only the affected ones -- which is the only selection
 cucumber-js has.
 
-Playwright is listed separately because the generic wrap is not a stepping stone
-to it. Every adapter above observes code running in the process tree the recorder
-controls; a UI test executes in the browser and usually an application server as
-well, neither of which the wrap can see. Recording one that way produces a map
-that is non-empty and internally consistent while missing all of `src/**`, so a
-diff touching app code selects nothing rather than falling open. Until an adapter
-ships, keep running those suites in full.
-
-What such an adapter still needs from core is a projection from bundled coverage
-back to your original sources. The rest of the groundwork is in place: a recorder
-declares the scope it is able to observe and any change outside it forces a full
-run, several observation windows combine into one recorded unit, and a script that
-executed but cannot be mapped to a source fails the recording instead of
-contributing nothing.
+Every adapter above observes the code under test in the process tree its recorder
+starts. A runner that drives a browser executes the code under test somewhere
+else — in the browser, and often in a separate application server — so no adapter
+here covers one. The generic wrap is not a substitute: pointed at such a suite it
+observes only the test process, and records that your tests cover none of your
+application, which a later diff reads as nothing to run.
 
 ## Writing an adapter
 

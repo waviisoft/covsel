@@ -93,17 +93,13 @@ for node:test, and scenario-level selection for cucumber-js.
 | Any command (generic wrap) | yes (direct-exec) | --                  |
 | node:test                  | yes (generic)     | yes (`--adapter`)   |
 | cucumber-js                | --                | yes (`--adapter`)   |
-| Mocha                      | yes (generic, JS) | later               |
-| Vitest                     | yes (`--adapter`) | later               |
-| Jest                       | yes (`--adapter`) | later               |
-| Playwright                 | no (see below)    | later               |
+| Mocha                      | yes (generic, JS) | no                  |
+| Vitest                     | yes (`--adapter`) | no                  |
+| Jest                       | yes (`--adapter`) | no                  |
 
-**Playwright and other browser-driving runners are not supported yet, and the
-generic wrap is not a workaround.** The generic wrap observes only the process it
-starts, which for a UI test is the spec — not the browser rendering your app, nor
-the server behind it. A map recorded that way says your tests cover none of
-`src/**`, so a diff touching app code selects nothing. Keep running those suites
-in full.
+Every adapter observes the code under test in the process tree it starts, so a
+runner that drives a browser — the app running in Chromium, or a separate
+application server — is not covered by this table and not supported.
 
 ## Packages
 

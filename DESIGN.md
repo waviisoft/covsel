@@ -230,9 +230,7 @@ covsel/
 ## 6. Roadmap
 
 Tracked in the open on the
-[issue tracker](https://github.com/waviisoft/covsel/issues); the docs
-[roadmap](https://waviisoft.github.io/covsel/guide/roadmap) is the reader-facing
-version. The shape:
+[issue tracker](https://github.com/waviisoft/covsel/issues). The shape:
 
 - **Now -- foundations.** Repo, toolchain, and CI in place; versioned map schema;
   published layer interfaces; the CLI shell; an integration test proving the

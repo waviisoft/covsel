@@ -50,7 +50,7 @@ executed.
 
 - Requires `@vitest/coverage-v8`; without it, `record` fails loudly rather than
   writing an empty (unsafe) entry.
-- Granularity is per **file** in this release; per-test/scenario precision is on
-  the roadmap.
+- Granularity is per **file**: editing a source runs every test in a file that
+  executed it.
 - A runnable end-to-end example lives in
   [`examples/vitest-basic`](https://github.com/waviisoft/covsel/tree/main/examples/vitest-basic).

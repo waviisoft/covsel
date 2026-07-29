@@ -38,7 +38,6 @@ features:
 ---
 
 ::: tip Status: early
-File-level selection ships now — `covsel record`, `affected`, `run`, and
-`status`. Block-hash granularity and per-test precision are next. See the
-[roadmap](/guide/roadmap).
+`covsel record`, `affected`, `run`, `watch`, `status`, and `merge` ship today,
+with selection at file, block, and per-test granularity depending on the runner.
 :::
