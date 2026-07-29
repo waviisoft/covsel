@@ -55,7 +55,16 @@ export interface CovselConfig {
   /** How bundled scripts are resolved back to original sources. */
   sourceMaps: SourceMapConfig;
   /** Where the local map is stored. */
-  store: { dir: string };
+  store: {
+    dir: string;
+    /**
+     * Where `covsel publish` keeps maps by commit, and `covsel fetch` looks for
+     * one this checkout can measure change from. Relative to {@link store.dir}
+     * unless absolute, so caching the store directory carries the archive with
+     * it.
+     */
+    archiveDir: string;
+  };
 }
 
 /**
@@ -82,7 +91,7 @@ export const DEFAULT_CONFIG: CovselConfig = {
   ],
   granularity: 'block',
   sourceMaps: { buildDirs: [], http: true, allowUnmappable: [] },
-  store: { dir: '.covsel' },
+  store: { dir: '.covsel', archiveDir: 'archive' },
 };
 
 /**

@@ -1,0 +1,64 @@
+name: covsel map
+
+# covsel records its own suite and publishes the map, so a pull request can
+# select against it. This is the CI map lifecycle from docs/guide/ci.md, running
+# on covsel itself: the archive is the store, the Actions cache carries it
+# between runs, and `covsel fetch` in the CI workflow's `select` job picks the
+# map whose commit that checkout can measure change from.
+#
+# Recording runs the suite once per test file, so this is deliberately not on the
+# pull-request path. It publishes; pull requests consume.
+
+on:
+  push:
+    branches: [main]
+  # Recording is only as fresh as the last push, and a map that ages
+  # over-selects rather than under-selects, so a manual re-record is enough of an
+  # escape hatch when a push-triggered run was cancelled.
+  workflow_dispatch:
+
+concurrency:
+  # Two records of the same archive would race on the cache key, and the loser's
+  # map would be lost rather than merged. Queue instead of cancelling: a
+  # cancelled record publishes nothing.
+  group: covsel-map
+  cancel-in-progress: false
+
+jobs:
+  record:
+    name: Record and publish the map
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          # Selection measures from the commit a map records, so a pull request
+          # needs history back to it. Publishing needs the same depth to stamp a
+          # commit at all.
+          fetch-depth: 0
+      - uses: pnpm/action-setup@v6
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 22
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm build
+
+      # Restore the archive before publishing into it. Without this each run
+      # would save an archive of exactly one map, and a pull request branched
+      # before the latest push would find nothing it can diff from.
+      - uses: actions/cache/restore@v4
+        with:
+          path: .covsel/archive
+          key: covsel-archive-${{ github.sha }}
+          restore-keys: covsel-archive-
+
+      - name: Record covsel's own suite
+        run: node packages/cli/dist/bin.js record -- npx vitest run
+
+      - name: Publish the map under this commit
+        run: node packages/cli/dist/bin.js publish
+
+      - uses: actions/cache/save@v4
+        with:
+          path: .covsel/archive
+          key: covsel-archive-${{ github.sha }}

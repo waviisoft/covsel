@@ -39,6 +39,46 @@ jobs:
         run: pnpm --filter @covsel/example-cucumber-basic e2e
       - run: pnpm format:check
 
+  select:
+    name: covsel selects covsel's own tests
+    runs-on: ubuntu-latest
+    # Deliberately alongside the `test` job, never instead of it. `test` runs the
+    # whole suite and is what gates a merge; this job demonstrates the CI map
+    # lifecycle on covsel itself and would be the wrong thing to trust as the
+    # only run of the tests -- a selection bug would then hide the failure it
+    # caused.
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          # Selection measures change from the commit the fetched map records, so
+          # the checkout has to contain it.
+          fetch-depth: 0
+      - uses: pnpm/action-setup@v6
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 22
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm build
+
+      - uses: actions/cache/restore@v4
+        with:
+          path: .covsel/archive
+          key: covsel-archive-${{ github.sha }}
+          restore-keys: covsel-archive-
+
+      # No archive yet, or nothing in it this checkout can diff from, is not a
+      # failure: covsel falls open and the suite runs in full. Hence no
+      # `--require` -- a first pull request on a fresh cache must not go red.
+      - name: Fetch the map this checkout can measure change from
+        run: node packages/cli/dist/bin.js fetch
+
+      - name: What covsel is about to do, and why
+        run: node packages/cli/dist/bin.js status
+
+      - name: Run the affected tests
+        run: node packages/cli/dist/bin.js run -- npx vitest run
+
   docs:
     name: Build docs
     runs-on: ubuntu-latest
