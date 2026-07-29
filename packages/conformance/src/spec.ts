@@ -27,6 +27,34 @@ export interface ConformanceUnit {
 }
 
 /**
+ * Code the fixture's units execute that a recorder is not necessarily in a
+ * position to see — the app server a browser test drives, an isolate the runner
+ * starts on its own. It is ordinary code to a recorder that observes everything
+ * its runner executes, and a blind spot to one that does not; the suite reads it
+ * as whichever the adapter's declared scope makes it.
+ *
+ * Supplying one is what lets the suite hold a partial declaration to something:
+ * a fixture whose units execute only code the recorder can see never exercises
+ * the declaration at all, and a recorder blind past it certifies green.
+ */
+export interface ConformanceBlindSpot {
+  /**
+   * The source, repo-relative and among the fixture's `files`. It must be code —
+   * not a test file, and not a sentinel — because a change to either forces a
+   * full run whatever the recording observed, and could never show that the
+   * declared scope was what caused one.
+   */
+  source: string;
+  /**
+   * A change to `source` that makes *both* units fail, as a literal substring
+   * and its replacement. The suite applies it and runs the units: a run that
+   * still passes proves they do not really execute this code, and the fixture is
+   * rejected rather than certifying a blind spot nothing reaches.
+   */
+  breakingEdit: { find: string; replace: string };
+}
+
+/**
  * Name of the file each unit appends its label to when it runs, relative to the
  * project root. The suite deletes it, hands the runner a selection, and reads it
  * back — that is how it sees which units a selection actually executed, without
@@ -70,6 +98,17 @@ export interface ConformanceFixture {
    * source that is really a direct import.
    */
   sharedSource: string;
+  /**
+   * Code both units execute that a recorder may not be able to observe.
+   *
+   * Required of a fixture used with an adapter declaring less than the whole
+   * repo, and required to lie outside that declaration: without it the
+   * declaration is never exercised, and a recorder that sees a fraction of the
+   * run reports what a complete one does. An adapter that observes everything
+   * its runner executes needs none, since nothing lies outside `**`; supplying
+   * one anyway is what holds it to having recorded code it claims it could see.
+   */
+  blindSpot?: ConformanceBlindSpot;
   /** A test file that does not exist at record time, added later by the suite. */
   newTest: { file: string; contents: string };
 }

@@ -17,6 +17,8 @@ import {
   type CoverageMap,
   type CovselConfig,
   extractBlocks,
+  makeMatcher,
+  makeStrictMatcher,
   MAP_SCHEMA_VERSION,
   MODULE_BLOCK,
   recordMap,
@@ -28,6 +30,7 @@ import {
 
 import {
   type AdapterConformanceSpec,
+  type ConformanceBlindSpot,
   type ConformanceResult,
   type ConformanceUnit,
   RAN_MARKER_FILE,
@@ -111,6 +114,58 @@ function editBody(project: Project, unit: ConformanceUnit): void {
   writeFile(project.cwd, unit.source, after);
 }
 
+/** Apply the blind spot's breaking edit, so running the units must now fail. */
+function breakBlindSpot(project: Project, blind: ConformanceBlindSpot): void {
+  const before = readFileSync(join(project.cwd, blind.source), 'utf8');
+  const { find, replace } = blind.breakingEdit;
+  // Re-read rather than trust the pre-flight: an edit that silently matched
+  // nothing would leave the units passing and read as a blind spot they do not
+  // execute, blaming the fixture for the wrong thing.
+  if (!before.includes(find)) {
+    throw new Error(
+      `${blind.source} on disk does not contain the breakingEdit text ${JSON.stringify(find)}`,
+    );
+  }
+  writeFile(project.cwd, blind.source, before.replace(find, replace));
+}
+
+/**
+ * A blind spot can only demonstrate a fall-open if a change to it would not have
+ * forced one anyway. A test file is selected by the mandatory rule and a
+ * sentinel invalidates the map outright, whatever the recording observed, so
+ * neither can show that the declared scope was what caused the full run.
+ */
+function assertBlindSpotIsChangeableCode(
+  spec: AdapterConformanceSpec,
+  config: CovselConfig,
+): void {
+  const blind = spec.fixture.blindSpot;
+  if (blind === undefined) return;
+  const contents = spec.fixture.files[blind.source];
+  if (contents === undefined) {
+    throw new Error(`the blindSpot ${blind.source} is not one of the fixture's files`);
+  }
+  const { find, replace } = blind.breakingEdit;
+  if (!contents.includes(find)) {
+    throw new Error(
+      `${blind.source} does not contain the breakingEdit text ${JSON.stringify(find)}`,
+    );
+  }
+  if (contents.replace(find, replace) === contents) {
+    throw new Error(`the breakingEdit for ${blind.source} leaves the file unchanged`);
+  }
+  if (makeMatcher(config.testGlobs)(blind.source)) {
+    throw new Error(
+      `the blindSpot ${blind.source} is a test file, which is selected whether or not the recording could observe it`,
+    );
+  }
+  if (makeMatcher(config.sentinels)(blind.source)) {
+    throw new Error(
+      `the blindSpot ${blind.source} is a sentinel, whose change forces a full run whatever the recording observed`,
+    );
+  }
+}
+
 /**
  * A fixture only measures recall if its shared source is reached *through* the
  * unit sources. If a test file names it, a recorder that never follows a
@@ -137,6 +192,11 @@ function assertSharedSourceIsIndirect(spec: AdapterConformanceSpec): void {
 
 function createProject(spec: AdapterConformanceSpec): Project {
   assertSharedSourceIsIndirect(spec);
+  // Resolved the way the CLI resolves it, so an adapter that supplies its own
+  // test globs is discovered here with no fixture configuration, exactly as a
+  // project running `covsel record --adapter <name>` would discover it.
+  const config = resolveConfigFor(spec.adapter, spec.fixture.config);
+  assertBlindSpotIsChangeableCode(spec, config);
   const cwd = realpathSync(
     mkdtempSync(
       join(tmpdir(), `covsel-conformance-${spec.adapter.name.replace(/\W+/g, '-')}-`),
@@ -169,10 +229,7 @@ function createProject(spec: AdapterConformanceSpec): Project {
     git(cwd, ['config', 'user.name', 'covsel conformance']);
     git(cwd, ['add', '.']);
     git(cwd, ['commit', '-q', '-m', 'fixture']);
-    // Resolved the way the CLI resolves it, so an adapter that supplies its own
-    // test globs is discovered here with no fixture configuration, exactly as a
-    // project running `covsel record --adapter <name>` would discover it.
-    return { cwd, config: resolveConfigFor(spec.adapter, spec.fixture.config), dispose };
+    return { cwd, config, dispose };
   } catch (err) {
     dispose();
     throw err;
@@ -200,6 +257,11 @@ async function record(
 /** How this unit shows up in a marker file and in failure messages. */
 function label(unit: ConformanceUnit): string {
   return unit.name ?? unit.testFile;
+}
+
+/** The selection id naming exactly this unit, and nothing else in its file. */
+function idOf(unit: ConformanceUnit): TestId {
+  return { file: unit.testFile, ...(unit.name === undefined ? {} : { name: unit.name }) };
 }
 
 /**
@@ -259,6 +321,25 @@ function entriesFor(map: CoverageMap, unit: ConformanceUnit): { file: string }[]
         (unit.name === undefined || e.test.name === unit.name),
     )
     .flatMap((e) => e.files);
+}
+
+/**
+ * Paths no fixture contains: a top-level file, a nested one, and a dotted
+ * directory. A scope that matches paths it has never heard of is claiming the
+ * whole repo, and nothing can lie outside it; one that does not is claiming a
+ * part, and owes the suite the part it cannot see. Asking the globs this way
+ * keeps the question about what a declaration means rather than how it is
+ * spelled, which comparing it to `**` would not.
+ */
+const OUTSIDE_ANY_FIXTURE = [
+  'covsel-scope-probe.txt',
+  'nowhere/covsel-scope-probe.txt',
+  '.covsel-scope-probe/deep/file.txt',
+];
+
+/** Whether a declared scope claims the whole repo rather than a part of it. */
+function claimsEverything(isObserved: (rel: string) => boolean): boolean {
+  return OUTSIDE_ANY_FIXTURE.every(isObserved);
 }
 
 type Check = (spec: AdapterConformanceSpec) => Promise<string>;
@@ -462,10 +543,7 @@ const CHECKS: { name: string; run: Check }[] = [
         await record(spec, project);
         const { a, b } = spec.fixture.units;
 
-        const all = runSelected(spec, project, [
-          { file: a.testFile, ...(a.name === undefined ? {} : { name: a.name }) },
-          { file: b.testFile, ...(b.name === undefined ? {} : { name: b.name }) },
-        ]);
+        const all = runSelected(spec, project, [idOf(a), idOf(b)]);
         if (all.status !== 0) {
           throw new Error(`running both units failed: ${all.detail}`);
         }
@@ -563,6 +641,118 @@ const CHECKS: { name: string; run: Check }[] = [
         }
         if (result.tests.length === 0) {
           throw new Error('a wrong-schema map selected nothing at all');
+        }
+        return `full run: ${result.reason}`;
+      } finally {
+        project.dispose();
+      }
+    },
+  },
+  {
+    name: 'a recorder records only what it can observe, and its blind spots fall open',
+    run: async (spec) => {
+      const project = createProject(spec);
+      try {
+        const map = await record(spec, project);
+        const isObserved = makeStrictMatcher(map.observed);
+        const scope = map.observed.join(', ') || 'nothing';
+        const { a, b } = spec.fixture.units;
+
+        // Every other check certifies what the adapter recorded; this one holds
+        // the recording to what it says it was in a position to record. Coverage
+        // outside the declared scope is never read, so reporting it means the
+        // declaration describes something other than what this recorder watches.
+        for (const entry of map.entries) {
+          const recorded = [
+            ...entry.files.map((f) => f.file),
+            ...(entry.blocks ?? []).map((blk) => blk.file),
+          ];
+          const outside = recorded.find((file) => !isObserved(file));
+          if (outside !== undefined) {
+            throw new Error(
+              `${entry.test.name ?? entry.test.file} recorded ${outside}, outside the scope this recorder declares it observes (${scope}). ` +
+                `Coverage there is never read, so drop it; widen the declaration only if code running there really would have been seen`,
+            );
+          }
+        }
+
+        const blind = spec.fixture.blindSpot;
+        if (!claimsEverything(isObserved)) {
+          // Asked of the declaration, not of the fixture's file list. A file no
+          // unit executes — a README, a config — says nothing about what the
+          // recorder can see, so demanding a blind spot because one sits outside
+          // the scope rejects a correct adapter, and demanding none because
+          // every file happens to sit inside lets a narrow claim go untested.
+          if (blind === undefined) {
+            throw new Error(
+              `this recorder declares it observes only ${scope}, and the fixture has no blindSpot. ` +
+                `A fixture whose units execute nothing outside the declaration never exercises it, so a recorder blind past it passes every check`,
+            );
+          }
+          if (isObserved(blind.source)) {
+            throw new Error(
+              `the blindSpot ${blind.source} is inside ${scope}, the scope this recorder declares. ` +
+                `Nothing this fixture executes then lies outside the declaration, so the fall-open it exists to demonstrate is never reached`,
+            );
+          }
+        }
+        if (blind === undefined) {
+          return `records only within ${scope}, which is everything`;
+        }
+
+        // Prove the blind spot is load-bearing before reading anything into it,
+        // and prove it by difference. A non-zero exit on its own means only that
+        // something failed — a runner that runs no tests and reports failure
+        // produces the same one — so the units are first shown passing, and
+        // shown running, with the fixture whole.
+        const whole = runSelected(spec, project, [idOf(a), idOf(b)]);
+        const missing = [a, b].filter((unit) => !whole.ran.includes(label(unit)));
+        if (whole.status !== 0 || missing.length > 0) {
+          throw new Error(
+            `both units must run and pass before the blind spot is broken, or breaking it proves nothing; ` +
+              `ran ${whole.ran.join(', ') || 'nothing'} (${whole.detail})`,
+          );
+        }
+        breakBlindSpot(project, blind);
+        const broken = runSelected(spec, project, [idOf(a), idOf(b)]);
+        if (broken.status === 0) {
+          throw new Error(
+            `both units still pass with ${blind.source} broken, so they do not execute it; ` +
+              `a blindSpot nothing reaches cannot show what a recorder missed`,
+          );
+        }
+
+        if (isObserved(blind.source)) {
+          // The recorder claims this ground. A partial view of the run declared
+          // as a whole one is the shape this check exists for: what it reports
+          // is plausible, deterministic, and precise, and the only thing wrong
+          // with it is a region of the codebase it was never watching.
+          for (const unit of [a, b]) {
+            if (!entriesFor(map, unit).some((f) => f.file === blind.source)) {
+              throw new Error(
+                `${label(unit)} executes ${blind.source}, which the declared scope (${scope}) covers, yet nothing of it was recorded. ` +
+                  `A recorder that sees only part of a run has to declare only what it sees, or selection reads its blind spot as "this code ran nowhere"`,
+              );
+            }
+          }
+          return `observes ${scope}, and recorded ${blind.source}, which both units execute`;
+        }
+
+        const result = await selectAffected({ cwd: project.cwd, config: project.config });
+        if (!result.fullRun) {
+          throw new Error(
+            `${blind.source} changed, which this recorder declared it could not observe (${scope}), and selection did not fall open (selected ${JSON.stringify(result.selected)})`,
+          );
+        }
+        if (!(result.reason ?? '').includes(blind.source)) {
+          throw new Error(
+            `changing ${blind.source} forced a full run for an unrelated reason (${result.reason}), which shows nothing about what the recording could observe`,
+          );
+        }
+        for (const unit of [a, b]) {
+          if (!result.tests.includes(unit.testFile)) {
+            throw new Error(`the full run omitted ${unit.testFile}`);
+          }
         }
         return `full run: ${result.reason}`;
       } finally {
