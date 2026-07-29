@@ -6,7 +6,13 @@ import { blockHashesOf } from './blocks.js';
 import { agreedScope } from './combine.js';
 import { type CovselConfig, type CovselConfigInput, resolveConfig } from './config.js';
 import { discoverTestFiles } from './discover.js';
-import { commitExists, diffChanges, gitHeadCommit, isGitWorkTree } from './git.js';
+import {
+  commitExists,
+  diffChanges,
+  gitHeadCommit,
+  isDirtyWorkTree,
+  isGitWorkTree,
+} from './git.js';
 import type {
   Adapter,
   Change,
@@ -79,8 +85,16 @@ function assembleMap(
   config: Pick<CovselConfig, 'sentinels' | 'granularity'>,
   recordedAt: string,
   observed: readonly string[],
+  dirty: boolean,
 ): CoverageMap {
-  const commit = gitHeadCommit(cwd);
+  // A commit is a claim that this map describes that commit's tree, and selection
+  // treats it as exact. Recording from an edited tree describes a state no commit
+  // names: return the tree to HEAD and the diff from the stamped commit is empty,
+  // so the map is fully trusted for a tree it never described, and coverage the
+  // edited tree did not execute is missing from a map that looks healthy. An
+  // unanchored map falls open instead, which costs full runs until the next
+  // recording and cannot skip a test.
+  const commit = dirty ? undefined : gitHeadCommit(cwd);
   // Reflect what was actually recorded: per-test (node:test) recorders capture
   // no blocks, so the map is file-granular even when config asks for block.
   const hasBlocks = entries.some((e) => (e.blocks?.length ?? 0) > 0);
@@ -119,6 +133,13 @@ export interface RecordResult {
   mapPath: string;
   testFiles: string[];
   map?: CoverageMap;
+  /**
+   * True when the map was recorded from a tree with uncommitted changes, and so
+   * records no commit. Selection falls open until a map recorded from a committed
+   * tree replaces it — correct, and worth saying out loud when the map is written
+   * rather than only when selection later declines to narrow.
+   */
+  unanchored?: boolean;
 }
 
 export interface RecordInit {
@@ -227,7 +248,10 @@ export async function recordMap(init: RecordInit): Promise<RecordResult> {
   // failed the recording above. With a single-window recorder every unit reports
   // that declaration, so this is it.
   const observed = entries.length > 0 ? agreedScope(scopes) : recorder.observes;
-  const map = assembleMap(entries, cwd, config, recordedAt, observed);
+  // Asked once, before the map is assembled: `git status` over a large repository
+  // is not free, and the answer must be the one that held while recording ran.
+  const dirty = isDirtyWorkTree(cwd);
+  const map = assembleMap(entries, cwd, config, recordedAt, observed, dirty);
   await store.write(map);
   return {
     ok: true,
@@ -236,6 +260,7 @@ export async function recordMap(init: RecordInit): Promise<RecordResult> {
     mapPath: store.path(),
     testFiles,
     map,
+    ...(map.commit === undefined && isGitWorkTree(cwd) ? { unanchored: true } : {}),
   };
 }
 
