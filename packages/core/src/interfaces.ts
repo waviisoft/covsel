@@ -101,6 +101,10 @@ export interface RecordedUnit extends RecordedTest {
  * isolate would be recorded as covered by a recording that never watched it.
  * Code that can run in more than one isolate must be claimed by every window
  * that can see it, or by none.
+ *
+ * A recorder opening these windows declares the union of every scope they can
+ * claim, since recording refuses a unit that reports observing more than its
+ * recorder does.
  */
 export interface Observation extends RecordedTest {
   readonly observes: readonly string[];
@@ -129,8 +133,13 @@ export interface CombinedUnit extends RecordedUnit {
  */
 export interface Recorder {
   /**
-   * Repo-relative globs this recorder is able to observe execution within,
-   * stamped onto the map it produces as `observed`.
+   * Repo-relative globs this recorder is able to observe execution within, and
+   * the ceiling on what the map it produces claims as `observed`.
+   *
+   * A recorder combining several observation windows reports what watched each
+   * unit, and the map is stamped with what those units agreed on — never more
+   * than this declaration, which recording refuses to exceed. A recorder with a
+   * single window reports nothing per unit, and this is stamped as it stands.
    *
    * This is a claim about recall, not about what the runner happens to execute:
    * declare a path only when, had code there run, this recorder would have seen

@@ -59,6 +59,13 @@ speak for another's; windows observe the same execution, and the entry carries
 all of them. A window that produced nothing usable fails the recording instead of
 contributing half a test.
 
+What a recording reports about its windows can only ever **narrow** the
+recorder's declaration — entries watched by different sets of windows leave the
+map claiming nothing, which falls open. A unit claiming a path its recorder said
+it could not see fails the recording: that contradiction resolved the other way
+turns a recorder's own admission that it is blind somewhere into a map asserting
+it was watching.
+
 ## How the map enforces it
 
 The persisted map is a **versioned contract**. Bumping the schema version

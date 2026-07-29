@@ -98,13 +98,20 @@ export function combineObservations(
   }
   const failures = windows.filter(isFailed);
   if (failures.length > 0) {
-    const reasons = failures.map((f) => f.failed).join('; ');
+    // The reason arrives from an adapter, so it may not be the string the type
+    // promises; a window carrying no usable reason is still a failed window, and
+    // saying so beats rendering "undefined" into the recording's only diagnostic.
+    const reasons = failures
+      .map((f) =>
+        typeof f.failed === 'string' && f.failed ? f.failed : 'no reason given',
+      )
+      .join('; ');
     throw new Error(
       `${label(test)}: ${failures.length} of ${windows.length} observation ` +
         `windows produced nothing usable: ${reasons}`,
     );
   }
-  const observations = windows as readonly Observation[];
+  const observations = windows.filter((w): w is Observation => !isFailed(w));
 
   const files = new Map<string, CoveredFile>();
   for (const observation of observations) {

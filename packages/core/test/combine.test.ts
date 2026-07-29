@@ -1,9 +1,9 @@
-import { spawnSync } from 'node:child_process';
-import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 
+import { commitAll, write } from './helpers/repo.js';
 import {
   agreedScope,
   combineObservations,
@@ -132,13 +132,16 @@ describe('combining scopes never widens what was observed', () => {
     expect(unit.observes).toEqual(['src/**', 'server/**']);
   });
 
-  it('does not promote a set of narrow windows to everything', () => {
+  it('does not collapse sibling globs into the parent that covers them', () => {
+    // `src/a/**` and `src/b/**` are not `src/**`: a scope is a claim about
+    // recall, and the paths between them — `src/c/**`, `src/root.mjs` — were
+    // watched by no window. Widening here suppresses the full run they deserve.
     const unit = combineObservations(test_, [
-      window_(['src/**'], []),
-      window_(['server/**'], []),
+      window_(['src/a/**'], []),
+      window_(['src/b/**'], []),
     ]);
 
-    expect(unit.observes).not.toContain('**');
+    expect(unit.observes).toEqual(['src/a/**', 'src/b/**']);
   });
 
   it('keeps each glob once, in the order the windows claimed them', () => {
@@ -211,27 +214,11 @@ afterEach(() => {
   for (const dir of dirs.splice(0)) rmSync(dir, { recursive: true, force: true });
 });
 
-function git(cwd: string, args: string[]): void {
-  const res = spawnSync('git', args, {
-    cwd,
-    encoding: 'utf8',
-    env: {
-      ...process.env,
-      GIT_CONFIG_GLOBAL: '/dev/null',
-      GIT_CONFIG_SYSTEM: '/dev/null',
-    },
-  });
-  if (res.status !== 0) throw new Error(`git ${args.join(' ')} failed: ${res.stderr}`);
-}
-
-function write(cwd: string, rel: string, content: string): void {
-  const abs = join(cwd, rel);
-  mkdirSync(join(abs, '..'), { recursive: true });
-  writeFileSync(abs, content);
-}
-
 /** A repo with one spec, an app source and a server source, committed. */
-function fixture(): { cwd: string; config: CovselConfig } {
+function fixture(over: Partial<CovselConfig> = {}): {
+  cwd: string;
+  config: CovselConfig;
+} {
   const cwd = mkdtempSync(join(tmpdir(), 'covsel-combine-'));
   dirs.push(cwd);
   write(cwd, 'package.json', '{\n  "name": "fixture",\n  "type": "module"\n}\n');
@@ -241,18 +228,21 @@ function fixture(): { cwd: string; config: CovselConfig } {
   // Neither window watches this one, so a change to it has to fall open.
   write(cwd, 'infra/deploy.mjs', 'export const deploy = () => 1;\n');
   write(cwd, 'e2e/checkout.test.mjs', '// driven by the runner\n');
-  git(cwd, ['init', '-q', '-b', 'main']);
-  git(cwd, ['config', 'user.email', 'test@example.com']);
-  git(cwd, ['config', 'user.name', 'covsel test']);
-  git(cwd, ['add', '.']);
-  git(cwd, ['commit', '-q', '-m', 'fixture']);
-  return { cwd, config: resolveConfig() };
+  commitAll(cwd);
+  return { cwd, config: resolveConfig(over) };
 }
 
-/** A recorder that folds a browser window and a server window into one unit. */
-function composingRecorder(windows: (file: string) => ObservationWindow[]): Recorder {
+/**
+ * A recorder that folds a browser window and a server window into one unit.
+ * Declares `OBSERVES_EVERYTHING` unless told otherwise, so what the units report
+ * is free to narrow it.
+ */
+function composingRecorder(
+  windows: (file: string) => ObservationWindow[],
+  observes: readonly string[] = OBSERVES_EVERYTHING,
+): Recorder {
   return {
-    observes: OBSERVES_EVERYTHING,
+    observes,
     async record(file: string) {
       return [combineObservations({ file }, windows(file))];
     },
@@ -260,7 +250,7 @@ function composingRecorder(windows: (file: string) => ObservationWindow[]): Reco
 }
 
 describe('a combined scope reaches the map', () => {
-  it('stamps the union of the windows, not the recorder’s declaration', async () => {
+  it('narrows the map to the union of the windows', async () => {
     const { cwd, config } = fixture();
     const recorder = composingRecorder(() => [
       window_(['src/**'], ['src/app.mjs']),
@@ -354,5 +344,125 @@ describe('a combined scope reaches the map', () => {
     expect(result.ok).toBe(false);
     expect(result.failures[0]!.reason).toContain('browser reported no coverage');
     expect(existsSync(result.mapPath)).toBe(false);
+  });
+});
+
+/**
+ * The recorder's declaration is a ceiling. Units say which windows watched a
+ * given entry, which can only ever be less than what the recorder claimed it
+ * could see — a unit claiming more is a contradiction, and believing it turns
+ * the recorder's own admission that it is blind somewhere into a map asserting
+ * it was watching.
+ */
+describe('units may narrow a recorder’s scope, never widen it', () => {
+  it('fails the recording when a unit claims a glob the recorder does not', async () => {
+    const { cwd, config } = fixture();
+    // The honest declaration of a recorder that cannot see the app server.
+    const recorder = composingRecorder(
+      () => [
+        window_(['src/**'], ['src/app.mjs']),
+        window_(['server/**'], ['server/logic.mjs']),
+      ],
+      ['src/**'],
+    );
+
+    const result = await recordMap({ cwd, config, recorder });
+
+    expect(result.ok).toBe(false);
+    expect(result.failures[0]!.reason).toContain('server/**');
+    expect(existsSync(result.mapPath)).toBe(false);
+  });
+
+  it('never lets that over-claim deselect a change the recorder could not see', async () => {
+    // The regression this rule exists for. The server window claims `server/**`
+    // but records nothing there — which is what a recorder blind to the server
+    // looks like. Stamping the union would make the map's silence about
+    // `server/logic.mjs` read as "did not run", and the spec would not run.
+    const { cwd, config } = fixture();
+    const recorder = composingRecorder(
+      () => [window_(['src/**'], ['src/app.mjs']), window_(['server/**'], [])],
+      ['src/**'],
+    );
+
+    const failed = await recordMap({ cwd, config, recorder });
+    expect(failed.ok).toBe(false);
+
+    // With the map refused, there is nothing to select against, so the change
+    // runs everything — the fail-open answer.
+    write(cwd, 'server/logic.mjs', 'export const price = (q) => q * 4 + 1;\n');
+    const selection = await selectAffected({ cwd, config });
+    expect(selection.fullRun).toBe(true);
+    expect(selection.tests).toEqual(['e2e/checkout.test.mjs']);
+  });
+
+  it('accepts the declaration a composing recorder should make', async () => {
+    const { cwd, config } = fixture();
+    const recorder = composingRecorder(
+      () => [
+        window_(['src/**'], ['src/app.mjs']),
+        window_(['server/**'], ['server/logic.mjs']),
+      ],
+      unionScopes([['src/**'], ['server/**']]),
+    );
+
+    const result = await recordMap({ cwd, config, recorder });
+
+    expect(result.ok).toBe(true);
+    expect(result.map!.observed).toEqual(['src/**', 'server/**']);
+  });
+
+  it('lets units narrow a wider declaration', async () => {
+    const { cwd, config } = fixture();
+    const recorder = composingRecorder(
+      () => [window_(['src/**'], ['src/app.mjs'])],
+      ['src/**', 'server/**'],
+    );
+
+    const result = await recordMap({ cwd, config, recorder });
+
+    expect(result.map!.observed).toEqual(['src/**']);
+    // And the narrowing is what selection is then held to.
+    write(cwd, 'server/logic.mjs', 'export const price = (q) => q * 4 + 1;\n');
+    expect((await selectAffected({ cwd, config })).fullRun).toBe(true);
+  });
+});
+
+describe('a downgraded file still selects through the map', () => {
+  it('selects the spec when a block-less window shares the file', async () => {
+    // The per-file downgrade, exercised the way selection sees it rather than on
+    // the pure function: the browser window recorded blocks for `src/app.mjs`,
+    // the server window recorded the same file with none. A change to a block of
+    // it that only the server executed is not among the recorded hashes, so an
+    // entry keeping the browser's blocks would not match — and the spec would be
+    // skipped. Dropping that file to file level is what keeps it selected.
+    const { cwd, config } = fixture({ granularity: 'block' });
+    const recorder = composingRecorder(() => [
+      window_(['src/**'], ['src/app.mjs'], [['src/app.mjs', 'browser-block']]),
+      window_(['src/**'], ['src/app.mjs']),
+    ]);
+
+    const recorded = await recordMap({ cwd, config, recorder });
+    expect(recorded.ok).toBe(true);
+    expect(recorded.map!.entries[0]!.blocks ?? []).toEqual([]);
+
+    write(cwd, 'src/app.mjs', 'export const render = (t) => `sum: ${t}`;\n');
+
+    const selection = await selectAffected({ cwd, config });
+    expect(selection.fullRun).toBe(false);
+    expect(selection.tests).toEqual(['e2e/checkout.test.mjs']);
+  });
+
+  it('keeps selecting by block for a file no window left unknown', async () => {
+    // The other half: precision is not given up where every window that saw the
+    // file recorded its blocks, so an unrelated file's change still selects
+    // nothing.
+    const { cwd, config } = fixture({ granularity: 'block' });
+    const recorder = composingRecorder(() => [
+      window_(['src/**', 'server/**'], ['src/app.mjs'], [['src/app.mjs', 'h-render']]),
+      window_(['src/**', 'server/**'], ['server/logic.mjs'], [['server/logic.mjs', 'h']]),
+    ]);
+
+    const recorded = await recordMap({ cwd, config, recorder });
+    expect(recorded.map!.entries[0]!.blocks).toHaveLength(2);
   });
 });

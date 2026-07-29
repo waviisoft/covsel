@@ -34,9 +34,12 @@ windows at all. Half a test's execution recorded as all of it is exactly the map
 that skips tests, so recording fails and no map is written rather than keeping
 the half that worked.
 
-`recordMap` stamps the map with what the units reported rather than with the
-recorder's declaration, falling back to the declaration when they report none, so
-a recorder cannot compose narrow windows and claim a wide scope. Units observed
-through different window sets reduce the map's scope to claiming nothing, which
-falls open. Every recorder that exists today has one window and reports no
-per-unit scope, so nothing about their maps changes.
+`recordMap` stamps the map with what the units reported, falling back to the
+recorder's declaration when they report none. Units observed through different
+window sets reduce the map's scope to claiming nothing, which falls open. What
+units report can only narrow: a unit claiming a glob its recorder does not
+declare fails the recording, because resolving that contradiction the other way
+would turn a recorder's own admission that it is blind somewhere into a map
+asserting it was watching — and every change there would then be read as a
+measurement rather than falling open. Every recorder that exists today has one
+window and reports no per-unit scope, so nothing about their maps changes.

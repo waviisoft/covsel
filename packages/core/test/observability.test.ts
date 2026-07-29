@@ -1,9 +1,9 @@
-import { spawnSync } from 'node:child_process';
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 
+import { commitAll, write } from './helpers/repo.js';
 import {
   computeStatus,
   type CoverageMap,
@@ -53,25 +53,6 @@ afterEach(() => {
   for (const dir of dirs.splice(0)) rmSync(dir, { recursive: true, force: true });
 });
 
-function git(cwd: string, args: string[]): void {
-  const res = spawnSync('git', args, {
-    cwd,
-    encoding: 'utf8',
-    env: {
-      ...process.env,
-      GIT_CONFIG_GLOBAL: '/dev/null',
-      GIT_CONFIG_SYSTEM: '/dev/null',
-    },
-  });
-  if (res.status !== 0) throw new Error(`git ${args.join(' ')} failed: ${res.stderr}`);
-}
-
-function write(cwd: string, rel: string, content: string): void {
-  const abs = join(cwd, rel);
-  mkdirSync(join(abs, '..'), { recursive: true });
-  writeFileSync(abs, content);
-}
-
 /**
  * Record the fixture with a recorder declaring `observes`. Sources are limited
  * to `src/**`, so `server/logic.mjs` is genuinely absent from the map and the
@@ -85,11 +66,7 @@ async function recordFixture(observes: readonly string[]): Promise<{
   dirs.push(cwd);
   for (const [rel, content] of Object.entries(FILES)) write(cwd, rel, content);
   write(cwd, 'package.json', '{\n  "name": "fixture",\n  "type": "module"\n}\n');
-  git(cwd, ['init', '-q', '-b', 'main']);
-  git(cwd, ['config', 'user.email', 'test@example.com']);
-  git(cwd, ['config', 'user.name', 'covsel test']);
-  git(cwd, ['add', '.']);
-  git(cwd, ['commit', '-q', '-m', 'fixture']);
+  commitAll(cwd);
 
   const config = resolveConfig({ sourceGlobs: ['src/**'] });
   const base = createGenericRecorder({ command: ['node', '--test'], cwd, config });

@@ -99,7 +99,7 @@ them is the test. Fold them with `combineObservations`, so the rules are decided
 once rather than re-derived per adapter:
 
 ```ts
-import { combineObservations, type ObservationWindow } from '@covsel/core';
+import { combineObservations, unionScopes, type ObservationWindow } from '@covsel/core';
 
 const windows: ObservationWindow[] = [
   { observes: ['src/**'], files: browserFiles, blocks: browserBlocks },
@@ -111,9 +111,30 @@ return [combineObservations({ file: testFile }, windows)];
 
 Covered files union by path, blocks deduplicate by file and hash, and the unit
 claims the union of what its windows claimed -- `src/**` and `server/**`, never
-`**` and never some wider glob that happens to cover both. That combined scope is
-what the map records, so a recorder is held to what its windows actually watched
-rather than to its own declaration.
+`**` and never some wider glob that happens to cover both.
+
+**Your recorder declares that same union**, because the map is stamped with what
+the units reported and covsel refuses a unit claiming anything the recorder did
+not:
+
+```ts
+const scopes = [['src/**'], ['server/**']];
+
+return {
+  observes: unionScopes(scopes),
+  async record(testFile) {
+    /* … */
+  },
+};
+```
+
+Reporting per-unit scopes lets a recording be held to _less_ than the
+declaration, which is what it is for: a spec that never opened a page was watched
+by the server window alone, and its entry must not be vouched for by a scope
+covering the browser too. When units disagree, the map claims nothing and every
+change falls open. What they cannot do is claim more -- a recorder that declares
+`src/**` while its windows claim `server/**` fails the recording rather than
+producing a map asserting it watched a server it is blind to.
 
 Opening and closing the windows stays yours: only the code that started them can
 stop them around the same execution. Two rules come with that.

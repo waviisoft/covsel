@@ -7,7 +7,13 @@ import { agreedScope } from './combine.js';
 import { type CovselConfig, resolveConfig } from './config.js';
 import { discoverTestFiles } from './discover.js';
 import { commitExists, diffChanges, gitHeadCommit, isGitWorkTree } from './git.js';
-import type { Adapter, Change, Recorder, SelectionRunInit } from './interfaces.js';
+import type {
+  Adapter,
+  Change,
+  Recorder,
+  RecordedUnit,
+  SelectionRunInit,
+} from './interfaces.js';
 import { makeMatcher, matchesAny } from './match.js';
 import { V8FileMapper } from './mapper.js';
 import { ProcessObserver } from './observer.js';
@@ -117,6 +123,31 @@ export interface RecordInit {
 }
 
 /**
+ * The globs a unit claims to have been observed within that its recorder does
+ * not declare.
+ *
+ * A unit combined from several windows may narrow the recorder's declaration —
+ * it says which of them actually watched this entry — but it may never widen it.
+ * The declaration is the claim the adapter stands behind; a unit reporting more
+ * than that is a contradiction between the two, and the direction it resolves
+ * decides whether a change outside the declaration falls open or is read as a
+ * measurement. Believing the wider claim skips tests, so it is refused.
+ *
+ * Globs are compared as written. Deciding whether one glob's paths all fall
+ * inside another's is not something picomatch can answer, and guessing "covered"
+ * is the guess that lets an over-claim through. `**` is the one exception, since
+ * it matches every path by definition and nothing can exceed it.
+ */
+function overclaimedGlobs(
+  unit: RecordedUnit,
+  declared: readonly string[],
+): readonly string[] {
+  if (unit.observes === undefined || declared.includes('**')) return [];
+  const allowed = new Set(declared);
+  return unit.observes.filter((glob) => !allowed.has(glob));
+}
+
+/**
  * Record a fresh map. Runs the recorder over every discovered test file. If any
  * file fails to record (e.g. a failing test invalidates its coverage), the map
  * is *not* written — a partial map cannot be trusted for selection.
@@ -133,6 +164,15 @@ export async function recordMap(init: RecordInit): Promise<RecordResult> {
   for (const file of testFiles) {
     try {
       const units = await recorder.record(file);
+      for (const unit of units) {
+        const overclaimed = overclaimedGlobs(unit, recorder.observes);
+        if (overclaimed.length > 0) {
+          throw new Error(
+            `recorded as observing ${overclaimed.join(', ')}, which the recorder ` +
+              `does not declare (it declares ${[...recorder.observes].join(', ') || 'nothing'})`,
+          );
+        }
+      }
       let sources = 0;
       for (const unit of units) {
         entries.push({
@@ -167,9 +207,10 @@ export async function recordMap(init: RecordInit): Promise<RecordResult> {
   const recordedAt = init.recordedAt ?? new Date().toISOString();
   // The map claims one scope for every entry in it, so it may claim no more than
   // the units agreed on: an entry watched by a narrower set of windows than
-  // another must not be selected against paths its own windows never saw. With a
-  // single-window recorder every unit reports the same declaration, so this is
-  // that declaration.
+  // another must not be selected against paths its own windows never saw. Units
+  // can only narrow — anything wider than the recorder's declaration already
+  // failed the recording above. With a single-window recorder every unit reports
+  // that declaration, so this is it.
   const observed = entries.length > 0 ? agreedScope(scopes) : recorder.observes;
   const map = assembleMap(entries, cwd, config, recordedAt, observed);
   await store.write(map);
