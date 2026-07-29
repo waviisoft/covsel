@@ -45,7 +45,7 @@ node:test, and scenario-level selection for cucumber-js. See
 | -------------------------- | ----------------- | ------------------- |
 | Any command (generic wrap) | yes (direct-exec) | --                  |
 | node:test                  | yes (generic)     | yes (`--adapter`)   |
-| cucumber-js                | --                | yes (`--adapter`)   |
+| cucumber-js                | yes (`--adapter`) | yes (`--adapter`)   |
 | Mocha                      | yes (generic, JS) | no                  |
 | Vitest                     | yes (`--adapter`) | no                  |
 | Jest                       | yes (`--adapter`) | no                  |

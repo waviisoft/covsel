@@ -73,18 +73,18 @@ of covsel is identical regardless of which path recorded the map.
 
 ## Available adapters
 
-| Adapter (install separately) | Runner                  | How it records                     | Status    |
-| ---------------------------- | ----------------------- | ---------------------------------- | --------- |
-| `@covsel/adapter-generic`    | any direct-exec command | `NODE_V8_COVERAGE` process         | published |
-| `@covsel/adapter-vitest`     | Vitest                  | Vitest's own V8 coverage           | published |
-| `@covsel/adapter-jest`       | Jest                    | Jest's own coverage                | published |
-| `@covsel/adapter-node-test`  | node:test               | inspector snapshot-diff (per-test) | published |
-| `@covsel/adapter-cucumber`   | cucumber-js             | inspector snapshot-diff (scenario) | published |
+| Adapter (install separately) | Runner                  | How it records                     |
+| ---------------------------- | ----------------------- | ---------------------------------- |
+| `@covsel/adapter-generic`    | any direct-exec command | `NODE_V8_COVERAGE` process         |
+| `@covsel/adapter-vitest`     | Vitest                  | Vitest's own V8 coverage           |
+| `@covsel/adapter-jest`       | Jest                    | Jest's own coverage                |
+| `@covsel/adapter-node-test`  | node:test               | inspector snapshot-diff (per-test) |
+| `@covsel/adapter-cucumber`   | cucumber-js             | inspector snapshot-diff (scenario) |
 
 The generic, Vitest, and Jest adapters record at whole-file granularity. The
 node:test and cucumber-js adapters record each **test** or **scenario**
-individually and run only the affected ones -- which is the only selection
-cucumber-js has.
+individually and run only the affected ones -- which for cucumber-js is the only
+selection it has natively.
 
 Every adapter above observes the code under test in the process tree its recorder
 starts. A runner that drives a browser executes the code under test somewhere
