@@ -45,7 +45,10 @@ describeAdapterConformance({
     command: [cucumberBin],
     nodeModulesFrom: exampleModules,
     files: {
-      'src/shared.mjs': 'export function shared(x) {\n  return x + 0;\n}\n',
+      'server/logic.mjs': 'export function price(qty) {\n  return qty * 3 + 1;\n}\n',
+      'src/shared.mjs':
+        "import { price } from '../server/logic.mjs';\n" +
+        'export function shared(x) {\n  return price(x);\n}\n',
       'src/a.mjs': source('alpha', 'x * 2'),
       'src/b.mjs': source('beta', 'x + 1'),
       'features/demo.feature': [
@@ -59,6 +62,7 @@ describeAdapterConformance({
         '',
       ].join('\n'),
       'features/steps.mjs': [
+        "import assert from 'node:assert/strict';",
         "import { appendFileSync } from 'node:fs';",
         "import { Before, When } from '@cucumber/cucumber';",
         "import { alpha } from '../src/a.mjs';",
@@ -66,8 +70,11 @@ describeAdapterConformance({
         // The scenario name is only on the pickle, so the marker is written from
         // a hook rather than from the steps, which several scenarios share.
         `Before(function ({ pickle }) { appendFileSync('${RAN_MARKER_FILE}', pickle.name + '\\n'); });`,
-        "When('I run alpha', function () { alpha(1); });",
-        "When('I run beta', function () { beta(1); });",
+        // Both scenarios feed 2 through the shared source and on into
+        // server/logic.mjs, so each one's result depends on code the suite then
+        // breaks to prove this recorder really would have seen it.
+        "When('I run alpha', function () { assert.equal(alpha(1), 7); });",
+        "When('I run beta', function () { assert.equal(beta(1), 7); });",
         '',
       ].join('\n'),
     },
@@ -86,6 +93,10 @@ describeAdapterConformance({
       },
     },
     sharedSource: 'src/shared.mjs',
+    blindSpot: {
+      source: 'server/logic.mjs',
+      breakingEdit: { find: 'qty * 3 + 1', replace: 'qty * 9 + 1' },
+    },
     newTest: {
       file: 'features/later.feature',
       contents: 'Feature: later\n\n  Scenario: later scenario\n    When I run alpha\n',

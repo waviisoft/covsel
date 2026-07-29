@@ -45,6 +45,10 @@ universal.
 
 - A test file whose run **fails** invalidates its coverage; `covsel record` will
   not write a partial map. Fix the failing test and re-record.
+- A test that reaches its code through a **bundle** needs that build's source
+  maps: a script covsel cannot map back to a source fails the recording rather
+  than crediting nothing. See
+  [a script that cannot be mapped](/guide/fail-open#a-script-that-cannot-be-mapped).
 - Discovery, source globs, and sentinels are controlled by
   [configuration](/guide/getting-started#configuration); zero-config works out
   of the box.

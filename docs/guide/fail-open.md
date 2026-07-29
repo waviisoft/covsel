@@ -16,6 +16,10 @@ have run_. So every design tension resolves toward **over-selection**:
   A map says which files each test covered; outside what the recorder was able
   to watch, "not covered" is a fact about where it was looking, not about what
   ran.
+- An executed script the recorder **cannot map back to any source** fails the
+  recording, and no map is written. A bundle with no source map covers nothing
+  that can be named, and an entry that credits nothing is read as a test that
+  covers nothing.
 - Non-JS dependencies coverage can't see (fixtures, snapshots, templates) are
   handled by user-declared `alwaysRun` globs — and, later, by tracking fs reads.
 
@@ -46,6 +50,12 @@ Under-claiming costs CI minutes; over-claiming skips tests. It is required — a
 map that does not say what it observed is unusable, because the only available
 guess ("everything") is the one that loses tests.
 
+The claim is not left to good faith either. The conformance suite holds every
+adapter to it in both directions: nothing it records may lie outside the scope it
+declares, and code inside that scope which the tests execute must appear in the
+map. A recorder that watches part of a run and claims the whole one fails there
+rather than shipping.
+
 Merged shard maps keep the scope only when every shard agrees. Shards that
 disagree produce a map claiming nothing, which falls open on any change, rather
 than one shard's coverage vouching for paths another was never watching.
@@ -65,6 +75,52 @@ map claiming nothing, which falls open. A unit claiming a path its recorder said
 it could not see fails the recording: that contradiction resolved the other way
 turns a recorder's own admission that it is blind somewhere into a map asserting
 it was watching.
+
+## A script that cannot be mapped
+
+This rule belongs to the recorders that observe raw V8 coverage — the generic
+`NODE_V8_COVERAGE` wrap, and anything built on covsel's V8 mapper. Adapters that
+read their runner's own already-source-mapped coverage (Vitest, Jest) never see
+a bundled script in the first place, so it does not arise for them.
+
+Coverage against a bundle is not coverage of anything anyone wrote. If the
+build published no source map, there is no way back to the sources behind it,
+and the honest answer is that the recording failed — not that those tests cover
+nothing. This is reachable from a stock bundler setup: `vite build` emits no
+source map unless you ask for one, and `sourcemap: 'hidden'` writes the map but
+strips the comment pointing at it. Recording against such a build used to
+produce entries that existed and credited nothing, so editing the file every
+test executes selected zero tests.
+
+So a script that executed and resolves to no source in your repository fails the
+recording, naming the script, and no map is written. covsel looks for the map in
+every place a build publishes one: a `sourceMappingURL` comment naming a sidecar
+file, the same comment carrying the map inline as a `data:` URI, the
+conventional `<script>.map` neighbour when the comment was stripped, over HTTP
+for scripts a browser loaded from a dev server, and in a build directory the
+served URLs are mapped onto.
+
+A source map is followed only as far as it can be trusted. A map read from disk
+places its sources exactly, relative to itself. A map fetched over HTTP has no
+such anchor, so covsel confirms each source against the text the build published
+in `sourcesContent` before crediting it — a served path that merely matches a
+same-named file in your repository is a guess, and crediting the wrong file
+loses every change to the right one. A source that cannot be confirmed, or that
+should be in your repository but is not where the map says, fails the recording
+along with a map that has none at all.
+
+Not everything that fails to map is a hole. Your own files are their own
+sources; vendored code under `node_modules` is covered by the lockfile sentinel
+rather than by coverage; and the runtime's own scripts are not your project's
+code. What fails is code built from this repository and handed back to the
+runner with no way to trace it home. In a workspace that means a sibling
+package consumed as `packages/*/dist/*.js` needs source maps too — the tests
+importing it reach your code only through that build.
+
+Scripts that will genuinely never be mappable — a third-party widget on the page
+under test — can be accepted with `sourceMaps.allowUnmappable`. Each entry is a
+gap in the recording that you have chosen to accept, so `covsel record` names
+the scripts it let through every time it lets one through.
 
 ## How the map enforces it
 

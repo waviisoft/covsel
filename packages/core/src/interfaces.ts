@@ -149,6 +149,15 @@ export interface Recorder {
    */
   readonly observes: readonly string[];
   record(testFile: string): Promise<RecordedUnit[]>;
+  /**
+   * Scripts the most recent `record` executed, could not map back to any source,
+   * and accepted anyway because the project listed them in
+   * `sourceMaps.allowUnmappable`. Each one is coverage the map is missing, so a
+   * recorder that offers the accommodation reports what it let through and
+   * consumers say so; an unmappable script nobody accepted fails the recording
+   * instead.
+   */
+  unmappableAllowed?(): string[];
 }
 
 /** What an adapter needs to build a recorder for one project. */
