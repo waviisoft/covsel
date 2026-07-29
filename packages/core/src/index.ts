@@ -4,6 +4,7 @@ export * from './adapter.js';
 export * from './config.js';
 export * from './init.js';
 export * from './match.js';
+export * from './packages.js';
 export * from './paths.js';
 export * from './discover.js';
 export * from './observer.js';

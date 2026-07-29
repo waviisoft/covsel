@@ -10,6 +10,8 @@ import {
   type CoverageMap,
   type CovselConfig,
   type InitDiagnostics,
+  type Recorder,
+  type RecorderInit,
   type InitPlan,
   installCommand,
   planInit,
@@ -116,6 +118,25 @@ async function resolveAdapter(
     flag(opts, 'adapter') ?? (await loadRawConfig(cwd)).adapter ?? DEFAULT_ADAPTER;
   try {
     return await loadAdapter(name, cwd);
+  } catch (e) {
+    err(`covsel ${cmd}: ${e instanceof Error ? e.message : String(e)}\n`);
+    return undefined;
+  }
+}
+
+/**
+ * Build the adapter's recorder, reporting a refusal rather than crashing on it.
+ * An adapter is entitled to check up front that it can actually record — the
+ * Vitest one needs its coverage provider installed — and that reads as a message
+ * to act on, not a stack trace.
+ */
+function makeRecorder(
+  cmd: string,
+  adapter: Adapter,
+  init: RecorderInit,
+): Recorder | undefined {
+  try {
+    return adapter.createRecorder(init);
   } catch (e) {
     err(`covsel ${cmd}: ${e instanceof Error ? e.message : String(e)}\n`);
     return undefined;
@@ -355,7 +376,8 @@ async function cmdRecord(argv: string[]): Promise<number> {
   const adapter = await resolveAdapter('record', opts, cwd);
   if (!adapter) return 1;
   const config = await loadConfigFor(cwd, adapter);
-  const recorder = adapter.createRecorder({ command, cwd, config });
+  const recorder = makeRecorder('record', adapter, { command, cwd, config });
+  if (!recorder) return 1;
 
   const result = await recordMap({
     cwd,
@@ -523,11 +545,9 @@ async function cmdWatch(argv: string[]): Promise<number> {
               'would describe a state no commit names',
           };
         }
-        const result = await recordMap({
-          cwd,
-          config,
-          recorder: adapter.createRecorder({ command, cwd, config }),
-        });
+        const recorder = makeRecorder('watch', adapter, { command, cwd, config });
+        if (!recorder) return { ok: false, reason: 'the adapter cannot record' };
+        const result = await recordMap({ cwd, config, recorder });
         return result.ok
           ? { ok: true }
           : {

@@ -342,6 +342,49 @@ describe('covsel init', () => {
   });
 });
 
+/**
+ * Install an adapter into the project whose `createRecorder` refuses. A real one
+ * does this when it cannot record — the Vitest adapter checks for its coverage
+ * provider up front — and a stub keeps this test on the CLI's handling of the
+ * refusal, without depending on a built workspace adapter.
+ */
+function stubRefusingAdapter(cwd: string, message: string): void {
+  const dir = join(cwd, 'node_modules', 'covsel-adapter-refusing');
+  mkdirSync(dir, { recursive: true });
+  writeFileSync(
+    join(dir, 'package.json'),
+    `${JSON.stringify({
+      name: 'covsel-adapter-refusing',
+      type: 'module',
+      main: 'index.js',
+    })}\n`,
+  );
+  writeFileSync(
+    join(dir, 'index.js'),
+    'export const adapter = {\n' +
+      "  name: 'refusing',\n" +
+      '  formatSelection: (tests) => tests.map((t) => t.file),\n' +
+      `  createRecorder: () => { throw new Error(${JSON.stringify(message)}); },\n` +
+      '};\n',
+  );
+}
+
+describe('an adapter that cannot record', () => {
+  it('record reports the refusal instead of crashing', async () => {
+    const refusal = '@vitest/coverage-v8 is not installed';
+    const { code, err } = await inProject({ 'package.json': pkg({}) }, async (cwd) => {
+      stubRefusingAdapter(cwd, refusal);
+      return capture(() => main(['record', '--adapter', 'refusing', '--', 'true']));
+    });
+
+    expect(code).toBe(1);
+    expect(err).toContain('covsel record:');
+    expect(err).toContain(refusal);
+    // A message to act on, not a stack trace.
+    expect(err).not.toMatch(/^\s+at /m);
+  });
+});
+
 describe('the persisted adapter', () => {
   it('is what a command uses when no flag is given', async () => {
     const { code, err } = await inProject(

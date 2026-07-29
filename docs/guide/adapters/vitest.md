@@ -55,8 +55,10 @@ executed.
 
 ## Notes
 
-- Requires `@vitest/coverage-v8`; without it, `record` fails loudly rather than
-  writing an empty (unsafe) entry.
+- Requires `@vitest/coverage-v8`. Without it, `record` refuses before running
+  anything and names the install command — Vitest would otherwise run the whole
+  suite and simply write no report, and an entry crediting nothing would read as
+  a test that covers nothing.
 - Granularity is per **file** in this release; per-test/scenario precision is on
   the roadmap.
 - A runnable end-to-end example lives in
