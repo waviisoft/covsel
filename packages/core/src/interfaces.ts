@@ -77,6 +77,51 @@ export interface RecordedTest {
 /** One recorded map entry: a test id and the sources that test executed. */
 export interface RecordedUnit extends RecordedTest {
   test: TestId;
+  /**
+   * The scope the observation windows behind this unit add up to, when it was
+   * combined from more than one. Absent for a recorder with a single window,
+   * whose scope is the recorder's own declaration.
+   */
+  observes?: readonly string[];
+}
+
+/**
+ * One observation window's view of a single test's execution: what it saw run,
+ * and the repo paths it was in a position to see run.
+ *
+ * A recorder watching the code under test in the process tree it controls has
+ * one window and no use for this. A recorder spanning several isolates — a
+ * browser, the worker driving it, the server behind it — holds one per isolate,
+ * and none of them is the test on its own.
+ *
+ * `observes` carries the same meaning as a recorder's own declaration, and the
+ * same burden, with one extra edge: a path belongs here only if this window
+ * would see it run *wherever the test runs it*. Windows combine by unioning
+ * their scopes, so a path claimed by one window but executed inside another's
+ * isolate would be recorded as covered by a recording that never watched it.
+ * Code that can run in more than one isolate must be claimed by every window
+ * that can see it, or by none.
+ *
+ * A recorder opening these windows declares the union of every scope they can
+ * claim, since recording refuses a unit that reports observing more than its
+ * recorder does.
+ */
+export interface Observation extends RecordedTest {
+  readonly observes: readonly string[];
+}
+
+/** A window that produced nothing usable, and why. */
+export interface FailedObservation {
+  /** What went wrong — a script with no source map, a browser with no coverage API. */
+  readonly failed: string;
+}
+
+/** What one observation window yields: a view of the execution, or a failure. */
+export type ObservationWindow = Observation | FailedObservation;
+
+/** A unit combined from several windows, carrying the scope they add up to. */
+export interface CombinedUnit extends RecordedUnit {
+  observes: string[];
 }
 
 /**
@@ -88,8 +133,13 @@ export interface RecordedUnit extends RecordedTest {
  */
 export interface Recorder {
   /**
-   * Repo-relative globs this recorder is able to observe execution within,
-   * stamped onto the map it produces as `observed`.
+   * Repo-relative globs this recorder is able to observe execution within, and
+   * the ceiling on what the map it produces claims as `observed`.
+   *
+   * A recorder combining several observation windows reports what watched each
+   * unit, and the map is stamped with what those units agreed on — never more
+   * than this declaration, which recording refuses to exceed. A recorder with a
+   * single window reports nothing per unit, and this is stamped as it stands.
    *
    * This is a claim about recall, not about what the runner happens to execute:
    * declare a path only when, had code there run, this recorder would have seen

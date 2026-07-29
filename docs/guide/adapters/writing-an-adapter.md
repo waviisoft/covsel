@@ -96,6 +96,75 @@ directions. Nothing you record may lie outside it, and anything inside it that
 the fixture's units execute must appear in the map -- so a recorder that watches
 part of the run and claims the whole one is caught rather than certified.
 
+## When one window is not the whole test
+
+A recorder that spans several isolates -- a browser, the worker driving the spec,
+the server the page talks to -- holds one observation per isolate, and none of
+them is the test. Fold them with `combineObservations`, so the rules are decided
+once rather than re-derived per adapter:
+
+```ts
+import { combineObservations, unionScopes, type ObservationWindow } from '@covsel/core';
+
+const windows: ObservationWindow[] = [
+  { observes: ['src/**'], files: browserFiles, blocks: browserBlocks },
+  { observes: ['server/**'], files: serverFiles, blocks: serverBlocks },
+];
+
+return [combineObservations({ file: testFile }, windows)];
+```
+
+Covered files union by path, blocks deduplicate by file and hash, and the unit
+claims the union of what its windows claimed -- `src/**` and `server/**`, never
+`**` and never some wider glob that happens to cover both.
+
+**Your recorder declares that same union**, because the map is stamped with what
+the units reported and covsel refuses a unit claiming anything the recorder did
+not:
+
+```ts
+const scopes = [['src/**'], ['server/**']];
+
+return {
+  observes: unionScopes(scopes),
+  async record(testFile) {
+    /* … */
+  },
+};
+```
+
+Reporting per-unit scopes lets a recording be held to _less_ than the
+declaration, which is what it is for: a spec that never opened a page was watched
+by the server window alone, and its entry must not be vouched for by a scope
+covering the browser too. When units disagree, the map claims nothing and every
+change falls open. What they cannot do is claim more -- a recorder that declares
+`src/**` while its windows claim `server/**` fails the recording rather than
+producing a map asserting it watched a server it is blind to.
+
+Opening and closing the windows stays yours: only the code that started them can
+stop them around the same execution. Two rules come with that.
+
+**A window that produced nothing usable fails the unit.** Hand it in as a
+failure and let the error propagate -- recording that test file fails and no map
+is written:
+
+```ts
+const server: ObservationWindow = coverage
+  ? { observes: ['server/**'], files, blocks }
+  : { failed: 'the app server reported no coverage' };
+```
+
+Half a test's execution recorded as all of it is precisely the map that skips
+tests: everything the failed window would have covered reads as "ran nowhere".
+
+**A window may claim a path only if it would see that path run wherever the test
+runs it.** Scopes union, so a path claimed by the browser window but executed
+inside the server's isolate ends up recorded as covered by a recording that never
+watched it. Code both sides can execute -- anything isomorphic -- must be claimed
+by both windows or by neither. When the layout is the user's to describe, take
+the scope from your adapter's configuration and document that this is what they
+are promising.
+
 ## Prove it with the conformance kit
 
 Every adapter must pass the shared suite in `@covsel/conformance`. It writes a

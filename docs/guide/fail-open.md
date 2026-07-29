@@ -60,6 +60,22 @@ Merged shard maps keep the scope only when every shard agrees. Shards that
 disagree produce a map claiming nothing, which falls open on any change, rather
 than one shard's coverage vouching for paths another was never watching.
 
+A recorder with several observation windows onto one test — a browser, and the
+server behind it — combines them into a single entry, and that entry claims the
+**union** of what its windows could see. The opposite of the shard rule, from the
+same invariant: no entry may be vouched for by a scope that was not watching that
+entry's execution. Shards observe different entries, so one shard's scope may not
+speak for another's; windows observe the same execution, and the entry carries
+all of them. A window that produced nothing usable fails the recording instead of
+contributing half a test.
+
+What a recording reports about its windows can only ever **narrow** the
+recorder's declaration — entries watched by different sets of windows leave the
+map claiming nothing, which falls open. A unit claiming a path its recorder said
+it could not see fails the recording: that contradiction resolved the other way
+turns a recorder's own admission that it is blind somewhere into a map asserting
+it was watching.
+
 ## A script that cannot be mapped
 
 This rule belongs to the recorders that observe raw V8 coverage — the generic
