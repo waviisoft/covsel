@@ -81,9 +81,7 @@ of covsel is identical regardless of which path recorded the map.
 | `@covsel/adapter-node-test`  | node:test               | inspector snapshot-diff (per-test) | published |
 | `@covsel/adapter-cucumber`   | cucumber-js             | inspector snapshot-diff (scenario) | published |
 | _(planned)_                  | Mocha, ...              | generic wrap / lifecycle shim      | later     |
-| _(blocked)_                  | Playwright              | browser + server windows           | [#12]     |
-
-[#12]: https://github.com/waviisoft/covsel/issues/12
+| _(blocked)_                  | Playwright              | browser + server windows           | blocked   |
 
 The generic, Vitest, and Jest adapters record at whole-file granularity. The
 node:test and cucumber-js adapters record each **test** or **scenario**
@@ -96,11 +94,14 @@ controls; a UI test executes in the browser and usually an application server as
 well, neither of which the wrap can see. Recording one that way produces a map
 that is non-empty and internally consistent while missing all of `src/**`, so a
 diff touching app code selects nothing rather than falling open. Until an adapter
-ships, keep running those suites in full. What it still needs is projecting
-bundled coverage back to your original sources; the rest of the groundwork — a
-recorder declaring what it could not see, several observation windows folding
-into one unit, and unmappable scripts failing the recording — is in place. The
-plan and its remaining blocker are tracked in [#12].
+ships, keep running those suites in full.
+
+What such an adapter still needs from core is a projection from bundled coverage
+back to your original sources. The rest of the groundwork is in place: a recorder
+declares the scope it is able to observe and any change outside it forces a full
+run, several observation windows combine into one recorded unit, and a script that
+executed but cannot be mapped to a source fails the recording instead of
+contributing nothing.
 
 ## Writing an adapter
 

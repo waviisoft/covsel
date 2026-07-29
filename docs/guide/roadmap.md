@@ -45,8 +45,7 @@ the [examples](https://github.com/waviisoft/covsel/tree/main/examples).
   and conformance holds an adapter to its declared scope. Projecting bundled
   coverage ranges through source maps is the remaining piece. Until it ships, the
   generic wrap is not a substitute: it observes only the spec process, so the map
-  would credit your tests with covering none of your app. See
-  [#12](https://github.com/waviisoft/covsel/issues/12).
+  would credit your tests with covering none of your app.
 
 ## Beyond — bundlers, monorepos, ecosystem
 

@@ -57,8 +57,7 @@ The generic wrap observes only the process it starts, which for a UI test is the
 spec — not the browser rendering your app, nor the server behind it. A map
 recorded that way says your tests cover none of `src/**`, so a diff touching app
 code selects nothing rather than falling open. Keep running those suites in full
-until an adapter ships; the work is tracked in
-[#12](https://github.com/waviisoft/covsel/issues/12).
+until an adapter ships — see the [roadmap](/guide/roadmap).
 :::
 
 ## Prior art & credits
