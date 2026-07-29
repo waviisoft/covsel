@@ -69,6 +69,19 @@ export function createGenericRecorder(init: GenericRecorderInit): Recorder {
   };
 }
 
+/**
+ * What to say when discovery found no test files. Names both halves of the
+ * question — the globs and where they were matched — because the answer is almost
+ * always that the project's layout is not the one the globs describe, and
+ * `test/*.js` rather than `*.test.js` is common enough to be the first guess.
+ */
+function noTestFilesFound(cwd: string, config: Pick<CovselConfig, 'testGlobs'>): string {
+  return (
+    `no test files matched ${config.testGlobs.join(', ')} under ${cwd} ` +
+    `-- set testGlobs to your project's layout (e.g. 'test/**/*.js')`
+  );
+}
+
 /** Hash every existing sentinel file, keyed by repo-relative path. */
 function hashSentinels(cwd: string, sentinels: string[]): Record<string, string> {
   const isSentinel = makeMatcher(sentinels);
@@ -140,6 +153,12 @@ export interface RecordResult {
    * rather than only when selection later declines to narrow.
    */
   unanchored?: boolean;
+  /**
+   * Why recording failed as a whole, as opposed to per test file. Present only
+   * for a failure that belongs to the run rather than to anything in it — today,
+   * discovering no test files at all.
+   */
+  error?: string;
 }
 
 export interface RecordInit {
@@ -185,6 +204,23 @@ export async function recordMap(init: RecordInit): Promise<RecordResult> {
   const { cwd, config, recorder } = init;
   const testFiles = discoverTestFiles(cwd, config);
   const store = new LocalStore({ cwd, dir: config.store.dir });
+
+  // Nothing to record is a failure, not an empty success. A map with no entries
+  // is syntactically valid and measures nothing, and writing one turns a
+  // mismatched `testGlobs` into a green CI run that executed no tests at all.
+  // There is no repository for which an empty map is the right answer. Checked
+  // before the tree is sampled, since there is nothing to sample it for.
+  if (testFiles.length === 0) {
+    return {
+      ok: false,
+      recorded: 0,
+      failures: [],
+      mapPath: store.path(),
+      testFiles,
+      error: noTestFilesFound(cwd, config),
+    };
+  }
+
   // Sampled before a single test runs, because this asks what tree the recording
   // was taken against — and that is the tree as it stood when the suite started.
   // Asking afterwards would answer a different question and get it wrong in a
@@ -395,6 +431,12 @@ export async function selectAffected(init: SelectInit): Promise<AffectedResult> 
     selected: testFiles.map((file) => ({ file })),
   });
 
+  // Discovery found nothing to choose between, so there is no selection to make
+  // and an empty one would read as "nothing to run". A full run hands the runner
+  // its own command unfiltered, which means its own discovery finds the tests
+  // covsel's globs did not.
+  if (testFiles.length === 0) return fullRun(noTestFilesFound(cwd, config));
+
   const base = diffBase(cwd, map, init.since);
   if (base.kind === 'untrusted') return fullRun(base.reason);
 
@@ -584,6 +626,12 @@ export async function runAffected(
 export interface StatusResult {
   mapPath: string;
   exists: boolean;
+  /**
+   * Test files discovery found. Zero means covsel has nothing to select between,
+   * whatever the map says, so it is reported alongside the map rather than
+   * inferred from it.
+   */
+  discoveredTestCount?: number;
   recordedAt?: string;
   ageMs?: number;
   granularity?: string;
@@ -610,12 +658,24 @@ export async function computeStatus(init: StatusInit): Promise<StatusResult> {
   const map = await store.read();
   const now = init.now ?? Date.now();
 
+  // Discovery is what `affected` would select from, so a status that did not
+  // report it could describe a healthy map beside a run that executes nothing.
+  let discovered: string[];
+  try {
+    discovered = discoverTestFiles(cwd, config);
+  } catch {
+    discovered = [];
+  }
+  const noTests = discovered.length === 0 ? noTestFilesFound(cwd, config) : undefined;
+
   if (!map) {
     return {
       mapPath: store.path(),
       exists: false,
+      discoveredTestCount: discovered.length,
       changedSentinels: [],
       nextIsFullRun: true,
+      ...(noTests !== undefined ? { nextFullRunReason: noTests } : {}),
     };
   }
 
@@ -640,7 +700,11 @@ export async function computeStatus(init: StatusInit): Promise<StatusResult> {
   let nextIsFullRun = true;
   let nextFullRunReason: string | undefined;
   const base = diffBase(cwd, map, undefined);
-  if (base.kind === 'untrusted') {
+  if (noTests !== undefined) {
+    // Whatever the map looks like, there is nothing to narrow to. Said first
+    // because it is the actionable answer: the globs, not the map, are wrong.
+    nextFullRunReason = noTests;
+  } else if (base.kind === 'untrusted') {
     nextFullRunReason = base.reason;
   } else {
     try {
@@ -656,6 +720,7 @@ export async function computeStatus(init: StatusInit): Promise<StatusResult> {
   return {
     mapPath: store.path(),
     exists: true,
+    discoveredTestCount: discovered.length,
     recordedAt: map.recordedAt,
     ageMs: now - Date.parse(map.recordedAt),
     granularity: map.granularity,

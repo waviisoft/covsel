@@ -46,9 +46,10 @@ export function unobservedChange(
 
 /**
  * Fail-open policy: every ambiguity resolves toward running more tests.
- *  - An unusable map, or any change to a sentinel file, forces a full run.
+ *  - An unusable map, or one with no entries at all, forces a full run.
  *  - A change to covsel's own config forces a full run: the map means what it
  *    means only under the config it was recorded with.
+ *  - Any change to a sentinel file forces a full run.
  *  - A change outside what the recording could observe forces a full run.
  *  - Added/changed test files always run, even before they are in the map.
  */
@@ -63,6 +64,12 @@ export class FailOpenPolicy implements Policy {
 
   evaluate(map: CoverageMap | undefined, changes: Change[]): 'select' | 'full-run' {
     if (!isUsableMap(map)) return 'full-run';
+    // A map with no entries measured nothing, so its silence about a changed file
+    // says nothing either. It is syntactically valid and structurally empty —
+    // written by a recording that discovered no test files, or merged from
+    // nothing — and reading it as "no test covers this" is how a run selects zero
+    // tests and exits 0.
+    if (map.entries.length === 0) return 'full-run';
     if (changedCovselConfig(changes) !== undefined) return 'full-run';
     if (changes.some((c) => this.isSentinel(c.file))) return 'full-run';
     if (unobservedChange(map, changes) !== undefined) return 'full-run';
@@ -84,6 +91,7 @@ export function fullRunReason(
 ): string {
   if (map === undefined) return 'no usable map recorded';
   if (!isUsableMap(map)) return 'recorded map is stale or has an incompatible schema';
+  if (map.entries.length === 0) return 'map has no entries, so it measured nothing';
   const configChange = changedCovselConfig(changes);
   if (configChange !== undefined) {
     return `${configChange} changed, so the map was recorded under a different configuration`;
