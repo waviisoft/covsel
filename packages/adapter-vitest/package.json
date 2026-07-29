@@ -25,6 +25,10 @@
   "dependencies": {
     "@covsel/core": "workspace:*"
   },
+  "peerDependencies": {
+    "vitest": "*",
+    "@vitest/coverage-v8": "*"
+  },
   "engines": {
     "node": ">=22"
   },

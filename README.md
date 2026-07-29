@@ -4,11 +4,11 @@
 > static import-graph selection lies, and the only option for runners that have
 > no selection at all.
 
-**Status: early.** The `covsel record`, `affected`, `run`, and `status` loop
-works today, with block-hash (function-level) selection, per-test selection for
-node:test, scenario-level selection for cucumber-js, and a CI story for
-publishing and merging maps. More runner adapters are next. Track the work in the
-[issues](https://github.com/waviisoft/covsel/issues), and see
+**Status: early.** The `covsel init`, `record`, `affected`, `run`, `watch`,
+`status`, and `merge` commands work today, with block-hash (function-level)
+selection, per-test selection for node:test, scenario-level selection for
+cucumber-js, and a CI story for publishing and merging maps. Track the work in
+the [issues](https://github.com/waviisoft/covsel/issues), and see
 [`DESIGN.md`](./DESIGN.md) for the architecture.
 
 ## The problem
@@ -26,7 +26,15 @@ git diff -- run only the tests whose covered code changed.
 
 ## Quickstart
 
-covsel ships no adapters -- install the CLI plus the one for your runner:
+covsel ships no adapters -- install the CLI, then let `init` work out and
+install the one for your runner:
+
+```bash
+npm install --save-dev covsel
+npx covsel init          # detects the runner, shows the plan, installs the adapter
+```
+
+Or pick it yourself:
 
 ```bash
 npm install --save-dev covsel @covsel/adapter-generic   # any command, whole-file
@@ -60,8 +68,10 @@ npx covsel status
 npx covsel merge shard-*/map.json --out .covsel/map.json
 ```
 
-Zero config to start. `covsel affected` prints a file list, so you can pipe it
-into any runner that accepts test files: `node --test $(covsel affected)`.
+Zero config to start -- `covsel init` is optional, and writes down which adapter
+to record with so later commands need no flag. `covsel affected` prints a file list, so
+you can pipe it into any runner that accepts test files:
+`node --test $(covsel affected)`.
 
 Vitest and Jest transform sources before executing them, so raw V8 process
 coverage can't describe your `src/**`; `--adapter vitest` and `--adapter jest`

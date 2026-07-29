@@ -25,6 +25,9 @@
   "dependencies": {
     "@covsel/core": "workspace:*"
   },
+  "peerDependencies": {
+    "jest": "*"
+  },
   "engines": {
     "node": ">=22"
   },

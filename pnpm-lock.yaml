@@ -107,6 +107,9 @@ importers:
       '@covsel/core':
         specifier: workspace:*
         version: link:../core
+      '@cucumber/cucumber':
+        specifier: '*'
+        version: 11.3.0
     devDependencies:
       '@covsel/conformance':
         specifier: workspace:*
@@ -133,6 +136,9 @@ importers:
       '@covsel/core':
         specifier: workspace:*
         version: link:../core
+      jest:
+        specifier: '*'
+        version: 30.4.2(@types/node@22.20.1)(supports-color@8.1.1)
     devDependencies:
       '@covsel/conformance':
         specifier: workspace:*
@@ -159,6 +165,12 @@ importers:
       '@covsel/core':
         specifier: workspace:*
         version: link:../core
+      '@vitest/coverage-v8':
+        specifier: '*'
+        version: 4.1.10(vitest@4.1.10)
+      vitest:
+        specifier: '*'
+        version: 4.1.10(@types/node@22.20.1)(@vitest/coverage-v8@4.1.10)(vite@7.3.6(@types/node@22.20.1)(yaml@2.9.0))
     devDependencies:
       '@covsel/conformance':
         specifier: workspace:*

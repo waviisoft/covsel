@@ -146,7 +146,7 @@ covsel explain src/app/foo.ts         # which tests cover this file
 covsel status                         # map age, coverage %, sentinel triggers
 ```
 
-### Config file (`covsel.config.ts` / `.covsel.json`)
+### Config file (`covsel.json` / `covsel.config.js`)
 
 ```jsonc
 {

@@ -14,9 +14,49 @@ covered in the [CI guide](/guide/ci).
 
 ## Install
 
-covsel ships no adapters, so install the CLI and the one for your runner. Which
-one is the only decision here, and [Adapters](/guide/adapters/) has the full
-picture:
+covsel ships no adapters — one per runner, installed separately — so setting up
+means installing the CLI plus the right adapter. `covsel init` works out which
+one that is:
+
+```bash
+npm install --save-dev covsel
+npx covsel init
+```
+
+`init` reads your `package.json`, works out which runner you use, and shows you
+what it found before touching anything:
+
+```
+covsel init: detected vitest — vitest is a dependency (adapter vitest)
+
+Plan:
+  install  @covsel/adapter-vitest, @vitest/coverage-v8 (pnpm)
+  write    covsel.json (adapter: vitest)
+  ignore   the map directory in .gitignore
+
+Set covsel up this way? [Y/n]
+```
+
+Confirm and it installs the adapter with your own package manager — plus
+anything else recording needs, like Vitest's coverage provider — writes the
+adapter to the config so later commands need no `--adapter`, and keeps the map
+out of version control. Detection is worth a glance before you say yes: a wrong
+adapter is a config that looks settled and records nothing useful.
+
+| Flag               | What it does                                 |
+| ------------------ | -------------------------------------------- |
+| `-y`, `--yes`      | Apply the plan without asking                |
+| `--no-install`     | Write the config, install nothing            |
+| `--adapter <name>` | Use this adapter instead of the detected one |
+
+Without a terminal to ask — CI, a script, a coding agent — `init` proceeds, since
+running it is itself the intent.
+
+`init` does not guess. A runner it has no signature for is reported, along with
+a link for requesting an adapter and the environment such a request needs, and
+nothing is written — pass `--adapter <name>` to name one yourself.
+
+### Or choose the adapter yourself
 
 ```bash
 npm install --save-dev covsel @covsel/adapter-generic   # any command, whole-file
@@ -29,7 +69,8 @@ npm install --save-dev covsel @covsel/adapter-cucumber  # cucumber-js, per scena
 Adapters are separate packages because most projects need exactly one: bundling
 five runners' worth of code into every install would make you carry four you
 will never load. A name covsel does not find is reported with the package to
-install, so a missing one is never a mystery.
+install, so a missing one is never a mystery. [Adapters](/guide/adapters/) has
+the full picture.
 
 ## The loop
 
@@ -84,11 +125,12 @@ code:
 
 ## Configuration
 
-Selection needs no configuration once an adapter is installed. To refine, add a `.covsel.json` (or
+Selection needs no configuration once an adapter is installed. To refine, add a `covsel.json` (or
 `covsel.config.js`) at your repo root:
 
 ```jsonc
 {
+  "adapter": "vitest", // the installed adapter to record with; --adapter overrides
   "testGlobs": ["**/*.{test,spec}.?(c|m)[jt]s?(x)"],
   "sourceGlobs": ["**/*"], // repo minus node_modules/dist/coverage/.covsel and tests
   "alwaysRun": ["**/fixtures/**"], // test files that must always run
