@@ -1,5 +1,7 @@
+import { spawnSync } from 'node:child_process';
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
+import { createInterface } from 'node:readline/promises';
 
 import {
   type Adapter,
@@ -8,7 +10,10 @@ import {
   type CoverageMap,
   type CovselConfig,
   type InitDiagnostics,
-  initProject,
+  type InitPlan,
+  installCommand,
+  planInit,
+  applyInit,
   loadConfig,
   isDirtyWorkTree,
   isUsableMap,
@@ -34,7 +39,8 @@ import {
 const HELP = `covsel -- runtime-coverage test impact analysis for any JS/TS runner
 
 Usage:
-  covsel init [--adapter <name>]                   Detect the runner and write a config
+  covsel init [--adapter <name>] [-y] [--no-install]
+                                                   Set covsel up for this project
   covsel record [--adapter <name>] -- <command>   Run the suite and build the map
   covsel affected [--since <ref>] [--format files] Print tests the diff can affect
   covsel run -- <command>                          Run only the affected tests
@@ -49,13 +55,15 @@ Options:
                      (default: the config's adapter, else '${DEFAULT_ADAPTER}';
                      adapters install separately)
   --since <ref>      Diff against <ref> instead of the commit the map records
+  -y, --yes          init: apply the plan without asking
+  --no-install       init: write the config but install nothing
   --debounce <ms>    watch: quiet period after a change before running (default 200)
   --record           watch: re-record the map after a run that passes
   --no-initial-run   watch: wait for the first change instead of running at startup
 
-init names the adapter for the runner it finds and writes it to the config, so
-later commands need no --adapter. record wraps a runner and observes each test
-file in its own process to learn which sources it executes. affected prints those test files a diff can affect,
+init detects the runner, installs its adapter, and writes the adapter to the
+config so later commands need no --adapter. record wraps a runner and observes
+each test file in its own process to learn which sources it executes. affected prints those test files a diff can affect,
 so \`<runner> $(covsel affected)\` runs only what is needed. watch drives the same
 selection continuously, running the affected tests on every save.
 
@@ -171,68 +179,146 @@ async function adapterIsInstalled(name: string, cwd: string): Promise<boolean> {
   }
 }
 
+/**
+ * Ask before changing the project. A non-interactive run — CI, an agent, a pipe
+ * — has no one to ask, and running `covsel init` is itself the intent, so it
+ * proceeds; `--yes` says so explicitly for a run that does have a terminal.
+ */
+async function confirm(question: string): Promise<boolean> {
+  if (!process.stdin.isTTY) return true;
+  const rl = createInterface({ input: process.stdin, output: process.stdout });
+  try {
+    const answer = (await rl.question(`\n${question} [Y/n] `)).trim().toLowerCase();
+    return answer === '' || answer === 'y' || answer === 'yes';
+  } finally {
+    rl.close();
+  }
+}
+
+/** Show the plan before carrying it out — this is what there is to confirm. */
+function describePlan(plan: InitPlan, packages: string[]): void {
+  for (const runner of plan.detected) {
+    const how =
+      runner.adapter === undefined ? 'no adapter yet' : `adapter ${runner.adapter}`;
+    out(`covsel init: detected ${runner.name} — ${runner.evidence} (${how})\n`);
+  }
+  if (plan.detected.length === 0 && plan.adapter !== undefined) {
+    out(`covsel init: using the adapter you named — ${plan.adapter}\n`);
+  }
+  out('\nPlan:\n');
+  if (packages.length > 0) {
+    out(`  install  ${packages.join(', ')} (${plan.packageManager})\n`);
+  }
+  if (plan.needsConfig) out(`  write    ${plan.configPath} (adapter: ${plan.adapter})\n`);
+  if (plan.needsGitignore) out(`  ignore   the map directory in ${plan.gitignorePath}\n`);
+}
+
+/** Hand the install to the project's own package manager, output and all. */
+function installPackages(cwd: string, manager: string, packages: string[]): number {
+  const [command, ...args] = installCommand(manager, packages);
+  if (command === undefined) return 1;
+  out(`\ncovsel init: ${[command, ...args].join(' ')}\n`);
+  const { status, error } = spawnSync(command, args, { cwd, stdio: 'inherit' });
+  if (error !== undefined) {
+    err(`covsel init: ${manager} could not be run: ${error.message}\n`);
+    return 1;
+  }
+  return status ?? 1;
+}
+
 async function cmdInit(argv: string[]): Promise<number> {
   const cwd = process.cwd();
   const adapter = flag(argv, 'adapter');
-  const result = await initProject({
+  const assumeYes = hasFlag(argv, 'yes') || argv.includes('-y');
+  const noInstall = hasFlag(argv, 'no-install');
+
+  const plan = await planInit({
     cwd,
     covselVersion: VERSION,
     isAdapterInstalled: (name) => adapterIsInstalled(name, cwd),
     ...(adapter !== undefined ? { adapter } : {}),
   });
 
-  for (const warning of result.warnings) {
-    err(`covsel init: warning — ${warning}\n`);
+  if (plan.outcome === 'unsupported-runner') {
+    const names = plan.detected.map((r) => r.name).join(', ');
+    err(
+      `covsel init: no adapter records ${names} yet, so covsel cannot select its ` +
+        `tests. Keep running that suite in full.\n`,
+    );
+    err(`\nTracking: ${plan.reportUrl}\n`);
+    err(
+      `\nIf an adapter for it exists under another name, name it yourself:\n` +
+        `  covsel init --adapter <name>\n`,
+    );
+    return 1;
   }
 
-  switch (result.outcome) {
-    case 'configured':
-    case 'already-configured': {
-      out(
-        result.outcome === 'configured'
-          ? `covsel init: wrote ${result.configPath} (adapter: ${result.adapter})\n`
-          : `covsel init: ${result.configPath} already exists (adapter: ${result.adapter ?? 'unset'}) — left as is\n`,
-      );
-      if (result.gitignoreUpdated) {
-        out(`covsel init: added the map directory to ${result.gitignorePath}\n`);
-      }
-      // covsel ships no adapters, so naming the right one is only half the
-      // answer: without the package, the first record would fail on a name that
-      // is now in the config and looks settled.
-      if (result.adapter !== undefined && result.adapterInstalled === false) {
-        out(
-          `\nInstall the adapter:\n  npm install --save-dev ${adapterSpecifiers(result.adapter)[0]}\n`,
-        );
-      }
-      if (result.commands) printNextSteps(result.commands);
-      return 0;
-    }
-
-    case 'unsupported-runner': {
-      const names = result.detected.map((r) => r.name).join(', ');
-      err(
-        `covsel init: no adapter records ${names} yet, so covsel cannot select its ` +
-          `tests. Keep running that suite in full.\n`,
-      );
-      err(`\nTracking: ${result.reportUrl}\n`);
-      err(
-        `\nIf an adapter for it exists under another name, name it yourself:\n` +
-          `  covsel init --adapter <name>\n`,
-      );
-      return 1;
-    }
-
-    case 'undetected':
-      err('covsel init: no test runner detected in this project.\n');
-      err(
-        `\nIf covsel should support your runner, please open an adapter request:\n  ${result.reportUrl}\n`,
-      );
-      printDiagnostics(result.diagnostics);
-      err(
-        `\nTo configure covsel now, name the adapter yourself:\n  covsel init --adapter <name>\n`,
-      );
-      return 1;
+  if (plan.outcome === 'undetected') {
+    err('covsel init: no test runner detected in this project.\n');
+    err(
+      `\nIf covsel should support your runner, please open an adapter request:\n  ${plan.reportUrl}\n`,
+    );
+    printDiagnostics(plan.diagnostics);
+    err(
+      `\nTo configure covsel now, name the adapter yourself:\n  covsel init --adapter <name>\n`,
+    );
+    return 1;
   }
+
+  for (const warning of plan.warnings) err(`covsel init: warning — ${warning}\n`);
+
+  // covsel ships no adapters, so the package is as much a part of being set up
+  // as the config is: a config naming an adapter nobody installed reads as done
+  // and fails at the first record.
+  const packages = noInstall
+    ? []
+    : [
+        ...(plan.adapter !== undefined && plan.adapterInstalled === false
+          ? [adapterSpecifiers(plan.adapter)[0] ?? plan.adapter]
+          : []),
+        ...plan.missingSupport,
+      ];
+
+  if (!plan.needsConfig && !plan.needsGitignore && packages.length === 0) {
+    out(
+      `covsel init: already set up — ${plan.configPath} (adapter: ${plan.adapter ?? 'unset'})\n`,
+    );
+    if (plan.commands) printNextSteps(plan.commands);
+    return 0;
+  }
+
+  describePlan(plan, packages);
+  if (!assumeYes && !(await confirm('Set covsel up this way?'))) {
+    out('covsel init: nothing changed.\n');
+    if (plan.detected.length > 0) {
+      out('Name the right adapter yourself with: covsel init --adapter <name>\n');
+    }
+    return 0;
+  }
+
+  const applied = await applyInit(cwd, plan);
+  if (applied.configWritten) {
+    out(`covsel init: wrote ${plan.configPath} (adapter: ${plan.adapter})\n`);
+  }
+  if (applied.gitignoreUpdated) {
+    out(`covsel init: added the map directory to ${plan.gitignorePath}\n`);
+  }
+
+  if (packages.length > 0) {
+    const status = installPackages(cwd, plan.packageManager, packages);
+    if (status !== 0) {
+      // The config is written and correct; only the install failed, so say what
+      // is left rather than leaving a half-finished setup looking complete.
+      err(
+        `\ncovsel init: the install failed. covsel is configured, but recording ` +
+          `needs:\n  ${installCommand(plan.packageManager, packages).join(' ')}\n`,
+      );
+      return status;
+    }
+  }
+
+  if (plan.commands) printNextSteps(plan.commands);
+  return 0;
 }
 
 async function cmdRecord(argv: string[]): Promise<number> {

@@ -26,7 +26,15 @@ git diff -- run only the tests whose covered code changed.
 
 ## Quickstart
 
-covsel ships no adapters -- install the CLI plus the one for your runner:
+covsel ships no adapters -- install the CLI, then let `init` work out and
+install the one for your runner:
+
+```bash
+npm install --save-dev covsel
+npx covsel init          # detects the runner, shows the plan, installs the adapter
+```
+
+Or pick it yourself:
 
 ```bash
 npm install --save-dev covsel @covsel/adapter-generic   # any command, whole-file
@@ -34,9 +42,6 @@ npm install --save-dev covsel @covsel/adapter-generic   # any command, whole-fil
 ```
 
 ```bash
-# Name the adapter for your runner, write the config, ignore the map
-npx covsel init
-
 # Record a run and build the map (one process per test file)
 npx covsel record -- node --test
 npx covsel record --adapter vitest -- vitest run   # needs @vitest/coverage-v8
@@ -63,8 +68,8 @@ npx covsel status
 npx covsel merge shard-*/map.json --out .covsel/map.json
 ```
 
-Zero config to start -- `covsel init` is optional, and only writes down which
-adapter to record with so later commands need no flag. `covsel affected` prints a file list, so
+Zero config to start -- `covsel init` is optional, and writes down which adapter
+to record with so later commands need no flag. `covsel affected` prints a file list, so
 you can pipe it into any runner that accepts test files:
 `node --test $(covsel affected)`.
 

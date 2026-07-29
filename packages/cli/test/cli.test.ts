@@ -1,4 +1,4 @@
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterAll, describe, expect, it, vi } from 'vitest';
@@ -184,12 +184,14 @@ describe('covsel init', () => {
     const result = await inProject(
       { 'package.json': pkg({ devDependencies: { vitest: '^3.0.0' } }) },
       async (cwd) => {
-        const captured = await capture(() => main(['init']));
+        const captured = await capture(() => main(['init', '--no-install']));
         return { ...captured, config: readFileSync(join(cwd, '.covsel.json'), 'utf8') };
       },
     );
 
     expect(result.code).toBe(0);
+    expect(result.out).toContain('detected vitest');
+    expect(result.out).toContain('vitest is a dependency');
     expect(result.out).toContain('adapter: vitest');
     expect(result.out).toContain('covsel record --adapter vitest');
     expect(JSON.parse(result.config)).toEqual({ adapter: 'vitest' });
@@ -197,15 +199,48 @@ describe('covsel init', () => {
 
   // Every workspace adapter resolves in-process here (vitest aliases them to
   // source), so a name nothing provides is what exercises the uninstalled path.
-  it('prints how to install an adapter the project does not have', async () => {
+  it('plans the install of an adapter the project does not have', async () => {
+    const { out } = await inProject(
+      { 'package.json': pkg({ devDependencies: { vitest: '^3.0.0' } }) },
+      () => capture(() => main(['init', '--adapter', 'not-a-real-runner', '-y'])),
+    );
+
+    expect(out).toContain('install  @covsel/adapter-not-a-real-runner');
+  });
+
+  it('plans the install of what the runner needs beyond the adapter', async () => {
+    const { out } = await inProject(
+      { 'package.json': pkg({ devDependencies: { vitest: '^3.0.0' } }) },
+      () => capture(() => main(['init'])),
+    );
+
+    expect(out).toContain('@vitest/coverage-v8');
+  });
+
+  it('installs nothing under --no-install', async () => {
     const { code, out } = await inProject(
       { 'package.json': pkg({ devDependencies: { vitest: '^3.0.0' } }) },
-      () => capture(() => main(['init', '--adapter', 'not-a-real-runner'])),
+      () => capture(() => main(['init', '--no-install'])),
     );
 
     expect(code).toBe(0);
-    expect(out).toContain('adapter: not-a-real-runner');
-    expect(out).toContain('npm install --save-dev @covsel/adapter-not-a-real-runner');
+    expect(out).not.toContain('install ');
+    expect(out).not.toContain('@vitest/coverage-v8');
+  });
+
+  it('reports a project that is already set up without redoing it', async () => {
+    const { code, out } = await inProject(
+      {
+        'package.json': pkg({ devDependencies: { jest: '^29.0.0' } }),
+        '.covsel.json': `${JSON.stringify({ adapter: 'jest' })}\n`,
+        '.gitignore': '.covsel/\n',
+      },
+      () => capture(() => main(['init'])),
+    );
+
+    expect(code).toBe(0);
+    expect(out).toContain('already set up');
+    expect(out).toContain('covsel record --adapter jest');
   });
 
   it('exits non-zero and points at an adapter request when nothing is detected', async () => {
@@ -219,6 +254,21 @@ describe('covsel init', () => {
     expect(err).toContain('adapter_request.yml');
     expect(err).toContain('covsel init --adapter');
     expect(err).toContain(`covsel:          ${VERSION}`);
+  });
+
+  it('leaves the project untouched when it cannot name an adapter', async () => {
+    const files = await inProject(
+      { 'package.json': pkg({ devDependencies: { ava: '^6.0.0' } }) },
+      async (cwd) => {
+        await capture(() => main(['init']));
+        return {
+          config: existsSync(join(cwd, '.covsel.json')),
+          gitignore: existsSync(join(cwd, '.gitignore')),
+        };
+      },
+    );
+
+    expect(files).toEqual({ config: false, gitignore: false });
   });
 
   it('exits non-zero for a runner no adapter records', async () => {

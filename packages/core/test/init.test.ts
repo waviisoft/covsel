@@ -1,9 +1,22 @@
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import {
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  writeFileSync,
+} from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { afterAll, describe, expect, it } from 'vitest';
 
-import { initProject, loadConfig } from '../src/index.js';
+import {
+  applyInit,
+  type InitPlan,
+  installCommand,
+  loadConfig,
+  planInit,
+} from '../src/index.js';
 
 /**
  * `covsel init` answers the first question in adopting covsel — which adapter
@@ -31,8 +44,16 @@ function pkg(fields: Record<string, unknown>): string {
 }
 
 const VERSION = '9.9.9';
-const init = (cwd: string, adapter?: string) =>
-  initProject({ cwd, covselVersion: VERSION, ...(adapter ? { adapter } : {}) });
+
+const plan = (cwd: string, adapter?: string): Promise<InitPlan> =>
+  planInit({ cwd, covselVersion: VERSION, ...(adapter ? { adapter } : {}) });
+
+/** Plan and carry it out, the way `covsel init` does once confirmed. */
+async function init(cwd: string, adapter?: string) {
+  const p = await plan(cwd, adapter);
+  const applied = await applyInit(cwd, p);
+  return { ...p, ...applied };
+}
 
 afterAll(() => {
   for (const dir of dirs) rmSync(dir, { recursive: true, force: true });
@@ -50,7 +71,7 @@ describe('covsel init — naming the adapter', () => {
 
     const result = await init(cwd);
 
-    expect(result.outcome).toBe('configured');
+    expect(result.outcome).toBe('configure');
     expect(result.adapter).toBe(adapter);
     expect(JSON.parse(readFileSync(join(cwd, '.covsel.json'), 'utf8'))).toEqual({
       adapter,
@@ -64,7 +85,7 @@ describe('covsel init — naming the adapter', () => {
   it('reports whether the adapter package is installed', async () => {
     const cwd = project({ 'package.json': pkg({ devDependencies: { vitest: '^3' } }) });
 
-    const missing = await initProject({
+    const missing = await planInit({
       cwd,
       covselVersion: VERSION,
       isAdapterInstalled: () => Promise.resolve(false),
@@ -80,7 +101,7 @@ describe('covsel init — naming the adapter', () => {
     expect((await init(cwd)).adapterInstalled).toBeUndefined();
   });
 
-  it('warns when a Vitest project lacks the coverage provider', async () => {
+  it('plans to install what recording needs beyond the adapter', async () => {
     const without = project({
       'package.json': pkg({ devDependencies: { vitest: '^3.0.0' } }),
     });
@@ -90,8 +111,16 @@ describe('covsel init — naming the adapter', () => {
       }),
     });
 
-    expect((await init(without)).warnings.join('\n')).toContain('@vitest/coverage-v8');
-    expect((await init(with_)).warnings.join('\n')).not.toContain('@vitest/coverage-v8');
+    // The Vitest adapter records through Vitest's own coverage provider, so
+    // installing the adapter alone would leave recording broken.
+    expect((await plan(without)).missingSupport).toEqual(['@vitest/coverage-v8']);
+    expect((await plan(with_)).missingSupport).toEqual([]);
+  });
+
+  it('plans no support packages for a runner that needs none', async () => {
+    const cwd = project({ 'package.json': pkg({ devDependencies: { jest: '^29' } }) });
+
+    expect((await plan(cwd)).missingSupport).toEqual([]);
   });
 
   it('names the other suites it cannot record', async () => {
@@ -139,7 +168,7 @@ describe('covsel init — what it will not guess', () => {
     expect(result.outcome).toBe('unsupported-runner');
     expect(result.configWritten).toBe(false);
     expect(result.gitignoreUpdated).toBe(false);
-    expect(result.detected.map((r) => r.name)).toContain('playwright');
+    expect(result.detected.map((r: { name: string }) => r.name)).toContain('playwright');
     expect(result.reportUrl).toContain('playwright');
   });
 
@@ -197,6 +226,93 @@ describe('covsel init — what it will not guess', () => {
   });
 });
 
+describe('covsel init — planning is not doing', () => {
+  it('touches nothing while planning', async () => {
+    const cwd = project({
+      'package.json': pkg({ devDependencies: { vitest: '^3.0.0' } }),
+    });
+
+    const planned = await plan(cwd);
+
+    expect(planned.needsConfig).toBe(true);
+    expect(planned.needsGitignore).toBe(true);
+    expect(existsSync(join(cwd, '.covsel.json'))).toBe(false);
+    expect(existsSync(join(cwd, '.gitignore'))).toBe(false);
+  });
+
+  it('is inert when applied to a plan that configures nothing', async () => {
+    const cwd = project({
+      'package.json': pkg({ devDependencies: { ava: '^6.0.0' } }),
+    });
+
+    const applied = await applyInit(cwd, await plan(cwd));
+
+    expect(applied).toEqual({ configWritten: false, gitignoreUpdated: false });
+    expect(existsSync(join(cwd, '.covsel.json'))).toBe(false);
+    expect(existsSync(join(cwd, '.gitignore'))).toBe(false);
+  });
+
+  it('still ignores the map for a project configured before that was habit', async () => {
+    const cwd = project({
+      'package.json': pkg({ devDependencies: { vitest: '^3.0.0' } }),
+      '.covsel.json': `${JSON.stringify({ adapter: 'vitest' })}\n`,
+    });
+
+    const applied = await applyInit(cwd, await plan(cwd));
+
+    expect(applied.configWritten).toBe(false);
+    expect(applied.gitignoreUpdated).toBe(true);
+    expect(readFileSync(join(cwd, '.gitignore'), 'utf8')).toContain('.covsel/');
+  });
+});
+
+describe('covsel init — installing', () => {
+  it.each([
+    ['pnpm', 'pnpm-lock.yaml'],
+    ['yarn', 'yarn.lock'],
+    ['npm', 'package-lock.json'],
+    ['bun', 'bun.lockb'],
+  ])('detects %s from its lockfile', async (manager, lockfile) => {
+    const cwd = project({
+      'package.json': pkg({ devDependencies: { vitest: '^3.0.0' } }),
+      [lockfile]: '',
+    });
+
+    expect((await plan(cwd)).packageManager).toBe(manager);
+  });
+
+  it('prefers a declared packageManager over the lockfile', async () => {
+    const cwd = project({
+      'package.json': pkg({
+        packageManager: 'pnpm@11.15.1',
+        devDependencies: { vitest: '^3.0.0' },
+      }),
+      'package-lock.json': '',
+    });
+
+    expect((await plan(cwd)).packageManager).toBe('pnpm');
+  });
+
+  it('falls back to npm when nothing says otherwise', async () => {
+    const cwd = project({ 'package.json': pkg({ devDependencies: { vitest: '^3' } }) });
+
+    expect((await plan(cwd)).packageManager).toBe('npm');
+  });
+
+  it.each([
+    ['npm', ['npm', 'install', '--save-dev', 'a', 'b']],
+    ['pnpm', ['pnpm', 'add', '--save-dev', 'a', 'b']],
+    ['yarn', ['yarn', 'add', '--dev', 'a', 'b']],
+    ['bun', ['bun', 'add', '--dev', 'a', 'b']],
+  ])('builds the %s install command', (manager, expected) => {
+    expect(installCommand(manager, ['a', 'b'])).toEqual(expected);
+  });
+
+  it('installs with npm when the manager is unrecognised', () => {
+    expect(installCommand('frobnicate', ['a'])[1]).toBe('install');
+  });
+});
+
 describe('covsel init — overrides', () => {
   it('honors an explicit adapter when detection finds nothing', async () => {
     const cwd = project({
@@ -205,7 +321,7 @@ describe('covsel init — overrides', () => {
 
     const result = await init(cwd, 'ava');
 
-    expect(result.outcome).toBe('configured');
+    expect(result.outcome).toBe('configure');
     expect(result.adapter).toBe('ava');
     expect((await loadConfig(cwd)).adapter).toBe('ava');
   });
