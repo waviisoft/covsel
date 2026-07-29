@@ -130,6 +130,30 @@ describe('fail-open acceptance', () => {
     expect(result.tests).toEqual(['test/a.test.mjs', 'test/b.test.mjs']);
   });
 
+  it('3c. changing covsel.json forces a full run', async () => {
+    // The map means what it means only under the config it was recorded with.
+    write('covsel.json', `${JSON.stringify({ granularity: 'file' })}\n`);
+    const result = await selectAffected({ cwd, config });
+    expect(result.fullRun).toBe(true);
+    expect(result.tests).toEqual(['test/a.test.mjs', 'test/b.test.mjs']);
+    rmSync(join(cwd, 'covsel.json'));
+  });
+
+  it('3d. the config full-run survives a project replacing its sentinels', async () => {
+    // `sentinels` replaces wholesale, so a project that tightens it must not
+    // lose the protection over the meaning of the map itself. Narrowing
+    // sourceGlobs is the case this exists for: changes outside the new globs
+    // stop counting, while the map's observed scope still covers them.
+    write('covsel.json', `${JSON.stringify({ sourceGlobs: ['src/a.mjs'] })}\n`);
+    const result = await selectAffected({
+      cwd,
+      config: { ...config, sentinels: [] },
+    });
+    expect(result.fullRun).toBe(true);
+    expect(result.reason).toContain('different configuration');
+    rmSync(join(cwd, 'covsel.json'));
+  });
+
   it('4. a brand-new test file always runs, even absent from the map', async () => {
     write('test/c.test.mjs', FILES['test/a.test.mjs']!);
     const result = await selectAffected({ cwd, config });
