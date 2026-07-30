@@ -17,7 +17,6 @@ import {
   type Adapter,
   type CoveredBlock,
   type CoveredFile,
-  type CovselConfig,
   type MapperConfig,
   OBSERVES_EVERYTHING,
   type Recorder,
@@ -53,7 +52,7 @@ export interface NodeTestRecorderInit {
   /** Base command, e.g. `['node', '--test']`. */
   command: string[];
   cwd: string;
-  config: MapperConfig & Pick<CovselConfig, 'granularity'>;
+  config: MapperConfig;
   env?: NodeJS.ProcessEnv;
 }
 
@@ -114,6 +113,10 @@ export function createNodeTestRecorder(init: NodeTestRecorderInit): Recorder {
         let out: ShimOutput;
         try {
           out = JSON.parse(readFileSync(outPath, 'utf8')) as ShimOutput;
+          // Unreadable and readable-but-not-what-the-shim-writes are the same
+          // problem to whoever is looking at the message, so they get the same
+          // one rather than a TypeError from the mapping below.
+          if (!Array.isArray(out.units)) throw new Error('no units');
         } catch {
           throw new Error(`no per-test coverage produced for ${testFile}`);
         }

@@ -120,8 +120,11 @@ async function record(
   return { result, events };
 }
 
-const withFeatures = (extra: Partial<CovselConfig> = {}): CovselConfig =>
-  resolveConfig({ testGlobs: ['**/*.feature'], ...extra });
+const withFeatures = (sourceMaps?: { allowUnmappable: string[] }): CovselConfig =>
+  resolveConfig({
+    testGlobs: ['**/*.feature'],
+    ...(sourceMaps ? { sourceMaps } : {}),
+  });
 
 describe('cucumber recorder source-map configuration', () => {
   it('fails the recording when an unmappable script was not accepted', async () => {
@@ -132,9 +135,7 @@ describe('cucumber recorder source-map configuration', () => {
   }, 180_000);
 
   it('records when the project accepted that script, and names what it let through', async () => {
-    const config = withFeatures({
-      sourceMaps: { buildDirs: [], http: true, allowUnmappable: ['dist/widget.mjs'] },
-    });
+    const config = withFeatures({ allowUnmappable: ['dist/widget.mjs'] });
 
     const { result, events } = await record(fixture(), config);
 
@@ -143,5 +144,14 @@ describe('cucumber recorder source-map configuration', () => {
     const recorded = events.filter((e) => e.kind === 'recorded');
     expect(recorded[0]?.allowedUnmappable).toEqual(['dist/widget.mjs']);
     expect(result.map?.entries[0]?.files.map((f) => f.file)).toContain('src/app.mjs');
+  }, 180_000);
+
+  it('accepts only the scripts listed, not every unmappable one', async () => {
+    const config = withFeatures({ allowUnmappable: ['dist/something-else.mjs'] });
+
+    const { result } = await record(fixture(), config);
+
+    expect(result.ok).toBe(false);
+    expect(result.failures[0]?.reason).toContain('dist/widget.mjs');
   }, 180_000);
 });

@@ -43,10 +43,25 @@ export interface V8FileMapperInit {
  * `sourceMaps` behaves exactly like one whose project configured none.
  */
 export function toMapperConfig(config: MapperConfig): MapperConfig {
-  return {
+  // Every key is named, under a type that requires all of them -- including the
+  // optional ones, which is the whole point. Returning a `MapperConfig` built
+  // from a subset would type-check happily, because a field left out is just an
+  // optional field absent, and that is exactly how `sourceMaps` came to be
+  // dropped by both per-test recorders. Adding a key to the mapper's surface
+  // stops this compiling instead.
+  const {
+    sourceGlobs,
+    testGlobs,
+    sourceMaps,
+  }: { [K in keyof Required<MapperConfig>]: MapperConfig[K] } = {
     sourceGlobs: config.sourceGlobs,
     testGlobs: config.testGlobs,
-    ...(config.sourceMaps !== undefined ? { sourceMaps: config.sourceMaps } : {}),
+    sourceMaps: config.sourceMaps,
+  };
+  return {
+    sourceGlobs,
+    testGlobs,
+    ...(sourceMaps !== undefined ? { sourceMaps } : {}),
   };
 }
 

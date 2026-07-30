@@ -21,7 +21,7 @@ import type {
   SelectionRunInit,
 } from './interfaces.js';
 import { makeMatcher, matchesAny } from './match.js';
-import { V8FileMapper } from './mapper.js';
+import { type MapperConfig, V8FileMapper } from './mapper.js';
 import { ProcessObserver } from './observer.js';
 import { hashFileContents, walkFiles } from './paths.js';
 import { FailOpenPolicy, fullRunReason } from './policy.js';
@@ -39,8 +39,7 @@ import { LocalStore } from './store.js';
 export interface GenericRecorderInit {
   command: string[];
   cwd: string;
-  config: Pick<CovselConfig, 'sourceGlobs' | 'testGlobs' | 'granularity'> &
-    Partial<Pick<CovselConfig, 'sourceMaps'>>;
+  config: MapperConfig & Pick<CovselConfig, 'granularity'>;
   env?: NodeJS.ProcessEnv;
 }
 
@@ -269,6 +268,11 @@ export async function recordMap(init: RecordInit): Promise<RecordResult> {
     } catch (err) {
       const reason = err instanceof Error ? err.message : String(err);
       failures.push({ file, reason });
+      // Drop whatever this file let through unmapped before moving on. A
+      // recorder that accumulates across files (the generic one does, in its
+      // mapper) would otherwise carry it to the next file's event, naming a
+      // script that file never executed.
+      recorder.unmappableAllowed?.();
       init.onEvent?.({ kind: 'failed', file, reason });
     }
   }

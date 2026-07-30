@@ -139,6 +139,10 @@ export function createCucumberRecorder(init: CucumberRecorderInit): Recorder {
         let out: ShimOutput;
         try {
           out = JSON.parse(readFileSync(outPath, 'utf8')) as ShimOutput;
+          // Unreadable and readable-but-not-what-the-shim-writes are the same
+          // problem to whoever is looking at the message, so they get the same
+          // one rather than a TypeError from the mapping below.
+          if (!Array.isArray(out.units)) throw new Error('no units');
         } catch {
           throw new Error(`no per-scenario coverage produced for ${featureFile}`);
         }

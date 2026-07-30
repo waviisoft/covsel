@@ -61,6 +61,37 @@ runner-specific decision:
   coverage, because process coverage never sees the original files.
 - Runners with lifecycle hooks can drive the `InspectorObserver` per test.
 
+### Mapping inside a runner you spawned
+
+The third mechanism usually means a shim: your recorder starts the runner, and
+the observer and mapper live in that process rather than yours. The mapper then
+needs the project's configuration, and it has to travel — which is where an
+adapter loses settings its user did set.
+
+Send `toMapperConfig(config)` and build the mapper from what arrives, rather
+than picking fields by hand:
+
+```ts
+// In the recorder, on the way out:
+COVSEL_CONFIG: JSON.stringify(toMapperConfig(init.config));
+
+// In the shim, on the way in:
+const config = JSON.parse(process.env.COVSEL_CONFIG ?? '{}');
+const mapper = new V8FileMapper({ cwd: process.cwd(), config });
+```
+
+`MapperConfig` is what the mapper reads, and `toMapperConfig` narrows to exactly
+that. A hand-picked subset fails quietly in one direction: a mapper given no
+`sourceMaps` behaves precisely like one whose project configured none, so a
+project that has accepted an unmappable script watches its recording fail with
+nothing to say why.
+
+If your mapper can accept scripts under `sourceMaps.allowUnmappable`, report
+them: implement the optional `unmappableAllowed()`, returning what the last
+`record` let through — `mapper.takeAllowedUnmappable()` collects it, and a shim
+sends it back alongside its units. Each accepted script is coverage the map is
+missing, and `covsel record` says so on every recording that let one through.
+
 ## Say what you can see
 
 `observes` is the other half of what you record, and the half no shared layer can
