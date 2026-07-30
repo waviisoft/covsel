@@ -12,10 +12,18 @@ NOT reference issues, PRs, commits, or reviewers here (put those at the bottom).
 
 <!-- Optional. The notable changes, by file or by area, for reviewers. -->
 
+## Review & selection
+
+<!--
+What the independent review covered and what changed as a result, and what you
+expected covsel to select against what the `select` job actually selected. A
+narrower selection than predicted is a fail-open bug — resolve it before merging.
+-->
+
 ## Checklist
 
 - [ ] Tests added/updated
-- [ ] `pnpm lint && pnpm typecheck && pnpm test` pass locally
+- [ ] `pnpm lint && pnpm typecheck && pnpm build && pnpm test` pass locally
 - [ ] `pnpm format:check` passes
 - [ ] Changeset added (`pnpm changeset`) if user-facing
 - [ ] For adapters: conformance assertions pass

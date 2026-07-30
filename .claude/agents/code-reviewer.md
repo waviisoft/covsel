@@ -51,14 +51,29 @@ Before you report anything, establish it against the code as written:
   not tie to specific lines is not a "consider" — it is noise. Leave it out.
 
 In this repo, fail-open findings carry the highest burden and deserve the most
-effort: if you believe a change lets a needed test be skipped, construct the
-case — a diff, a map state, the tests that should have been selected and
-weren't.
+effort. Pass 0 below makes answering that question mandatory rather than
+optional.
 
 ## Review passes
 
 Run each pass. Skip one only when it's clearly irrelevant to the change, and say
 so when you skip it.
+
+### 0. Fail-open
+
+This repo's overriding rule: nothing may cause a needed test to be skipped. For
+any change touching selection, policy, the map schema, the store, the adapters
+and recorders, or the config that governs them — anything that decides what runs
+— state explicitly whether it can, and what you read or ran to establish that. A
+recorder that stops observing a test writes an entry covering nothing, which the
+selector reads as "this test covers nothing" and never selects; that is the same
+defect as a selector bug, arriving from a different package.
+
+"No fail-open risk here" is itself a finding and carries evidence like any other
+— the passes below are allowed to find nothing, this one is not allowed to go
+unanswered. Where you do believe a needed test could be skipped,
+construct the case: a diff, a map state, and the tests that should have been
+selected and weren't.
 
 ### 1. Correctness
 

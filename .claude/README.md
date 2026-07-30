@@ -13,7 +13,7 @@ library and tuned for covsel's conventions in [`AGENTS.md`](../AGENTS.md).
 | Agent           | Use when                                                                                                                    |
 | --------------- | --------------------------------------------------------------------------------------------------------------------------- |
 | `code-reviewer` | Reviewing a diff, branch, or PR across correctness, security, privacy, principles, and tests.                               |
-| `pr-author`     | Taking a change from branch to squash-merged PR, with an independent review first.                                          |
+| `pr-author`     | Taking a change from branch to an open PR and watching it, with an independent review first — merging only when told to.    |
 | `project-setup` | Setting up or auditing repo structure so the repo reflects what exists today and every feature is documented under `docs/`. |
 | `tdd-engineer`  | Implementing a feature or fixing a bug test-first (red → green → refactor).                                                 |
 
