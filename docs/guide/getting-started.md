@@ -151,8 +151,11 @@ code:
   use the [generic adapter](/guide/adapters/generic), which wraps any command
   and is what `--adapter` defaults to.
 - **Runners that transform sources** (Vitest, Jest) need a runner-specific
-  adapter, because raw process coverage can't see transformed code. See
-  [Adapters](/guide/adapters/) for the full picture.
+  adapter, because raw process coverage can't see transformed code.
+- **Selecting below the file** needs the adapter for that runner --
+  [node:test](/guide/adapters/node-test), [Mocha](/guide/adapters/mocha), or
+  [cucumber-js](/guide/adapters/cucumber) -- which records each test
+  individually. See [Adapters](/guide/adapters/) for the full picture.
 
 ## Configuration
 

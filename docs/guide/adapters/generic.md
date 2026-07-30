@@ -12,7 +12,8 @@ records real `file://` paths:
 
 - `node --test` (JavaScript, or TypeScript under a loader such as `tsx` that
   preserves file URLs)
-- Mocha on plain JavaScript
+- Mocha on plain JavaScript — for per-test selection, see the
+  [Mocha adapter](/guide/adapters/mocha)
 
 If your runner **transforms sources first** (Vitest, Jest), raw
 `NODE_V8_COVERAGE` cannot see them — use a runner-specific adapter such as the
@@ -60,5 +61,8 @@ universal.
 - Discovery, source globs, and sentinels are controlled by
   [configuration](/guide/getting-started#configuration); zero-config works out
   of the box.
-- A runnable end-to-end example (zero dependencies) lives in
-  [`examples/node-test-basic`](https://github.com/waviisoft/covsel/tree/main/examples/node-test-basic).
+- Runnable end-to-end examples live in
+  [`examples/node-test-basic`](https://github.com/waviisoft/covsel/tree/main/examples/node-test-basic)
+  (zero dependencies) and
+  [`examples/mocha-basic`](https://github.com/waviisoft/covsel/tree/main/examples/mocha-basic)
+  (the same loop against Mocha, with no Mocha-specific code).

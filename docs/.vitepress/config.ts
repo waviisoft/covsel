@@ -40,6 +40,7 @@ export default defineConfig({
             { text: 'Vitest', link: '/guide/adapters/vitest' },
             { text: 'Jest', link: '/guide/adapters/jest' },
             { text: 'node:test', link: '/guide/adapters/node-test' },
+            { text: 'Mocha', link: '/guide/adapters/mocha' },
             { text: 'cucumber-js', link: '/guide/adapters/cucumber' },
             { text: 'Writing an adapter', link: '/guide/adapters/writing-an-adapter' },
           ],
