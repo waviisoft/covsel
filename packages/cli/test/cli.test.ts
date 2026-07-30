@@ -1151,6 +1151,41 @@ describe('covsel explain', () => {
     expect(err).toContain('nope.js');
   });
 
+  it('summarizes a large fan-in, and prints all of it for --all', async () => {
+    const entries = Array.from({ length: 40 }, (_, i) => ({
+      test: { file: `t${i}.test.js` },
+      files: [{ file: 'math.js', fileHash: 'sha256:math' }],
+    }));
+    const { out, all } = await inProject(
+      { 'package.json': pkg({}), 'math.js': 'export const x = 1;\n' },
+      async (cwd) => {
+        writeEntries(cwd, entries);
+        const summarized = await capture(() => main(['explain', 'math.js']));
+        const everything = await capture(() => main(['explain', 'math.js', '--all']));
+        return { ...summarized, all: everything.out };
+      },
+    );
+    expect(out).toContain('and 20 more (--all)');
+    expect(all).not.toContain('more (--all)');
+    expect(all).toContain('t39.test.js');
+  });
+
+  it('summarizes a test file with more recorded units than it will print', async () => {
+    const entries = Array.from({ length: 40 }, (_, i) => ({
+      test: { file: 'big.test.js', name: `case ${String(i).padStart(2, '0')}` },
+      files: [{ file: 'math.js', fileHash: 'sha256:math' }],
+    }));
+    const { out } = await inProject(
+      { 'package.json': pkg({}), 'big.test.js': '' },
+      (cwd) => {
+        writeEntries(cwd, entries);
+        return capture(() => main(['explain', 'big.test.js']));
+      },
+    );
+    expect(out).toContain('and 20 more unit(s) (--all)');
+    expect(out).not.toContain('case 39');
+  });
+
   it('exits non-zero when given no path at all', async () => {
     const { code, err } = await inProject({ 'package.json': pkg({}) }, () =>
       capture(() => main(['explain'])),

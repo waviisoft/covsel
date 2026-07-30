@@ -903,11 +903,17 @@ function printExplainHeader(r: ExplainResult): void {
           '            here falls open to a full run\n'
       : 'observed:   yes (the recording could see this path)\n',
   );
-  if (r.sentinel) {
-    out('sentinel:   yes -- a change here forces a full run, whatever covers it\n');
+  if (r.forcesFullRun !== undefined) {
+    out(`full run:   a change here forces one -- ${r.forcesFullRun}\n`);
   }
   if (r.alwaysRun) {
     out('alwaysRun:  yes -- this test runs whatever the diff says\n');
+  }
+  if (r.excluded) {
+    // Discovery never walks these directories, so a test file here is not one
+    // waiting to be recorded: it is one covsel will never run or record.
+    out('excluded:   yes -- covsel never walks this directory, so nothing here is\n');
+    out('            discovered, recorded, or run\n');
   }
 }
 
@@ -916,11 +922,16 @@ function printCoveredBy(r: ExplainResult, all: boolean): void {
   const source = r.source;
   if (source === undefined) return;
   if (source.coveredBy.length === 0) {
+    // Each of these is a different reason for the same empty list, and only the
+    // last one means a change here runs nothing.
     out(
       r.observed === false
         ? 'covered by: nothing recorded, and the recording could not observe it\n'
-        : 'covered by: no recorded test covers this file -- a change to it selects\n' +
-            '            nothing, unless a sentinel or an alwaysRun glob matches\n',
+        : r.forcesFullRun !== undefined
+          ? 'covered by: no recorded test covers this file -- a change to it runs\n' +
+            '            everything anyway, for the reason above\n'
+          : 'covered by: no recorded test covers this file -- a change to it selects\n' +
+            '            nothing, unless an alwaysRun glob matches it\n',
     );
   } else {
     out(`covered by: ${source.coveredBy.length} test(s)\n`);
@@ -928,24 +939,37 @@ function printCoveredBy(r: ExplainResult, all: boolean): void {
   }
 
   if (source.blocks !== undefined) {
-    const covered = source.blocks.filter((b) => b.coveredBy.length > 0);
+    const covered = source.blocks.filter((b) => b.verdict === 'covered');
     const width = Math.max(...source.blocks.map((b) => b.name.length));
-    out(`blocks:     ${covered.length} of ${source.blocks.length} covered\n`);
+    out(
+      `blocks:     ${covered.length} of ${source.blocks.length} run by a recorded block\n`,
+    );
+    // Only `uncovered` says nothing runs this code. The other two say the map
+    // cannot tell, and each names what would happen to a change here anyway —
+    // reporting either as "covered by nothing" would send a developer looking
+    // for the reason their test did not run at the one block that does run it.
+    if (source.fileOnly.length > 0) {
+      out(
+        `            ${source.fileOnly.length} test(s) credit the whole file without ` +
+          'recording blocks in it, so a\n            change to any block below runs them\n',
+      );
+    }
     printList(
       source.blocks.map((b) => {
         const label = b.name.padEnd(width);
-        return b.coveredBy.length === 0
-          ? `uncovered  ${label}  no recorded test executes it`
-          : `covered    ${label}  ${b.coveredBy.map(unitLabel).join(', ')}`;
+        switch (b.verdict) {
+          case 'covered':
+            return `covered    ${label}  ${b.coveredBy.map(unitLabel).join(', ')}`;
+          case 'file-level':
+            return `file-level ${label}  no block recorded, but ${source.fileOnly.length} test(s) credit the file`;
+          case 'unmatched':
+            return `unmatched  ${label}  no recorded block matches it -- it may be one that changed`;
+          case 'uncovered':
+            return `uncovered  ${label}  no recorded test executes it`;
+        }
       }),
       all,
     );
-    if (source.fileOnly.length > 0) {
-      out(
-        `  ${source.fileOnly.length} test(s) credit the whole file without ` +
-          'recording blocks in it\n',
-      );
-    }
   } else if (source.blocksUnavailable !== undefined) {
     out(`blocks:     not shown -- ${source.blocksUnavailable}\n`);
   }
@@ -966,16 +990,23 @@ function printCovers(r: ExplainResult, all: boolean): void {
   if (test === undefined) return;
   if (test.unrecorded) {
     out(
-      'covers:     nothing recorded -- the map does not record this test, so it\n' +
-        '            always runs until it is\n',
+      r.excluded
+        ? 'covers:     nothing recorded -- and nothing will be, since covsel never\n' +
+            '            walks this directory\n'
+        : 'covers:     nothing recorded -- the map does not record this test, so it\n' +
+            '            always runs until it is\n',
     );
     return;
   }
   out(`covers:     ${test.units.length} recorded unit(s)\n`);
-  for (const unit of test.units) {
+  const shown = all ? test.units : test.units.slice(0, EXPLAIN_LIMIT);
+  for (const unit of shown) {
     const name = unit.test.name ?? '(whole file)';
     out(`  ${name} -- ${unit.sources.length} source(s)\n`);
     printList(unit.sources, all, '      ');
+  }
+  if (shown.length < test.units.length) {
+    out(`  ... and ${test.units.length - shown.length} more unit(s) (--all)\n`);
   }
 }
 
@@ -1008,6 +1039,15 @@ async function cmdExplain(argv: string[]): Promise<number> {
   printExplainHeader(result);
   printCoveredBy(result, all);
   printCovers(result, all);
+  // Last, and always: everything above is what the map holds about this path,
+  // and none of it narrows anything while the next selection is a full run. A
+  // report that ended at "no recorded test covers this file" would read as
+  // "nothing runs" in exactly the states where everything does.
+  out(
+    result.nextIsFullRun === true
+      ? `next:       full run (${result.nextFullRunReason ?? 'map cannot be trusted'})\n`
+      : 'next:       select\n',
+  );
   return 0;
 }
 

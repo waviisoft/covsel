@@ -154,18 +154,32 @@ covsel explain test/thing.test.ts  # the sources this test covered, unit by unit
 ```
 
 For a source file it lists the tests that cover it, and at block granularity
-which of its functions they ran — a covered file with an uncovered function is
-exactly the case where selection looks wrong and is right. It names blocks by
-re-reading the file as it stands now, so a recorded block the file no longer
-contains is reported as drift: that block changed since the recording, and a
-change to it selects the tests that ran it.
+what the map says about each of its functions. Blocks are named by re-reading
+the file as it stands now, and each gets one of four verdicts — because only one
+of them means a change there runs nothing:
+
+| Verdict      | What it means                                                                                                                 |
+| ------------ | ----------------------------------------------------------------------------------------------------------------------------- |
+| `covered`    | A recorded block with this hash; the tests listed ran it.                                                                     |
+| `file-level` | No block recorded, but tests credit the whole file, so a change here runs them.                                               |
+| `unmatched`  | No recorded block matches, and blocks recorded for this file have since drifted out of it — this may be one of them, changed. |
+| `uncovered`  | Nothing else accounts for the silence: no recorded test executes it.                                                          |
+
+The re-read is also what makes drift visible: a recorded block the file no
+longer contains is reported under `drift:`, because that block changed since the
+recording and a change to the file selects the tests that ran it.
 
 When the map says nothing about a path, the answer is why that is safe: a test
 the map does not record always runs, a path outside what the recording could
 observe falls open to a full run, and a source no test covers selects nothing
-unless a sentinel or `alwaysRun` glob matches. A path that is both a test and
-something another test covers is explained as both. Long lists are summarized;
-`--all` prints them in full.
+unless an `alwaysRun` glob matches. A path that is both a test and something
+another test covers is explained as both. Long lists are summarized; `--all`
+prints them in full.
+
+Every report ends with the same `next:` line `status` prints, because none of
+the above narrows anything while the next selection is a full run — an empty map
+or one that records no commit runs every test whatever a single file's coverage
+looks like.
 
 It is read-only — it changes no selection, no policy, and nothing on disk.
 

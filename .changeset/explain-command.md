@@ -20,8 +20,14 @@ A path that is both a test and something another test covers is explained as
 both, since either half alone misstates what a change to it selects. Blocks are
 named by re-parsing the file as it stands now, which also makes drift visible: a
 recorded block hash the file no longer contains is a block that changed since
-the recording. Long lists are summarized with a count; `--all` prints them in
-full.
+the recording. A block is only called uncovered when nothing else accounts for
+the silence — whole-file entries that select on any change to it, or drift that
+may be this very block under a new hash, are reported as what they are, since
+"no recorded test executes it" about code covsel would in fact select tests for
+sends you looking for the bug in the wrong place. Every report ends with the
+`next:` line `status` prints, because nothing about one file narrows anything
+while the next selection is a full run. Long lists are summarized with a count;
+`--all` prints them in full.
 
 Read-only — it changes no selection, no policy, and no schema. `@covsel/core`
 gains `explainPath` alongside `computeStatus`.

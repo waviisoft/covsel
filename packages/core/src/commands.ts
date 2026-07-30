@@ -4,7 +4,12 @@ import { join, resolve } from 'node:path';
 
 import { blockHashesOf, extractBlocks } from './blocks.js';
 import { agreedScope } from './combine.js';
-import { type CovselConfig, type CovselConfigInput, resolveConfig } from './config.js';
+import {
+  CONFIG_FILES,
+  type CovselConfig,
+  type CovselConfigInput,
+  resolveConfig,
+} from './config.js';
 import { discoverTestFiles, isTestFile } from './discover.js';
 import {
   commitExists,
@@ -24,7 +29,7 @@ import type {
 import { makeMatcher, makeStrictMatcher, matchesAny } from './match.js';
 import { type MapperConfig, V8FileMapper } from './mapper.js';
 import { ProcessObserver } from './observer.js';
-import { hashFileContents, toRepoRelative, walkFiles } from './paths.js';
+import { hashFileContents, isExcludedRel, toRepoRelative, walkFiles } from './paths.js';
 import { FailOpenPolicy, fullRunReason } from './policy.js';
 import {
   type CoverageMap,
@@ -728,6 +733,36 @@ export interface StatusInit {
   now?: number;
 }
 
+/**
+ * Whether the next `affected` would narrow, and why not when it would not.
+ *
+ * Shared by every command that says what covsel is about to do, so none of them
+ * can answer it differently: a map that measured nothing, or one that cannot be
+ * anchored to a commit, is a full run however healthy the file looks, and a
+ * command that reads the entries without asking this would report the opposite.
+ *
+ * `blocked` is a reason that pre-empts the map's own verdict — there is nothing
+ * to narrow to whatever the map says.
+ */
+function nextSelection(
+  cwd: string,
+  config: CovselConfig,
+  map: CoverageMap | undefined,
+  blocked?: string,
+): { fullRun: boolean; reason?: string } {
+  if (blocked !== undefined) return { fullRun: true, reason: blocked };
+  const base = diffBase(cwd, map, undefined);
+  if (base.kind === 'untrusted') return { fullRun: true, reason: base.reason };
+  try {
+    const changes = diffChanges(cwd, base.since, { exact: base.exact === true });
+    return new FailOpenPolicy(config).evaluate(map, changes) === 'full-run'
+      ? { fullRun: true, reason: fullRunReason(config, map, changes) }
+      : { fullRun: false };
+  } catch {
+    return { fullRun: true, reason: 'could not compute a git diff' };
+  }
+}
+
 /** Describe the current map and what the next `affected` would do. */
 export async function computeStatus(init: StatusInit): Promise<StatusResult> {
   const { cwd, config } = init;
@@ -783,25 +818,9 @@ export async function computeStatus(init: StatusInit): Promise<StatusResult> {
     if (current !== hash) changedSentinels.push(rel);
   }
 
-  let nextIsFullRun = true;
-  let nextFullRunReason: string | undefined;
-  const base = diffBase(cwd, map, undefined);
-  if (noTests !== undefined) {
-    // Whatever the map looks like, there is nothing to narrow to. Said first
-    // because it is the actionable answer: the globs, not the map, are wrong.
-    nextFullRunReason = noTests;
-  } else if (base.kind === 'untrusted') {
-    nextFullRunReason = base.reason;
-  } else {
-    try {
-      const changes = diffChanges(cwd, base.since, { exact: base.exact === true });
-      const decision = new FailOpenPolicy(config).evaluate(map, changes);
-      nextIsFullRun = decision === 'full-run';
-      if (nextIsFullRun) nextFullRunReason = fullRunReason(config, map, changes);
-    } catch {
-      nextFullRunReason = 'could not compute a git diff';
-    }
-  }
+  const next = nextSelection(cwd, config, map, noTests);
+  const nextIsFullRun = next.fullRun;
+  const nextFullRunReason = next.reason;
 
   return {
     mapPath: store.path(),
@@ -820,16 +839,31 @@ export async function computeStatus(init: StatusInit): Promise<StatusResult> {
   };
 }
 
+/**
+ * What the map says about one block of a file as it stands now.
+ *
+ * Only `uncovered` is the claim that nothing runs this code, and it is made
+ * only when nothing else can account for the silence — because a change to a
+ * block covsel would in fact select tests for, reported as covered by nothing,
+ * sends a developer looking for the bug in the wrong place entirely.
+ *
+ * - `covered` — a recorded block with this hash, run by the units listed.
+ * - `file-level` — no recorded block matches, but entries credit the whole file,
+ *   and the selector falls back to file level for those: a change here runs them.
+ * - `unmatched` — no recorded block matches, and blocks recorded for this file
+ *   have since drifted out of it, so this may be one of them under a new hash.
+ * - `uncovered` — no recorded block matches, nothing drifted, and no entry
+ *   credits the file whole. Nothing recorded executes it.
+ */
+export type BlockVerdict = 'covered' | 'file-level' | 'unmatched' | 'uncovered';
+
 /** One block of a source file as it stands now, and what the map says ran it. */
 export interface ExplainedBlock {
   /** Function name, or the module block for the file's top-level skeleton. */
   name: string;
   hash: string;
-  /**
-   * Recorded units that executed this block. Empty means no recorded test ran
-   * it — a measurement, since the tests crediting this file did record blocks
-   * in it.
-   */
+  verdict: BlockVerdict;
+  /** Recorded units that executed this block; empty unless `covered`. */
   coveredBy: TestId[];
 }
 
@@ -878,7 +912,10 @@ export interface TestExplanation {
 }
 
 export interface ExplainResult {
-  /** False when the path itself could not be explained; `error` says why. */
+  /**
+   * False when the path itself could not be explained. `error` says why, and no
+   * other field carries an answer about the path.
+   */
   ok: boolean;
   error?: string;
   /** The path, repo-relative, or as given when it could not be resolved. */
@@ -898,12 +935,31 @@ export interface ExplainResult {
    * measurement, and a change here falls open to a full run.
    */
   observed?: boolean;
-  /** True when a change here forces a full run because a sentinel matches it. */
-  sentinel: boolean;
+  /**
+   * Why a change to this path on its own forces a full run, when one does.
+   * Sentinels are not the only way that happens — a change to covsel's own
+   * config invalidates the map without going through the sentinel list — so
+   * this names the reason rather than reporting the glob match.
+   */
+  forcesFullRun?: string;
   /** True when an alwaysRun glob matches, so this test runs whatever the diff. */
   alwaysRun: boolean;
   /** True when the configured test globs match this path. */
   isTestPath: boolean;
+  /**
+   * True when the path is inside a directory covsel never walks. Discovery and
+   * coverage attribution both skip these, so a test file here is not one that
+   * "always runs until it is recorded" — it is one that never runs at all.
+   */
+  excluded: boolean;
+  /**
+   * Whether the next selection would be a full run whatever this path says, and
+   * why. A map that measured nothing or cannot be anchored to a commit runs
+   * everything, and "no recorded test covers this file" read beside that would
+   * otherwise say a change here selects nothing.
+   */
+  nextIsFullRun?: boolean;
+  nextFullRunReason?: string;
   source?: SourceExplanation;
   test?: TestExplanation;
 }
@@ -922,7 +978,11 @@ function pushUnit(index: Map<string, TestId[]>, key: string, test: TestId): void
   bucket.push(test);
 }
 
-/** Sort a unit list, dropping units that appear twice (a merged map can repeat). */
+/**
+ * Sort a unit list, dropping units that appear twice. The map is a file on
+ * disk, so nothing here can assume it was written by the recorder that would
+ * have kept one entry per unit.
+ */
 function distinctUnits(units: TestId[]): TestId[] {
   const seen = new Set<string>();
   const out: TestId[] = [];
@@ -962,36 +1022,47 @@ export async function explainPath(init: ExplainInit): Promise<ExplainResult> {
     mapPath,
     mapExists: false,
     present: false,
-    sentinel: false,
     alwaysRun: false,
     isTestPath: false,
+    excluded: false,
   });
 
   const abs = resolve(cwd, init.path);
+  // Asked before the path is made repo-relative, so the repo root answers as
+  // the directory it is rather than as a path outside itself.
+  let stats;
+  try {
+    stats = statSync(abs);
+  } catch {
+    // A path the map records but the tree no longer has is still explainable,
+    // and saying so is the answer to "why does nothing cover this now".
+    stats = undefined;
+  }
+  // A directory would have to be answered as a summary over everything under
+  // it, which is a different question with a different shape; refusing names
+  // what was asked rather than answering something else.
+  if (stats?.isDirectory()) {
+    return fail(init.path, `${init.path} is a directory -- explain takes a single file`);
+  }
+
   const rel = toRepoRelative(cwd, abs);
   if (rel === undefined) {
     return fail(init.path, `${init.path} is outside ${cwd}`);
   }
-
-  let present: boolean;
-  try {
-    const stats = statSync(abs);
-    // A directory would have to be answered as a summary over everything under
-    // it, which is a different question with a different shape; refusing names
-    // what was asked rather than answering something else.
-    if (stats.isDirectory()) {
-      return fail(rel, `${rel} is a directory -- explain takes a single file`);
-    }
-    present = stats.isFile();
-  } catch {
-    // A path the map records but the tree no longer has is still explainable,
-    // and saying so is the answer to "why does nothing cover this now".
-    present = false;
-  }
+  const present = stats?.isFile() ?? false;
 
   const isTestPath = isTestFile(rel, config);
-  const sentinel = matchesAny(rel, config.sentinels);
   const alwaysRun = matchesAny(rel, config.alwaysRun);
+  const excluded = isExcludedRel(rel);
+  // A sentinel is not the only path a change to which invalidates the map:
+  // covsel's own config decides what the map means, and the policy forces a
+  // full run on it without consulting the sentinel list.
+  const forcesFullRun = matchesAny(rel, config.sentinels)
+    ? 'it is a sentinel, so a change to it invalidates the map'
+    : (CONFIG_FILES as readonly string[]).includes(rel)
+      ? "it is covsel's own configuration, and the map means what it means only " +
+        'under the config it was recorded with'
+      : undefined;
 
   const map = await store.read();
   if (map === undefined) {
@@ -1003,9 +1074,10 @@ export async function explainPath(init: ExplainInit): Promise<ExplainResult> {
       mapExists: false,
       noMapReason: fullRunReason(config, undefined, []),
       present,
-      sentinel,
+      ...(forcesFullRun !== undefined ? { forcesFullRun } : {}),
       alwaysRun,
       isTestPath,
+      excluded,
     };
   }
 
@@ -1073,13 +1145,23 @@ export async function explainPath(init: ExplainInit): Promise<ExplainResult> {
           // recorded hash the current file no longer contains is a block that
           // changed since the recording.
           const current = extractBlocks(readFileSync(abs, 'utf8'), rel);
-          blocks = current.map((block) => ({
-            name: block.name,
-            hash: block.hash,
-            coveredBy: distinctUnits(unitsByBlock.get(block.hash) ?? []),
-          }));
           const currentHashes = new Set(current.map((b) => b.hash));
           changedBlocks = [...recordedHashes].filter((h) => !currentHashes.has(h)).length;
+          blocks = current.map((block) => {
+            const ran = distinctUnits(unitsByBlock.get(block.hash) ?? []);
+            // Order matters: each verdict below is a weaker statement than the
+            // one before it, and only the last one claims nothing runs this
+            // code. Anything that could account for the silence outranks it.
+            const verdict: BlockVerdict =
+              ran.length > 0
+                ? 'covered'
+                : fileOnly.length > 0
+                  ? 'file-level'
+                  : changedBlocks > 0
+                    ? 'unmatched'
+                    : 'uncovered';
+            return { name: block.name, hash: block.hash, verdict, coveredBy: ran };
+          });
         } catch (e) {
           blocksUnavailable = `the file could not be read: ${
             e instanceof Error ? e.message : String(e)
@@ -1096,6 +1178,7 @@ export async function explainPath(init: ExplainInit): Promise<ExplainResult> {
     };
   }
 
+  const next = nextSelection(cwd, config, map);
   return {
     ok: true,
     file: rel,
@@ -1105,9 +1188,12 @@ export async function explainPath(init: ExplainInit): Promise<ExplainResult> {
     granularity: map.granularity,
     present,
     observed: makeStrictMatcher(map.observed)(rel),
-    sentinel,
+    ...(forcesFullRun !== undefined ? { forcesFullRun } : {}),
     alwaysRun,
     isTestPath,
+    excluded,
+    nextIsFullRun: next.fullRun,
+    ...(next.reason !== undefined ? { nextFullRunReason: next.reason } : {}),
     ...(source !== undefined ? { source } : {}),
     ...(wantTest ? { test: { units, unrecorded: units.length === 0 } } : {}),
   };
