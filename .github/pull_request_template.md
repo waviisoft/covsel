@@ -12,6 +12,14 @@ NOT reference issues, PRs, commits, or reviewers here (put those at the bottom).
 
 <!-- Optional. The notable changes, by file or by area, for reviewers. -->
 
+## Review & selection
+
+<!--
+What the independent review covered and what changed as a result, and what you
+expected covsel to select against what the `select` job actually selected. A
+narrower selection than predicted is a fail-open bug — resolve it before merging.
+-->
+
 ## Checklist
 
 - [ ] Tests added/updated
