@@ -171,6 +171,11 @@ covsel watch -- vitest run
 # Introspect the map: age, size, sentinel drift, whether the next run is full
 covsel status
 
+# Read the map in the other direction: what covers this file, at what
+# granularity, and what a change to it selects. Given a test, what it covered.
+covsel explain src/thing.ts
+covsel explain test/thing.test.ts --all   # do not summarize a large fan-in
+
 # Fold the maps from a sharded suite into one
 covsel merge shard-*/map.json --out .covsel/map.json
 ```
@@ -294,11 +299,11 @@ covsel/
 
 ## 8. Risks & open questions
 
-| Risk / question                                     | Mitigation / current stance                                               |
-| --------------------------------------------------- | ------------------------------------------------------------------------- |
-| Fail-_closed_ bug skips a needed test -> lost trust | Mutation safety check in CI; conservative defaults; loud logging of skips |
-| Bundler source-map fidelity                         | A script that maps back to no source fails the recording, loudly          |
-| "Just use `jest --changedSince`" objection          | Lead with the cases static graphs miss + no-native-selection runners      |
-| Map staleness / drift                               | Sentinels + new-test detection + `covsel status` surfacing map age        |
-| Per-test inspector overhead                         | Offer per-file process mode as the low-overhead fallback                  |
-| Sharing the map across CI jobs                      | The store is a directory, so the CI runner's own cache covers it          |
+| Risk / question                                     | Mitigation / current stance                                                     |
+| --------------------------------------------------- | ------------------------------------------------------------------------------- |
+| Fail-_closed_ bug skips a needed test -> lost trust | Mutation safety check in CI; conservative defaults; loud logging of skips       |
+| Bundler source-map fidelity                         | A script that maps back to no source fails the recording, loudly                |
+| "Just use `jest --changedSince`" objection          | Lead with the cases static graphs miss + no-native-selection runners            |
+| Map staleness / drift                               | Sentinels + new-test detection; `status` for map age, `explain` for block drift |
+| Per-test inspector overhead                         | Offer per-file process mode as the low-overhead fallback                        |
+| Sharing the map across CI jobs                      | The store is a directory, so the CI runner's own cache covers it                |

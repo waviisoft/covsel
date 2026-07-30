@@ -118,7 +118,7 @@ describe('covsel cli', () => {
 
   it('help lists the available commands', async () => {
     const { out } = await captureStdout(() => main(['--help']));
-    for (const cmd of ['record', 'affected', 'run', 'watch', 'status']) {
+    for (const cmd of ['record', 'affected', 'run', 'watch', 'status', 'explain']) {
       expect(out).toContain(`covsel ${cmd}`);
     }
   });
@@ -221,6 +221,20 @@ describe('covsel cli', () => {
       );
     },
   );
+
+  it('explain refuses to run under a granularity covsel does not implement', async () => {
+    // Read-only is not a reason to answer under a configuration covsel cannot
+    // record at: what the map means depends on it, and explaining a file is
+    // saying what that map means.
+    await inProject(
+      { 'covsel.json': `${JSON.stringify({ granularity: 'line' })}\n` },
+      async () => {
+        await expect(main(['explain', 'covsel.json'])).rejects.toThrow(
+          /granularity "line" is not supported/,
+        );
+      },
+    );
+  });
 
   it('affected rejects an unsupported --format', async () => {
     const { code, err } = await captureStderr(() =>
@@ -1025,5 +1039,172 @@ describe('covsel publish and fetch', () => {
       capture(() => main(['fetch', '--require'])),
     );
     expect(code).toBe(1);
+  });
+});
+
+/** Write a map with entries into a project's store. */
+function writeEntries(cwd: string, entries: unknown[]): void {
+  mkdirSync(join(cwd, '.covsel'), { recursive: true });
+  writeFileSync(
+    join(cwd, '.covsel', 'map.json'),
+    JSON.stringify({
+      schemaVersion: MAP_SCHEMA_VERSION,
+      granularity: 'file',
+      recordedAt: '2026-07-01T00:00:00.000Z',
+      sentinelHashes: {},
+      observed: ['**'],
+      entries,
+    }),
+  );
+}
+
+/**
+ * The reverse view over the map. The reading is in core (see `explain.test.ts`);
+ * what matters here is that the answer a developer distrusting selection gets is
+ * on stdout, and that a path covsel cannot explain says so instead of printing
+ * an empty, reassuring report.
+ */
+describe('covsel explain', () => {
+  it('names the tests that cover a source file', async () => {
+    const { code, out } = await inProject(
+      { 'package.json': pkg({}), 'math.js': 'export const add = (a, b) => a + b;\n' },
+      (cwd) => {
+        writeEntries(cwd, [
+          {
+            test: { file: 'add.test.js', name: 'adds' },
+            files: [{ file: 'math.js', fileHash: 'sha256:math' }],
+          },
+        ]);
+        return capture(() => main(['explain', 'math.js']));
+      },
+    );
+    expect(code).toBe(0);
+    expect(out).toContain('add.test.js');
+    expect(out).toContain('adds');
+  });
+
+  it('says what covers nothing means, and still exits 0', async () => {
+    const { code, out } = await inProject(
+      { 'package.json': pkg({}), 'lonely.js': 'export const x = 1;\n' },
+      (cwd) => {
+        writeEntries(cwd, [
+          {
+            test: { file: 'add.test.js' },
+            files: [{ file: 'math.js', fileHash: 'sha256:math' }],
+          },
+        ]);
+        return capture(() => main(['explain', 'lonely.js']));
+      },
+    );
+    expect(code).toBe(0);
+    expect(out).toContain('no recorded test covers');
+    expect(out).toContain('alwaysRun');
+  });
+
+  it('does not call an unobservable path covered by nothing', async () => {
+    const { code, out } = await inProject(
+      { 'package.json': pkg({}), 'lonely.js': 'export const x = 1;\n' },
+      (cwd) => {
+        mkdirSync(join(cwd, '.covsel'), { recursive: true });
+        writeFileSync(
+          join(cwd, '.covsel', 'map.json'),
+          JSON.stringify({
+            schemaVersion: MAP_SCHEMA_VERSION,
+            granularity: 'file',
+            recordedAt: '2026-07-01T00:00:00.000Z',
+            sentinelHashes: {},
+            observed: ['math.js'],
+            entries: [
+              {
+                test: { file: 'add.test.js' },
+                files: [{ file: 'math.js', fileHash: 'sha256:math' }],
+              },
+            ],
+          }),
+        );
+        return capture(() => main(['explain', 'lonely.js']));
+      },
+    );
+    expect(code).toBe(0);
+    expect(out).toContain('full run');
+    expect(out).not.toContain('no recorded test covers');
+  });
+
+  it('says an unrecorded test always runs', async () => {
+    const { code, out } = await inProject(
+      { 'package.json': pkg({}), 'fresh.test.js': '' },
+      (cwd) => {
+        writeEntries(cwd, [
+          {
+            test: { file: 'add.test.js' },
+            files: [{ file: 'math.js', fileHash: 'sha256:math' }],
+          },
+        ]);
+        return capture(() => main(['explain', 'fresh.test.js']));
+      },
+    );
+    expect(code).toBe(0);
+    expect(out).toContain('always runs');
+  });
+
+  it('says there is nothing to explain without a map, and exits 0', async () => {
+    const { code, out } = await inProject(
+      { 'package.json': pkg({}), 'math.js': 'export const x = 1;\n' },
+      () => capture(() => main(['explain', 'math.js'])),
+    );
+    expect(code).toBe(0);
+    expect(out).toContain('full run');
+  });
+
+  it('exits non-zero naming a path it cannot explain', async () => {
+    const { code, err } = await inProject({ 'package.json': pkg({}) }, (cwd) => {
+      writeEntries(cwd, [{ test: { file: 'add.test.js' }, files: [] }]);
+      return capture(() => main(['explain', 'nope.js']));
+    });
+    expect(code).toBe(1);
+    expect(err).toContain('nope.js');
+  });
+
+  it('summarizes a large fan-in, and prints all of it for --all', async () => {
+    const entries = Array.from({ length: 40 }, (_, i) => ({
+      test: { file: `t${i}.test.js` },
+      files: [{ file: 'math.js', fileHash: 'sha256:math' }],
+    }));
+    const { out, all } = await inProject(
+      { 'package.json': pkg({}), 'math.js': 'export const x = 1;\n' },
+      async (cwd) => {
+        writeEntries(cwd, entries);
+        const summarized = await capture(() => main(['explain', 'math.js']));
+        const everything = await capture(() => main(['explain', 'math.js', '--all']));
+        return { ...summarized, all: everything.out };
+      },
+    );
+    expect(out).toContain('and 20 more (--all)');
+    expect(all).not.toContain('more (--all)');
+    expect(all).toContain('t39.test.js');
+  });
+
+  it('summarizes a test file with more recorded units than it will print', async () => {
+    const entries = Array.from({ length: 40 }, (_, i) => ({
+      test: { file: 'big.test.js', name: `case ${String(i).padStart(2, '0')}` },
+      files: [{ file: 'math.js', fileHash: 'sha256:math' }],
+    }));
+    const { out } = await inProject(
+      { 'package.json': pkg({}), 'big.test.js': '' },
+      (cwd) => {
+        writeEntries(cwd, entries);
+        return capture(() => main(['explain', 'big.test.js']));
+      },
+    );
+    expect(out).toContain('and 20 more unit(s) (--all)');
+    expect(out).not.toContain('case 39');
+  });
+
+  it('exits non-zero when given no path at all', async () => {
+    const { code, err } = await inProject({ 'package.json': pkg({}) }, () =>
+      capture(() => main(['explain'])),
+    );
+    expect(code).toBe(1);
+    expect(err).toContain('expected a path');
   });
 });

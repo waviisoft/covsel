@@ -1,7 +1,7 @@
 # Getting started
 
 Selection ships today: `covsel record`, `affected`, `run`, `watch`, `status`,
-and `merge` -- with function-level (block-hash) precision, per-test selection for
+`explain`, and `merge` -- with function-level (block-hash) precision, per-test selection for
 node:test, and scenario-level selection for cucumber-js. Running covsel in CI is
 covered in the [CI guide](/guide/ci).
 
@@ -141,6 +141,47 @@ covsel status
 
 shows the store path, the map's age and size, whether any sentinel changed since
 record, and whether the next `affected` would be a full run.
+
+### Ask about one file
+
+`status` describes the map as a whole and `affected` answers what a diff
+selects. When the question is about a single file — _what covers this, and why
+didn't my test run?_ — `explain` reads the map in the other direction:
+
+```bash
+covsel explain src/thing.ts        # the tests whose recordings credit this file
+covsel explain test/thing.test.ts  # the sources this test covered, unit by unit
+```
+
+For a source file it lists the tests that cover it, and at block granularity
+what the map says about each of its functions. Blocks are named by re-reading
+the file as it stands now, and each gets one of four verdicts — because only one
+of them means a change there runs nothing:
+
+| Verdict      | What it means                                                                                                                 |
+| ------------ | ----------------------------------------------------------------------------------------------------------------------------- |
+| `covered`    | A recorded block with this hash; the tests listed ran it.                                                                     |
+| `file-level` | No block recorded, but tests credit the whole file, so a change here runs them.                                               |
+| `unmatched`  | No recorded block matches, and blocks recorded for this file have since drifted out of it — this may be one of them, changed. |
+| `uncovered`  | Nothing else accounts for the silence: no recorded test executes it.                                                          |
+
+The re-read is also what makes drift visible: a recorded block the file no
+longer contains is reported under `drift:`, because that block changed since the
+recording and a change to the file selects the tests that ran it.
+
+When the map says nothing about a path, the answer is why that is safe: a test
+the map does not record always runs, a path outside what the recording could
+observe falls open to a full run, and a source no test covers selects nothing
+unless an `alwaysRun` glob matches. A path that is both a test and something
+another test covers is explained as both. Long lists are summarized; `--all`
+prints them in full.
+
+Every report ends with the same `next:` line `status` prints, because none of
+the above narrows anything while the next selection is a full run — an empty map
+or one that records no commit runs every test whatever a single file's coverage
+looks like.
+
+It is read-only — it changes no selection, no policy, and nothing on disk.
 
 ## Which adapter?
 

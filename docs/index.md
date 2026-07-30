@@ -39,8 +39,8 @@ features:
 ---
 
 ::: tip Status: early
-`covsel init`, `record`, `affected`, `run`, `watch`, `status`, and `merge` ship
-today, with selection at file, block, and per-test granularity depending on the
-runner. What is planned lives in the
+`covsel init`, `record`, `affected`, `run`, `watch`, `status`, `explain`, and
+`merge` ship today, with selection at file, block, and per-test granularity
+depending on the runner. What is planned lives in the
 [issue tracker](https://github.com/waviisoft/covsel/issues).
 :::
