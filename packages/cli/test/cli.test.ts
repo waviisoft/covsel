@@ -254,6 +254,10 @@ describe('covsel init', () => {
     const result = await inProject(
       { 'package.json': pkg({ devDependencies: { vitest: '^3.0.0' } }) },
       async (cwd) => {
+        // `--no-install` means nothing should reach a package manager. Stubbed
+        // anyway, so a regression that starts installing fails here instead of
+        // quietly reaching the network.
+        stubPackageManager(cwd, 'npm');
         const captured = await capture(() =>
           main(['init', '--no-install', '--auto-approve']),
         );
