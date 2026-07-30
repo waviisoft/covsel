@@ -139,7 +139,14 @@ describe('unobservedChange', () => {
     recordedAt: '2026-01-01T00:00:00.000Z',
     sentinelHashes: {},
     observed: ['src/**'],
-    entries: [],
+    // One entry, so the scope is what these tests actually exercise: a map with
+    // no entries measured nothing and forces a full run before scope is reached.
+    entries: [
+      {
+        test: { file: 'test/a.test.mjs' },
+        files: [{ file: 'src/a.ts', fileHash: 'sha256:a' }],
+      },
+    ],
   };
   const change = (file: string) => ({ file, kind: 'modified' as const });
 

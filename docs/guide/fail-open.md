@@ -164,6 +164,29 @@ since such a suite leaves the tree dirty by the end through no fault of your
 sources. Checking afterwards would leave those projects permanently unanchored and
 always falling open, which would look exactly like covsel not working.
 
+## An empty map, and no tests to find
+
+The most mundane way to get a wrong answer is a `testGlobs` that does not match
+your project. The defaults look for `*.test.js`; express — like a lot of Mocha and
+node:test projects — names its tests `test/*.js`. Nothing about that is exotic, and
+covsel used to handle it by writing a map with no entries and exiting 0, after
+which `covsel run` ran no tests and also exited 0. A green CI job that executed
+nothing is the worst outcome this tool can produce, so all three points now refuse
+it:
+
+- **`covsel record` fails** when discovery finds no test files, writes no map, and
+  names the globs it tried and the directory it searched. An empty map is never
+  the right answer.
+- **A map with no entries forces a full run.** It measured nothing, so its silence
+  about a changed file is not a measurement.
+- **Selecting with no discovered test files falls open**, which hands your runner
+  its own command unfiltered — so the runner's own discovery finds what covsel's
+  globs missed.
+
+`covsel status` reports the discovered test count for the same reason: a healthy
+map beside `discovered: 0 test file(s)` is the one combination worth noticing at a
+glance.
+
 ## How the map enforces it
 
 The persisted map is a **versioned contract**. Bumping the schema version

@@ -19,13 +19,23 @@ import {
   toRepoRelative,
 } from '../src/index.js';
 
-const emptyMap: CoverageMap = {
+/**
+ * A minimal usable map. It carries one entry on purpose: a map with none
+ * measured nothing, and the policy forces a full run on that alone — which would
+ * mask whatever else a test here means to exercise.
+ */
+const minimalMap: CoverageMap = {
   schemaVersion: MAP_SCHEMA_VERSION,
   granularity: 'file',
   recordedAt: '',
   sentinelHashes: {},
   observed: ['**'],
-  entries: [],
+  entries: [
+    {
+      test: { file: 'test/a.test.ts' },
+      files: [{ file: 'src/a.ts', fileHash: 'sha256:a' }],
+    },
+  ],
 };
 
 describe('config', () => {
@@ -104,10 +114,10 @@ describe('policy', () => {
   });
 
   it('full-run when a sentinel changes', () => {
-    expect(policy.evaluate(emptyMap, [{ file: 'package.json', kind: 'modified' }])).toBe(
-      'full-run',
-    );
-    expect(policy.evaluate(emptyMap, [{ file: 'src/a.ts', kind: 'modified' }])).toBe(
+    expect(
+      policy.evaluate(minimalMap, [{ file: 'package.json', kind: 'modified' }]),
+    ).toBe('full-run');
+    expect(policy.evaluate(minimalMap, [{ file: 'src/a.ts', kind: 'modified' }])).toBe(
       'select',
     );
   });
@@ -128,7 +138,7 @@ describe('policy', () => {
   it('explains the full-run reason', () => {
     expect(fullRunReason(DEFAULT_CONFIG, undefined, [])).toContain('no usable map');
     expect(
-      fullRunReason(DEFAULT_CONFIG, emptyMap, [
+      fullRunReason(DEFAULT_CONFIG, minimalMap, [
         { file: 'package.json', kind: 'modified' },
       ]),
     ).toContain('sentinel changed');

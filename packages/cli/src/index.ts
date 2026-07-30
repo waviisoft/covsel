@@ -615,6 +615,13 @@ async function cmdRecord(argv: string[]): Promise<number> {
   });
 
   if (!result.ok) {
+    // A run-level failure is not a count of broken test files, and reporting it
+    // as "0 test file(s) failed" would read like nothing went wrong.
+    if (result.error !== undefined) {
+      err(`covsel record: ${result.error}\n`);
+      err('covsel record: no map written -- an empty map would select no tests.\n');
+      return 1;
+    }
     err(
       `covsel record: ${result.failures.length} test file(s) failed; map not written ` +
         `(a partial map cannot be trusted).\n`,
@@ -811,6 +818,13 @@ async function cmdStatus(): Promise<number> {
   const s = await computeStatus({ cwd, config });
   out(`map:        ${s.mapPath}\n`);
   out(`exists:     ${s.exists ? 'yes' : 'no'}\n`);
+  if (s.discoveredTestCount !== undefined) {
+    out(
+      `discovered: ${s.discoveredTestCount} test file(s)${
+        s.discoveredTestCount === 0 ? ' -- check testGlobs' : ''
+      }\n`,
+    );
+  }
   if (s.exists) {
     const ageMin = s.ageMs !== undefined ? Math.round(s.ageMs / 60000) : undefined;
     out(
