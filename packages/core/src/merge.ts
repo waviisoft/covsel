@@ -13,6 +13,15 @@ function testKey(entry: MapEntry): string {
 }
 
 /**
+ * Order two keys, stably and without locale rules. A merged map is compared
+ * byte for byte across shards and across runs, so its ordering has to come from
+ * the strings themselves rather than from whatever collation the host has.
+ */
+function byKey(a: string, b: string): number {
+  return a < b ? -1 : a > b ? 1 : 0;
+}
+
+/**
  * Combine shard maps into one, for CI runs that split the suite across jobs.
  *
  * Every ambiguity resolves toward selecting more later:
@@ -48,9 +57,7 @@ export function mergeMaps(maps: CoverageMap[]): CoverageMap {
       }
       const files = new Map<string, CoveredFile>();
       for (const f of [...existing.files, ...entry.files]) files.set(f.file, f);
-      existing.files = [...files.values()].sort((a, b) =>
-        a.file < b.file ? -1 : a.file > b.file ? 1 : 0,
-      );
+      existing.files = [...files.values()].sort((a, b) => byKey(a.file, b.file));
       // Blocks narrow selection, so they may only survive when both sides know
       // them. If either shard recorded none for this test, its coverage of the
       // test is unknown at block level and the entry falls back to file level.
@@ -66,9 +73,7 @@ export function mergeMaps(maps: CoverageMap[]): CoverageMap {
     }
   }
 
-  const entries = [...byTest.values()].sort((a, b) =>
-    testKey(a) < testKey(b) ? -1 : testKey(a) > testKey(b) ? 1 : 0,
-  );
+  const entries = [...byTest.values()].sort((a, b) => byKey(testKey(a), testKey(b)));
 
   // A shard's silence is only informative inside its own observed scope, so the
   // merged map may claim no more than every shard agreed on.
