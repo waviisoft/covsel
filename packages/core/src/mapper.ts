@@ -7,6 +7,7 @@ import { makeSourceFilter } from './discover.js';
 import type { Mapper, RawCoverage } from './interfaces.js';
 import { makeStrictMatcher } from './match.js';
 import type { ScriptCoverage } from './observer.js';
+import { isVendoredRelPath } from './packages.js';
 import {
   DEFAULT_EXCLUDES,
   hashFileContents,
@@ -174,7 +175,7 @@ export class V8FileMapper implements Mapper {
     if (!url.startsWith('file://')) return true; // `node:`, `data:`, eval, …
     const rel = this.repoRelative(url);
     if (rel === undefined) return true; // outside the repo: someone else's code
-    return rel.split('/').includes('node_modules'); // vendored
+    return isVendoredRelPath(rel);
   }
 
   /**
