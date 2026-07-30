@@ -27,6 +27,15 @@ rules below exactly — they encode this repository's PR guidelines.
    the PR what the review covered and what changed as a result. In this repo the
    review must also confirm the **fail-open** guarantee holds: nothing in the
    change can cause a needed test to be skipped (see `AGENTS.md`).
+   **Validate the review before acting on it.** Its findings are claims, not
+   verdicts: check the code each one points at, confirm the failure it describes
+   can actually happen, and test the assumptions it rests on against this
+   codebase — reviewers raise confident findings about code paths that do not
+   exist and invariants already enforced elsewhere. Fix what holds, at the
+   underlying problem rather than by pattern-matching the suggested patch; say
+   in the PR why the rest does not apply; and where you cannot tell, write the
+   test that would fail if the finding were real. Never report a review as
+   addressed when you applied its suggestions untested.
 5. **Watch the PR until it merges or closes.** CI failures, merge conflicts with
    the base branch, and review comments are all yours to act on — fix it, or say
    in the thread why you are not going to. A red check or an unanswered comment

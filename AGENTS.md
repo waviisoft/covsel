@@ -214,6 +214,23 @@ a pass instead of taking it on trust. In this repo that review always includes
 the fail-open guarantee: nothing in the change can cause a needed test to be
 skipped.
 
+A review is evidence, not a verdict. Every finding the reviewer raises is a
+claim to be checked before you act on it: read the code it points at, work out
+whether the failure it describes can actually happen, and confirm the
+assumptions it rests on are true of this codebase rather than plausible in
+general. Reviewers state confident findings about code paths that do not exist,
+invariants already enforced elsewhere, and behavior the tests already cover.
+Applying those makes the change worse while looking like diligence.
+
+So the fix you make is your fix, and you own it. Where a finding holds, address
+the underlying problem rather than pattern-matching the suggested patch. Where
+it does not, say so — in the pull request, with the reason it does not apply —
+instead of quietly dropping it or complying to clear the queue. Where you cannot
+tell, the honest move is to reproduce it: a test that fails today settles the
+question, and if the finding is real it also leaves the guard behind. Never
+report a review as addressed when what you did was apply its suggestions
+untested.
+
 ### The description is the living summary
 
 Keep the pull request description current as the branch evolves — it describes
