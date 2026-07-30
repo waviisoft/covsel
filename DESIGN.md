@@ -107,11 +107,18 @@ stable interfaces from `@covsel/core`.
 
 ### Known-hard: bundlers (deferred)
 
-Node with on-the-fly transpile (tsx/swc/ts-node) stays ~1:1 -> source-mapping via
-`v8-to-istanbul` is straightforward. **Browser bundles** (Turbopack/webpack/
+Node with on-the-fly transpile (tsx/swc/ts-node) stays ~1:1, so the offsets V8
+reports are the offsets on disk. **Browser bundles** (Turbopack/webpack/
 esbuild/vite) fuse many sources into one chunk -> need source maps to fan
-coverage back out. Win the Node/unit/integration case first; browser/bundled
-coverage comes later via bundler plugins emitting clean per-source maps.
+coverage back out.
+
+Fanning them out is done from the mapping segments themselves rather than
+through an off-the-shelf istanbul conversion, which was measured to lose the
+cases that matter: those conversions carry named functions only, so an executed
+arrow handler vanishes, and they attribute unmapped bundler-injected code to the
+map's first source. Both drop blocks, and a dropped block skips a test. The
+projection lives in `@covsel/core`; wiring the recorder to it, and bundler
+plugins emitting cleaner per-source maps, are still ahead.
 
 ---
 

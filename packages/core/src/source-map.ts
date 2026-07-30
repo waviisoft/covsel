@@ -24,9 +24,10 @@ import { stripUrlQuery, toRepoRelative } from './paths.js';
  * the caller to fail on, because a source silently missing from an entry is the
  * hole this whole mechanism exists to close.
  *
- * Only the `sources` list is read. Projecting the executed ranges through the
- * mappings is separate work; until it lands a mapped script credits every source
- * it was built from, which over-selects rather than under-selects.
+ * Only the `sources` list is read here. Projecting the executed ranges through
+ * the mappings lives in `project.ts`; the recorder does not yet call it, so a
+ * mapped script still credits every source it was built from, which
+ * over-selects rather than under-selects.
  */
 
 /** The parts of a source map covsel reads. */
@@ -149,6 +150,21 @@ export interface NamedSource {
 /** Every source a map names, following the sections of an index map. */
 export function sourceMapSources(map: RawSourceMap): string[] {
   return namedSources(map).map((s) => s.path);
+}
+
+/**
+ * A map's own sources, positionally, with `sourceRoot` applied. Unlike
+ * `namedSources` this keeps the array's shape: entry `i` is what a mapping
+ * segment's source index `i` refers to, and an entry a map left null or empty is
+ * `undefined` rather than dropped. Sections are not followed, since their
+ * segments index their own section's sources rather than this array.
+ */
+export function indexedSources(map: RawSourceMap): (string | undefined)[] {
+  return (map.sources ?? []).map((source) =>
+    typeof source === 'string' && source !== ''
+      ? prefixWith(map.sourceRoot, source)
+      : undefined,
+  );
 }
 
 /** Every source a map names, paired with its published content. */

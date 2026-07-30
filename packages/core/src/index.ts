@@ -16,6 +16,7 @@ export * from './merge.js';
 export * from './combine.js';
 export * from './git.js';
 export * from './blocks.js';
+export * from './project.js';
 export * from './selector.js';
 export * from './policy.js';
 export * from './commands.js';
