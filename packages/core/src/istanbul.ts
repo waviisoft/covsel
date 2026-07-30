@@ -80,18 +80,22 @@ export function istanbulExecuted(entry: CoverageFinalEntry): boolean {
   return anyCount(entry.s) || anyCount(entry.f) || anyBranch(entry.b);
 }
 
-/** Executed blocks of one source, from its istanbul function map and hit counts. */
+/**
+ * Executed blocks of one source, from its istanbul function map and hit counts.
+ *
+ * A source that cannot be read throws, exactly as hashing it in
+ * {@link istanbulCoverage} does. Both answer the same question — can this file be
+ * credited at all — so they resolve it the same way, and a recording that cannot
+ * read a file the report says ran fails rather than silently crediting less than
+ * it measured. Swallowing it here would also have been unreachable: the hash runs
+ * first and throws on the same file.
+ */
 export function istanbulBlocks(
   entry: CoverageFinalEntry,
   rel: string,
   abs: string,
 ): CoveredBlock[] {
-  let source: string;
-  try {
-    source = readFileSync(abs, 'utf8');
-  } catch {
-    return [];
-  }
+  const source = readFileSync(abs, 'utf8');
   const toOffset = positionToOffset(source);
   const regions: ExecRegion[] = [];
   for (const [id, fn] of Object.entries(entry.fnMap ?? {})) {

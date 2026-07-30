@@ -28,6 +28,14 @@ reporters — so each adapter keeps its own diagnostic while core owns the parsi
 Block extraction reads the configured granularity itself rather than at each call
 site.
 
-Nothing about what either adapter records changes. Both adapters' conformance
-suites and both golden end-to-end examples pass unchanged, which is what would
-catch a reader that silently altered what it credits.
+What either adapter records is unchanged, and both adapters' conformance suites
+and both golden end-to-end examples pass unchanged — which is what would catch a
+reader that silently altered what it credits.
+
+Two edge cases do resolve differently, both toward failing loudly rather than
+crediting nothing. A `coverage-final.json` that parses to something other than an
+object — an array, a bare string — is now treated as no report at all, where before
+it was iterated to nothing and produced an entry crediting no sources; that is the
+shape covsel exists to distrust. And a covered source that cannot be read now
+fails the recording consistently: hashing it always threw, while block extraction
+silently returned none, so the two halves of one decision disagreed.

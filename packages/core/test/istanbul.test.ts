@@ -1,7 +1,6 @@
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { dirname, join } from 'node:path';
-import { fileURLToPath } from 'node:url';
+import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
 import {
@@ -16,8 +15,9 @@ import {
  * runners transform sources before executing them. It decides which sources a
  * test is credited with, so a fix applied to one copy and not the other would
  * leave one runner quietly under-recording — the fail-closed direction. These
- * tests hold the shared reader to what the copies did, and hold the adapters to
- * not keeping a copy.
+ * tests hold the shared reader to what the copies did. That neither adapter kept
+ * a copy is checked in `@covsel/conformance`'s suite, which is the right place to
+ * read a sibling package's source from.
  */
 
 const config = resolveConfig();
@@ -180,25 +180,5 @@ describe('block extraction follows the configured granularity', () => {
     const entry = entryForSource(abs);
     rmSync(abs);
     expect(() => istanbulCoverage({ [abs]: entry }, { cwd, config })).toThrow();
-  });
-});
-
-describe('neither adapter keeps a private copy', () => {
-  const here = dirname(fileURLToPath(import.meta.url));
-  const adapters = ['adapter-vitest', 'adapter-jest'] as const;
-
-  it.each(adapters)('%s reads the report through core', (name) => {
-    const source = readFileSync(join(here, '..', '..', name, 'src', 'index.ts'), 'utf8');
-    expect(source).toContain('readIstanbulReport');
-    expect(source).toContain('istanbulCoverage');
-  });
-
-  it.each(adapters)('%s declares no istanbul entry shape of its own', (name) => {
-    const source = readFileSync(join(here, '..', '..', name, 'src', 'index.ts'), 'utf8');
-    // The shape and the two helpers derived from it are what drifted apart if
-    // either adapter grows its own again.
-    expect(source).not.toMatch(/interface CoverageFinalEntry/);
-    expect(source).not.toMatch(/fnMap/);
-    expect(source).not.toMatch(/function blocksFor/);
   });
 });
