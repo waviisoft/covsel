@@ -33,6 +33,8 @@ export const jestAdapter: Adapter = {
   formatSelection(tests: TestId[]): string[] {
     return [...new Set(tests.map((t) => t.file))];
   },
+  // covsel reads this runner's report, so covsel decides what it credits.
+  coverageReport: 'istanbul',
   createRecorder(init: RecorderInit): Recorder {
     return createJestRecorder(init);
   },

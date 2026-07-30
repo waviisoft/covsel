@@ -50,6 +50,12 @@ export function assertAdapter(value: unknown, source: string): asserts value is 
       fail(`${key} is ${typeof candidate[key]}, expected ${type} or nothing`);
     }
   }
+  const report: unknown = candidate['coverageReport'];
+  if (report !== undefined && report !== 'istanbul') {
+    // Naming a shape covsel has no reader for would mean nobody interprets the
+    // report: the adapter has deferred to covsel, and covsel cannot oblige.
+    fail(`coverageReport is ${JSON.stringify(report)}, expected 'istanbul' or nothing`);
+  }
   const globs: unknown = candidate['defaultTestGlobs'];
   if (globs !== undefined) {
     if (!Array.isArray(globs) || globs.some((g) => typeof g !== 'string')) {

@@ -16,6 +16,7 @@ import {
   type AffectedResult,
   type CoverageMap,
   type CovselConfig,
+  type CovselConfigInput,
   extractBlocks,
   makeMatcher,
   makeStrictMatcher,
@@ -190,12 +191,19 @@ function assertSharedSourceIsIndirect(spec: AdapterConformanceSpec): void {
   }
 }
 
-function createProject(spec: AdapterConformanceSpec): Project {
+function createProject(
+  spec: AdapterConformanceSpec,
+  /** Fixture config overrides, for a check that needs a different setting. */
+  override: CovselConfigInput = {},
+): Project {
   assertSharedSourceIsIndirect(spec);
   // Resolved the way the CLI resolves it, so an adapter that supplies its own
   // test globs is discovered here with no fixture configuration, exactly as a
   // project running `covsel record --adapter <name>` would discover it.
-  const config = resolveConfigFor(spec.adapter, spec.fixture.config);
+  const config = resolveConfigFor(spec.adapter, {
+    ...spec.fixture.config,
+    ...override,
+  });
   assertBlindSpotIsChangeableCode(spec, config);
   const cwd = realpathSync(
     mkdtempSync(
@@ -755,6 +763,46 @@ const CHECKS: { name: string; run: Check }[] = [
           }
         }
         return `full run: ${result.reason}`;
+      } finally {
+        project.dispose();
+      }
+    },
+  },
+  {
+    name: "an adapter that defers its report to covsel gets covsel's reading of it",
+    run: async (spec) => {
+      // Only for adapters that declare `coverageReport`. Everyone else obtains
+      // coverage some other way, and there is no deferral to hold them to.
+      if (spec.adapter.coverageReport === undefined) {
+        return 'not applicable: this adapter does not defer a report to covsel';
+      }
+
+      // The declaration says covsel's reader decides what the report credits,
+      // and the reader reads the same config as everything else. Granularity is
+      // where that is observable from outside: asked for file granularity, an
+      // adapter using covsel's reader emits no blocks, while one that kept its
+      // own reading of the report has to have remembered to. That is exactly the
+      // setting a second, private copy of the reader forgets -- and the drift is
+      // invisible until a map narrows by blocks it should not have.
+      const project = createProject(spec, { granularity: 'file' });
+      try {
+        const recorder = spec.adapter.createRecorder({
+          command: spec.fixture.command,
+          cwd: project.cwd,
+          config: project.config,
+        });
+        const units = await recorder.record(spec.fixture.units.a.testFile);
+        const withBlocks = units.filter((u) => u.blocks.length > 0);
+        if (withBlocks.length > 0) {
+          const first = withBlocks[0]!;
+          throw new Error(
+            `asked for file granularity, this recorder still reported ${first.blocks.length} block(s) for ` +
+              `${first.test.name ?? first.test.file}. An adapter declaring coverageReport '${spec.adapter.coverageReport}' ` +
+              `defers to covsel's reader, which reads granularity from the same config -- reporting blocks anyway means ` +
+              `something else is interpreting the report`,
+          );
+        }
+        return `honours file granularity, so covsel's reading of its ${spec.adapter.coverageReport} report is what counts`;
       } finally {
         project.dispose();
       }
