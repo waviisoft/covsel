@@ -48,7 +48,7 @@ a JSON reporter, then keeps the sources that file actually executed.
 - A configured `coverageThreshold` is neutralised while recording. Observing one
   test file at a time would trip a threshold meant for a whole run, and recording
   is an observation pass, not a quality gate.
-- Granularity is per **file** in this release; per-test precision is on the
-  roadmap.
+- Granularity is per **file**: one recorded unit per test file, so a change to a
+  source it covered selects the whole file rather than the individual test.
 - A runnable end-to-end example lives in
   [`examples/jest-basic`](https://github.com/waviisoft/covsel/tree/main/examples/jest-basic).

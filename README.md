@@ -4,10 +4,10 @@
 > static import-graph selection lies, and the only option for runners that have
 > no selection at all.
 
-**Status: early.** The `covsel record`, `affected`, `run`, and `status` loop
-works today, with block-hash (function-level) selection, per-test selection for
-node:test, scenario-level selection for cucumber-js, and a CI story for
-publishing and merging maps. More runner adapters are next. Track the work in the
+**Status: early.** The `covsel record`, `affected`, `run`, `watch`, `status`, and
+`merge` commands work today, with block-hash (function-level) selection, per-test
+selection for node:test, scenario-level selection for cucumber-js, and a
+documented CI recipe for restoring and merging maps. Track the work in the
 [issues](https://github.com/waviisoft/covsel/issues), and see
 [`DESIGN.md`](./DESIGN.md) for the architecture.
 
@@ -83,20 +83,23 @@ can't be sure, we run it.**
 
 ## Supported runners
 
-Runners that execute source directly work today through the generic wrap.
+Runners that execute source directly (`node --test`, Mocha on plain JavaScript)
+work through the generic wrap, which does not care which runner it is wrapping.
 Runners that transform sources first (Vitest, Jest) need a per-runner recorder
-that reads the runner's own coverage; both are done. Per-test selection ships
-for node:test, and scenario-level selection for cucumber-js.
+that reads the runner's own coverage; both are done. Per-test selection ships for
+node:test, and scenario-level selection for cucumber-js.
+
+Every adapter below runs the shared conformance suite, and the generic wrap,
+Vitest, Jest, and cucumber-js scenario selection each have a runnable
+[example](./examples) that CI drives end-to-end on every push:
 
 | Runner                     | Per-file          | Per-test / scenario |
 | -------------------------- | ----------------- | ------------------- |
-| Any command (generic wrap) | yes (direct-exec) | --                  |
+| Any command (generic wrap) | yes (direct-exec) | no                  |
 | node:test                  | yes (generic)     | yes (`--adapter`)   |
-| cucumber-js                | --                | yes (`--adapter`)   |
-| Mocha                      | yes (generic, JS) | later               |
-| Vitest                     | yes (`--adapter`) | later               |
-| Jest                       | yes (`--adapter`) | later               |
-| Playwright                 | planned (generic) | later               |
+| cucumber-js                | no                | yes (`--adapter`)   |
+| Vitest                     | yes (`--adapter`) | no                  |
+| Jest                       | yes (`--adapter`) | no                  |
 
 ## Packages
 

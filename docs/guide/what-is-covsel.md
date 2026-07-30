@@ -35,20 +35,19 @@ it's opt-in. See [Architecture](/guide/architecture) for the layered design.
 
 ## Supported runners
 
-Runners that execute source directly work today through the generic wrap.
-Runners that transform sources first (Vitest, Jest) need a per-runner recorder
-that reads the runner's own coverage -- Vitest is done. Per-test precision comes
-later. See [Adapters](/guide/adapters/) for how each is observed.
+Runners that execute source directly (`node --test`, Mocha on plain JavaScript)
+work through the generic wrap. Runners that transform sources first (Vitest,
+Jest) need a per-runner recorder that reads the runner's own coverage; both are
+done. Per-test selection ships for node:test, and scenario-level selection for
+cucumber-js. See [Adapters](/guide/adapters/) for how each is observed.
 
-| Runner                     | Per-file               | Per-test         |
-| -------------------------- | ---------------------- | ---------------- |
-| Any command (generic wrap) | yes (direct-exec)      | --               |
-| node:test                  | yes (generic)          | later            |
-| Mocha                      | yes (generic, JS)      | later            |
-| Vitest                     | yes (`--adapter`)      | later            |
-| Jest                       | planned (own coverage) | later            |
-| cucumber-js                | planned (generic)      | later (scenario) |
-| Playwright                 | planned (generic)      | later            |
+| Runner                     | Per-file          | Per-test          |
+| -------------------------- | ----------------- | ----------------- |
+| Any command (generic wrap) | yes (direct-exec) | no                |
+| node:test                  | yes (generic)     | yes (`--adapter`) |
+| cucumber-js                | no                | yes (scenario)    |
+| Vitest                     | yes (`--adapter`) | no                |
+| Jest                       | yes (`--adapter`) | no                |
 
 ## Prior art & credits
 

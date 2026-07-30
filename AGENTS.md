@@ -83,8 +83,18 @@ GitHub issues, not in source.
 
 The CLI (and any user-facing surface) exposes **only implemented behavior**.
 Don't add command stubs that error with "not implemented" — a command appears
-when it works. Planned UX is documented in the README/docs as "target UX," not
-wired into the tool. Likewise, don't advertise milestones in user-facing text.
+when it works.
+
+The README and the docs site follow the same rule: they describe **what the code
+does today**, not what it will do. Planned UX belongs in a GitHub issue, never in
+user-facing text as "target UX," a roadmap phase, or a support table cell reading
+"later" or "planned" — a reader must not have to guess which half of a page is
+real. State what a runner supports now; if the answer is "it doesn't," say that
+and let the issue tracker carry the rest. Likewise, don't advertise milestones.
+
+The corollary is that a shipped change updates the docs in the same PR. A cell
+that was true last month and is now understated is the same defect as one that
+promises work not done: both leave the next reader unable to trust the page.
 
 ## Testing
 

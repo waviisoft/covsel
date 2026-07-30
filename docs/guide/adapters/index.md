@@ -73,19 +73,25 @@ of covsel is identical regardless of which path recorded the map.
 
 ## Available adapters
 
-| Adapter (install separately) | Runner                   | How it records                     | Status    |
-| ---------------------------- | ------------------------ | ---------------------------------- | --------- |
-| `@covsel/adapter-generic`    | any direct-exec command  | `NODE_V8_COVERAGE` process         | published |
-| `@covsel/adapter-vitest`     | Vitest                   | Vitest's own V8 coverage           | published |
-| `@covsel/adapter-jest`       | Jest                     | Jest's own coverage                | published |
-| `@covsel/adapter-node-test`  | node:test                | inspector snapshot-diff (per-test) | published |
-| `@covsel/adapter-cucumber`   | cucumber-js              | inspector snapshot-diff (scenario) | published |
-| _(planned)_                  | Mocha , Playwright , ... | generic wrap / lifecycle shim      | later     |
+| Adapter (install separately) | Runner                  | How it records                     | Status    |
+| ---------------------------- | ----------------------- | ---------------------------------- | --------- |
+| `@covsel/adapter-generic`    | any direct-exec command | `NODE_V8_COVERAGE` process         | published |
+| `@covsel/adapter-vitest`     | Vitest                  | Vitest's own V8 coverage           | published |
+| `@covsel/adapter-jest`       | Jest                    | Jest's own coverage                | published |
+| `@covsel/adapter-node-test`  | node:test               | inspector snapshot-diff (per-test) | published |
+| `@covsel/adapter-cucumber`   | cucumber-js             | inspector snapshot-diff (scenario) | published |
 
 The generic, Vitest, and Jest adapters record at whole-file granularity. The
 node:test and cucumber-js adapters record each **test** or **scenario**
 individually and run only the affected ones -- which is the only selection
 cucumber-js has.
+
+Any other runner that executes your source directly is already covered at file
+level by the generic adapter, which does not care what it is wrapping -- Mocha on
+plain JavaScript needs no package of its own. An adapter of its own is what buys
+the two things the wrap cannot do: recording a runner that transforms or bundles
+its sources, and narrowing selection below the file. That is the
+[contribution surface](/guide/adapters/writing-an-adapter) below.
 
 ## Writing an adapter
 

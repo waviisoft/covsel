@@ -29,7 +29,7 @@ features:
     details: >-
       It depends only on the two things every JS/TS runner shares: V8 can
       observe the code, and every runner accepts a list of test files. Vitest,
-      Jest, Mocha, node:test, cucumber-js, Playwright.
+      Jest, node:test, cucumber-js, and any command that executes your source.
   - title: Fails open, loudly
     details: >-
       The catastrophic failure is skipping a test that should have run. Every
@@ -38,7 +38,8 @@ features:
 ---
 
 ::: tip Status: early
-File-level selection ships now — `covsel record`, `affected`, `run`, and
-`status`. Block-hash granularity and per-test precision are next. See the
-[roadmap](/guide/roadmap).
+Selection ships today — `covsel record`, `affected`, `run`, `watch`, `status`,
+and `merge` — with function-level (block-hash) precision, per-test selection for
+node:test, and scenario-level selection for cucumber-js. What is planned lives in
+the [issue tracker](https://github.com/waviisoft/covsel/issues).
 :::
