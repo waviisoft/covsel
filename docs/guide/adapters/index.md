@@ -79,19 +79,21 @@ of covsel is identical regardless of which path recorded the map.
 | `@covsel/adapter-vitest`     | Vitest                  | Vitest's own V8 coverage           |
 | `@covsel/adapter-jest`       | Jest                    | Jest's own coverage                |
 | `@covsel/adapter-node-test`  | node:test               | inspector snapshot-diff (per-test) |
+| `@covsel/adapter-mocha`      | Mocha                   | inspector snapshot-diff (per-test) |
 | `@covsel/adapter-cucumber`   | cucumber-js             | inspector snapshot-diff (scenario) |
 
 The generic, Vitest, and Jest adapters record at whole-file granularity. The
-node:test and cucumber-js adapters record each **test** or **scenario**
+node:test, Mocha, and cucumber-js adapters record each **test** or **scenario**
 individually and run only the affected ones -- which for cucumber-js is the only
 selection it has natively.
 
 Any other runner that executes your source directly is already covered at file
-level by the generic adapter, which does not care what it is wrapping -- Mocha on
-plain JavaScript needs no package of its own. An adapter of its own is what buys
-the two things the wrap cannot do: recording a runner that transforms or bundles
-its sources, and narrowing selection below the file. That is the
-[contribution surface](/guide/adapters/writing-an-adapter) below.
+level by the generic adapter, which does not care what it is wrapping: Mocha
+records and selects through the wrap with no Mocha-specific code, and
+`@covsel/adapter-mocha` exists only to narrow a run below the file. An adapter of
+its own is what buys the two things the wrap cannot do: recording a runner that
+transforms or bundles its sources, and narrowing selection below the file. That
+is the [contribution surface](/guide/adapters/writing-an-adapter) below.
 
 ## Writing an adapter
 

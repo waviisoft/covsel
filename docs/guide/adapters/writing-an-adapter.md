@@ -44,7 +44,12 @@ runner":
 3. **`runSelection({ selected, command, cwd })`** -- if the runner can be told to
    run individual tests (a name filter, a tag, a `file:line`), turn a selection
    into that invocation and return its exit code. Without one, covsel appends
-   `formatSelection`'s file list to the command instead.
+   `formatSelection`'s file list to the command instead. When the filter is a
+   single regex over test names -- node:test's `--test-name-pattern`, Mocha's
+   `--grep`, cucumber's `--name` -- build it with `testNamePattern` from
+   `@covsel/core`, which escapes and anchors the names. Hand-rolling it is how a
+   test called `a+b (finally)` becomes a valid pattern that matches nothing, and
+   the run then passes having executed none of the affected tests.
 4. **`defaultTestGlobs`** -- how to discover tests when the project has not set
    `testGlobs`. Only needed when your runner's tests are not `*.test.*` sources;
    cucumber's are `.feature` files, so its adapter supplies `['**/*.feature']`.

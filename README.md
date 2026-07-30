@@ -104,10 +104,10 @@ Runners that execute source directly (`node --test`, Mocha on plain JavaScript)
 work through the generic wrap, which does not care which runner it is wrapping.
 Runners that transform sources first (Vitest, Jest) need a per-runner recorder
 that reads the runner's own coverage; both are done. Per-test selection ships for
-node:test, and scenario-level selection for cucumber-js.
+node:test and Mocha, and scenario-level selection for cucumber-js.
 
 Every adapter below runs the shared conformance suite, and the generic wrap,
-Vitest, Jest, and cucumber-js scenario selection each have a runnable
+Vitest, Jest, Mocha, and cucumber-js scenario selection each have a runnable
 [example](./examples) that CI drives end-to-end on every pull request and on
 `main`:
 
@@ -115,6 +115,7 @@ Vitest, Jest, and cucumber-js scenario selection each have a runnable
 | -------------------------- | ------------------- | ------------------- |
 | Any command (generic wrap) | yes (direct-exec)   | no                  |
 | node:test                  | yes (generic)       | yes (`--adapter`)   |
+| Mocha                      | yes (generic)       | yes (`--adapter`)   |
 | cucumber-js                | yes (feature files) | yes (`--adapter`)   |
 | Vitest                     | yes (`--adapter`)   | no                  |
 | Jest                       | yes (`--adapter`)   | no                  |
@@ -129,6 +130,7 @@ Vitest, Jest, and cucumber-js scenario selection each have a runnable
 | `@covsel/adapter-vitest`    | Vitest adapter (records via Vitest's own V8 coverage)                    |
 | `@covsel/adapter-jest`      | Jest adapter (records via Jest's own coverage)                           |
 | `@covsel/adapter-node-test` | node:test adapter (per-test selection via the inspector observer)        |
+| `@covsel/adapter-mocha`     | Mocha adapter (per-test selection via the inspector observer)            |
 | `@covsel/adapter-cucumber`  | cucumber-js adapter (scenario-level selection)                           |
 | `@covsel/conformance`       | The shared suite every adapter must pass                                 |
 | `@covsel/adapter-*`         | Per-runner adapters (community contribution lane)                        |

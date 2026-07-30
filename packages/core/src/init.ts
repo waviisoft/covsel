@@ -89,7 +89,7 @@ const RUNNERS: readonly RunnerSignature[] = [
   },
   {
     name: 'mocha',
-    adapter: 'generic',
+    adapter: 'mocha',
     deps: ['mocha'],
     scripts: [/\bmocha\b/],
     command: 'mocha',
@@ -105,7 +105,13 @@ const RUNNERS: readonly RunnerSignature[] = [
  */
 export function knownAdapters(): string[] {
   return [
-    ...new Set(RUNNERS.flatMap((r) => (r.adapter === undefined ? [] : [r.adapter]))),
+    ...new Set([
+      ...RUNNERS.flatMap((r) => (r.adapter === undefined ? [] : [r.adapter])),
+      // The wrap-any-command adapter belongs to no single runner, so the table
+      // never names it -- and it is the name most worth measuring a typo
+      // against, being the one covsel falls back to with no `--adapter` at all.
+      'generic',
+    ]),
   ];
 }
 
