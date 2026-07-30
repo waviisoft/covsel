@@ -11,7 +11,14 @@ export default {
   // Recorded and selected through Vitest's own coverage, since Vitest evaluates
   // transformed sources and the generic wrap would never see `packages/*/src`.
   // Named here rather than passed as `--adapter` on every invocation.
-  adapter: 'vitest',
+  //
+  // By path, not by package name, and deliberately so: adding
+  // `@covsel/adapter-vitest` to the root manifest puts it in the repository's own
+  // `node_modules`, which changes how `covsel init` resolves it from a throwaway
+  // project and breaks the CLI tests that cover "already set up". This repository
+  // is the adapter's source, not a consumer of a published copy, so pointing at
+  // the workspace directory is both accurate and inert.
+  adapter: './packages/adapter-vitest',
 
   // The suite vitest itself runs. The golden example end-to-end scripts under
   // examples/ are shell, driven by their own CI steps, and are not selected.
@@ -38,8 +45,16 @@ export default {
    * exists to prove the observer works would sit the run out. Listing them here
    * is the honest answer while the adapter's `observes` claim stays `**`.
    *
-   * Recomputing this list is mechanical: record, then look for entries whose
-   * `files` array is empty.
+   * This list is the weak point of covsel's own adoption, and worth naming as
+   * such: nothing detects a *fourth* test becoming child-process-only. When that
+   * happens it silently stops being selected, and the guard it provides is lost
+   * from the selecting job until someone notices. Recomputing the list is
+   * mechanical — record, then look for entries whose `files` array is empty — but
+   * mechanical is not the same as automatic.
+   *
+   * covsel/covsel#55 tracks the general defect. Treating a zero-source entry as
+   * unknown coverage rather than measured absence, the way a test file with no
+   * entry at all is already treated, would make this list unnecessary.
    */
   alwaysRun: [
     'packages/cli/test/built-artifact.test.ts',

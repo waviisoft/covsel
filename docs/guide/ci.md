@@ -59,6 +59,14 @@ to carry `.covsel` between jobs carries it too. `--archive <dir>` puts it
 somewhere else — a shared volume, an artifact directory. Publishing keeps the 20
 newest maps and prunes the rest; `--keep <n>` changes that.
 
+Each archived map is named for the instant it was recorded and the commit it
+records, so choosing one needs no file opened until the choice is made. That
+matters at scale: a map is not small — covsel's own is over half a megabyte for a
+modest repository — so `keep` multiplies whatever yours weighs. Twenty maps of half
+a megabyte is nothing; twenty of fifty megabytes is a gigabyte, against a 10 GB
+per-repository limit on the GitHub Actions cache. If your maps are large, lower
+`--keep` rather than discovering the ceiling later.
+
 Two things `publish` refuses, both loudly:
 
 - A map that records **no commit**, since nothing could ever measure change from

@@ -15,6 +15,7 @@ import {
   type ArchivedMap,
   archiveDirFor,
   chooseArchivedMap,
+  readArchivedMap,
   type CommitChecks,
   type CoverageMap,
   createGenericRecorder,
@@ -66,25 +67,50 @@ function checks(init: { has?: string[]; ancestors?: string[] }): CommitChecks {
   return { has: (c) => has.has(c), isAncestor: (c) => ancestors.has(c) };
 }
 
-const archived = (commit: string, recordedAt: string): ArchivedMap => ({
-  commit,
-  recordedAt,
-  file: join(dir, `${commit}.json`),
-});
+/** An entry as `listArchive` would report it, without touching the disk. */
+const archived = (commit: string, recordedAt: string): ArchivedMap => {
+  const ms = Date.parse(recordedAt);
+  return {
+    commit,
+    recordedAtMs: ms,
+    file: join(dir, `${String(ms).padStart(15, '0')}-${commit}.json`),
+  };
+};
+
+/** An archive-shaped path for a commit and instant, for writing junk into. */
+const stale = (commit: string, recordedAt: string): string =>
+  join(dir, `${String(Date.parse(recordedAt)).padStart(15, '0')}-${commit}.json`);
+
+/** The single file an archive holds for a commit, or undefined. */
+const fileFor = (commit: string): string | undefined =>
+  readdirSync(dir).find((n) => n.endsWith(`-${commit}.json`));
 
 describe('a recorded map is published under the commit it records', () => {
   it('writes the map addressed by its commit', () => {
     const result = publishMap({ dir, map: mapAt(sha(1), '2026-07-01T00:00:00.000Z') });
     expect(result.ok).toBe(true);
-    expect(readdirSync(dir)).toEqual([`${sha(1)}.json`]);
+    expect(fileFor(sha(1))).toBeDefined();
     expect(listArchive(dir).map((m) => m.commit)).toEqual([sha(1)]);
+  });
+
+  it('names the file so listing needs no file reads', () => {
+    // Both facts listing needs are in the name: the recorded instant, so the
+    // ordering is a string sort, and the commit, so ancestry needs nothing opened.
+    publishMap({ dir, map: mapAt(sha(1), '2026-07-01T00:00:00.000Z') });
+    expect(readdirSync(dir)).toEqual([
+      `${String(Date.parse('2026-07-01T00:00:00.000Z')).padStart(15, '0')}-${sha(1)}.json`,
+    ]);
   });
 
   it('replaces rather than duplicates when the same commit is published again', () => {
     publishMap({ dir, map: mapAt(sha(1), '2026-07-01T00:00:00.000Z') });
     publishMap({ dir, map: mapAt(sha(1), '2026-07-02T00:00:00.000Z') });
-    expect(readdirSync(dir)).toEqual([`${sha(1)}.json`]);
-    expect(listArchive(dir)[0]?.recordedAt).toBe('2026-07-02T00:00:00.000Z');
+    // A re-record has a different instant and so a different name; the older file
+    // has to go by commit rather than be overwritten by path.
+    expect(readdirSync(dir)).toHaveLength(1);
+    const only = listArchive(dir)[0];
+    expect(only?.commit).toBe(sha(1));
+    expect(only && readArchivedMap(only)?.recordedAt).toBe('2026-07-02T00:00:00.000Z');
   });
 });
 
@@ -137,26 +163,52 @@ describe('listing an archive', () => {
     expect(listArchive(dir).map((m) => m.commit)).toEqual([sha(1), sha(2)]);
   });
 
-  it('skips files that are not usable maps rather than failing', () => {
+  it("ignores files that are not an archive's, since the directory may be shared", () => {
     publishMap({ dir, map: mapAt(sha(1), '2026-07-01T00:00:00.000Z') });
-    writeFileSync(join(dir, `${sha(2)}.json`), 'not json');
-    writeFileSync(join(dir, `${sha(3)}.json`), '{"schemaVersion":0,"entries":[]}');
     writeFileSync(join(dir, 'notes.txt'), 'ignored');
+    writeFileSync(join(dir, 'map.json'), '{}');
+    writeFileSync(join(dir, `${sha(2)}.json`), '{}'); // no instant in the name
     expect(listArchive(dir).map((m) => m.commit)).toEqual([sha(1)]);
   });
 
-  it('skips a map whose own commit disagrees with its file name', () => {
+  it('lists a file whose contents are unusable, so it can still age out', () => {
+    // The opposite of ignoring it. Judged by usability, a map left behind by an
+    // older schema would be invisible to pruning and would sit in the archive --
+    // and in every cache entry copied from it -- forever.
+    publishMap({ dir, map: mapAt(sha(1), '2026-07-01T00:00:00.000Z') });
+    writeFileSync(stale(sha(2), '2026-07-02T00:00:00.000Z'), 'not json');
+    expect(listArchive(dir).map((m) => m.commit)).toEqual([sha(2), sha(1)]);
+  });
+
+  it('reads back nothing for a map whose own commit disagrees with its name', () => {
     // Filed under one commit, describing another: ancestry would be tested
     // against the name and the diff taken from the content.
-    writeFileSync(
-      join(dir, `${sha(1)}.json`),
-      JSON.stringify(mapAt(sha(2), '2026-07-01T00:00:00.000Z')),
-    );
-    expect(listArchive(dir)).toEqual([]);
+    const file = stale(sha(1), '2026-07-01T00:00:00.000Z');
+    writeFileSync(file, JSON.stringify(mapAt(sha(2), '2026-07-01T00:00:00.000Z')));
+    const entry = listArchive(dir)[0];
+    expect(entry?.commit).toBe(sha(1));
+    expect(entry && readArchivedMap(entry)).toBeUndefined();
   });
 
   it('is empty for a directory that does not exist', () => {
     expect(listArchive(join(dir, 'nope'))).toEqual([]);
+  });
+});
+
+describe('pruning counts every archived file, usable or not', () => {
+  it('ages out maps an upgrade made unreadable', () => {
+    // A schema bump invalidates every stored map at once. They must still be
+    // reclaimable, or the archive grows without bound.
+    for (let i = 1; i <= 5; i++) {
+      writeFileSync(stale(sha(i), `2026-07-0${i}T00:00:00.000Z`), '{"schemaVersion":1}');
+    }
+    const result = publishMap({
+      dir,
+      map: mapAt(sha(9), '2026-07-09T00:00:00.000Z'),
+      keep: 2,
+    });
+    expect(result.ok === true && result.pruned).toEqual([sha(4), sha(3), sha(2), sha(1)]);
+    expect(readdirSync(dir)).toHaveLength(2);
   });
 });
 
@@ -253,6 +305,24 @@ describe('fetching installs the chosen map', () => {
       readFileSync(join(cwd, config.store.dir, 'map.json'), 'utf8'),
     ) as CoverageMap;
     expect(installed.commit).toBe(sha(1));
+  });
+
+  it('passes over an unusable map and takes the next one it can use', async () => {
+    // One map left behind by an older schema must not cost the job the newer ones
+    // behind it. The unusable one is the newest, so it is chosen first, rejected
+    // on reading, and dropped from the choice.
+    publishMap({ dir, map: mapAt(sha(1), '2026-07-01T00:00:00.000Z') });
+    writeFileSync(stale(sha(2), '2026-07-05T00:00:00.000Z'), '{"schemaVersion":1}');
+
+    const result = await fetchMap({
+      cwd,
+      dir,
+      storeDir: config.store.dir,
+      checks: checks({ ancestors: [sha(1), sha(2)] }),
+    });
+    expect(result.ok).toBe(true);
+    expect(result.ok === true && result.commit).toBe(sha(1));
+    expect(result.skipped.map((s) => s.commit)).toContain(sha(2));
   });
 
   it('installs nothing and says so when the archive holds nothing usable', async () => {

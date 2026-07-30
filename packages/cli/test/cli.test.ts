@@ -3,6 +3,7 @@ import {
   existsSync,
   mkdirSync,
   mkdtempSync,
+  readdirSync,
   readFileSync,
   rmSync,
   writeFileSync,
@@ -51,6 +52,14 @@ afterEach(() => {
 afterAll(() => {
   for (const dir of dirs) rmSync(dir, { recursive: true, force: true });
 });
+
+/**
+ * Whether an archive holds a map for a commit. Archived names carry the recorded
+ * instant as well as the commit, so the commit is a suffix rather than the name.
+ */
+function archivedUnder(dir: string, commit: string): boolean {
+  return existsSync(dir) && readdirSync(dir).some((n) => n.endsWith(`-${commit}.json`));
+}
 
 /** Write a map into a project's store, with only the fields a test cares about. */
 function writeMap(cwd: string, fields: { commit?: string; recordedAt: string }): void {
@@ -704,7 +713,7 @@ describe('covsel publish and fetch', () => {
         const res = await capture(() => main(['publish']));
         return {
           ...res,
-          archived: existsSync(join(cwd, '.covsel', 'archive', `${commit}.json`)),
+          archived: archivedUnder(join(cwd, '.covsel', 'archive'), commit),
         };
       },
     );
@@ -720,7 +729,7 @@ describe('covsel publish and fetch', () => {
       async (cwd) => {
         writeMap(cwd, { commit, recordedAt: '2026-07-01T00:00:00.000Z' });
         const res = await capture(() => main(['publish', '--archive', 'maps']));
-        return { ...res, archived: existsSync(join(cwd, 'maps', `${commit}.json`)) };
+        return { ...res, archived: archivedUnder(join(cwd, 'maps'), commit) };
       },
     );
     expect(code).toBe(0);

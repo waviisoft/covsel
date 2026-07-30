@@ -32,8 +32,18 @@ keeps its 20 newest maps (`--keep <n>`).
 without `--force`, so it cannot quietly undo a developer's own recording; CI
 never meets that case, since a fresh checkout has no local map.
 
-`@covsel/core` gains `publishMap`, `fetchMap`, `listArchive`, `chooseArchivedMap`,
-`gitCommitChecks`, `archiveDirFor`, `isAncestorCommit`, and
+An archived map is named for the instant it was recorded and the commit it records,
+so listing an archive opens nothing — a map is not small, and parsing every
+candidate to recover two fields would mean reading hundreds of megabytes before a
+job's first test. It also means every archived file is a pruning candidate whatever
+its contents, which matters after a schema bump: judged by usability, the maps an
+upgrade invalidated would be invisible to `--keep` and would sit in the archive, and
+in every cache entry copied from it, forever. Whether a chosen map is usable is
+settled when it is opened, and an unusable one is passed over for the next
+candidate rather than failing the fetch.
+
+`@covsel/core` gains `publishMap`, `fetchMap`, `listArchive`, `readArchivedMap`,
+`chooseArchivedMap`, `gitCommitChecks`, `archiveDirFor`, `isAncestorCommit`, and
 `CovselConfig.store.archiveDir` (default `archive`, read relative to the store
 directory so caching the store carries the archive with it).
 

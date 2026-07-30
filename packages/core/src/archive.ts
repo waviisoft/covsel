@@ -52,23 +52,46 @@ export function archiveDirFor(cwd: string, config: Pick<CovselConfig, 'store'>):
  */
 const COMMIT = /^[0-9a-f]{7,64}$/i;
 
-/** One map in an archive. */
+/**
+ * An archived map's file name: when it was recorded, then the commit it records.
+ *
+ * Both facts are in the name so that listing an archive needs no file reads at
+ * all. That is not micro-optimisation: covsel's own map is over half a megabyte
+ * for a small repository, and a monorepo's is far larger, so parsing every
+ * candidate to recover two fields would mean reading hundreds of megabytes before
+ * a single test runs. It also means every correctly-named file is listed whatever
+ * its contents, so nothing can hide from pruning by being unreadable.
+ *
+ * The stamp is fixed-width milliseconds so the names sort chronologically as
+ * strings, and wide enough not to overflow for the next few thousand years.
+ */
+const NAME = /^(\d{15})-([0-9a-f]{7,64})\.json$/i;
+const STAMP_WIDTH = 15;
+
+function archiveName(commit: string, recordedAt: string): string {
+  return `${String(instant(recordedAt)).padStart(STAMP_WIDTH, '0')}-${commit}.json`;
+}
+
+/** One map in an archive, as its file name describes it. */
 export interface ArchivedMap {
-  /** The commit the map was recorded on, which is also its file name. */
+  /** The commit the map records. */
   commit: string;
-  /** When it was recorded, as the map records it. */
-  recordedAt?: string;
+  /** When it was recorded, as an ISO instant is not recoverable from the name. */
+  recordedAtMs: number;
   /** Absolute path of the map file. */
   file: string;
 }
 
 /**
- * Every usable map in an archive, newest first.
+ * Every archived map, newest first, read from file names alone.
  *
- * An unreadable, unparseable, or wrong-schema file is skipped rather than
- * reported: the archive is a cache, an upgrade invalidates all of it at once,
- * and the caller's answer to "nothing usable here" is already a full run. Ties
- * on `recordedAt` break by commit so the choice is stable across jobs.
+ * Names that are not an archive's are ignored — the directory may be shared with
+ * something else, and covsel does not own files it did not write. Ties on the
+ * recorded instant break by commit, so the choice is stable across jobs.
+ *
+ * Nothing here says whether a map is *usable*; that needs the contents, and is
+ * settled when one is actually chosen. Listing deliberately does not care, so an
+ * unreadable or wrong-schema map still occupies a slot and still ages out.
  */
 export function listArchive(dir: string): ArchivedMap[] {
   let names: string[];
@@ -79,37 +102,20 @@ export function listArchive(dir: string): ArchivedMap[] {
   }
   const found: ArchivedMap[] = [];
   for (const name of names) {
-    if (!name.endsWith('.json')) continue;
-    const commit = name.slice(0, -'.json'.length);
-    if (!COMMIT.test(commit)) continue;
-    const file = join(dir, name);
-    let parsed: unknown;
-    try {
-      parsed = JSON.parse(readFileSync(file, 'utf8'));
-    } catch {
-      continue;
-    }
-    if (!isUsableMap(parsed)) continue;
-    // The commit in the file name is what the archive is addressed by, and a map
-    // whose own commit disagrees with it is not a map of the commit it was filed
-    // under. Ancestry would then be tested against one commit and the diff taken
-    // from another, which is how a map ends up trusted for a tree it never
-    // described.
-    if (parsed.commit !== commit) continue;
+    const match = NAME.exec(name);
+    if (match?.[1] === undefined || match[2] === undefined) continue;
     found.push({
-      commit,
-      ...(parsed.recordedAt !== undefined ? { recordedAt: parsed.recordedAt } : {}),
-      file,
+      commit: match[2],
+      recordedAtMs: Number(match[1]),
+      file: join(dir, name),
     });
   }
   return found.sort(byNewest);
 }
 
-/** Newest first, by recorded instant; an undated map sorts oldest. */
+/** Newest first by recorded instant, then by commit so ordering is total. */
 function byNewest(a: ArchivedMap, b: ArchivedMap): number {
-  const at = instant(a.recordedAt);
-  const bt = instant(b.recordedAt);
-  if (at !== bt) return bt - at;
+  if (a.recordedAtMs !== b.recordedAtMs) return b.recordedAtMs - a.recordedAtMs;
   return a.commit < b.commit ? -1 : a.commit > b.commit ? 1 : 0;
 }
 
@@ -117,6 +123,26 @@ function instant(recordedAt: string | undefined): number {
   if (recordedAt === undefined) return 0;
   const parsed = Date.parse(recordedAt);
   return Number.isNaN(parsed) ? 0 : parsed;
+}
+
+/**
+ * Read an archived map, or `undefined` when it is not one this checkout can use.
+ *
+ * The commit in the name is what the archive is addressed by, so a map whose own
+ * commit disagrees with it is rejected: ancestry would otherwise be tested against
+ * one commit and the diff taken from another, which is how a map ends up trusted
+ * for a tree it never described.
+ */
+export function readArchivedMap(entry: ArchivedMap): CoverageMap | undefined {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(readFileSync(entry.file, 'utf8'));
+  } catch {
+    return undefined;
+  }
+  if (!isUsableMap(parsed)) return undefined;
+  if (parsed.commit !== entry.commit) return undefined;
+  return parsed;
 }
 
 export interface PublishInit {
@@ -168,17 +194,34 @@ export function publishMap(init: PublishInit): PublishResult {
     return { ok: false, reason: `'${map.commit}' is not a commit hash` };
   }
 
-  const file = join(dir, `${map.commit}.json`);
   mkdirSync(dir, { recursive: true });
+  // Re-recording a commit supersedes the older reading rather than accumulating
+  // two answers for one tree. The name carries the recorded instant, so the
+  // previous file for this commit has a different name and has to be removed by
+  // commit rather than overwritten by path.
+  for (const existing of listArchive(dir)) {
+    if (existing.commit !== map.commit) continue;
+    try {
+      rmSync(existing.file);
+    } catch {
+      /* a file that will not go is not a failed publish */
+    }
+  }
+
+  const file = join(dir, archiveName(map.commit, map.recordedAt));
   // Formatted exactly as the local store writes a map, so an archived map is
   // byte-identical to the one `covsel record` produced.
   writeFileSync(file, `${JSON.stringify(map, null, 2)}\n`);
 
   // Prune after writing: the map just published is the one that must survive,
   // and counting it in means a `keep` of 1 keeps it rather than the previous one.
+  //
+  // Listing is name-based, so every archived file is a candidate whatever its
+  // contents. That matters after a schema bump, which makes every stored map
+  // unusable at once: judged by usability they would all be invisible here and
+  // would sit in the archive — and in every cache entry copied from it — forever.
   const pruned: string[] = [];
-  const kept = listArchive(dir);
-  for (const stale of kept.slice(keep)) {
+  for (const stale of listArchive(dir).slice(keep)) {
     try {
       rmSync(stale.file);
       pruned.push(stale.commit);
@@ -314,7 +357,8 @@ export type FetchResult =
       how: 'ancestor' | 'present';
       /** Where the map was installed. */
       mapPath: string;
-      recordedAt?: string;
+      /** The instant the chosen map records, as it records it. */
+      recordedAt: string;
       skipped: SkippedMap[];
     }
   | { ok: false; reason: string; skipped: SkippedMap[] };
@@ -329,72 +373,69 @@ export type FetchResult =
  */
 export async function fetchMap(init: FetchInit): Promise<FetchResult> {
   const { cwd, dir, storeDir } = init;
-  const candidates = listArchive(dir);
-  if (candidates.length === 0) {
+  const checks = init.checks ?? gitCommitChecks(cwd);
+  const store = new LocalStore({ cwd, dir: storeDir });
+  let remaining = listArchive(dir);
+  if (remaining.length === 0) {
     return {
       ok: false,
       reason: existsSync(dir)
-        ? `no usable map in ${dir}`
+        ? `no archived map in ${dir}`
         : `no archive at ${dir} (nothing has been published yet?)`,
       skipped: [],
     };
   }
-  const choice = chooseArchivedMap(candidates, init.checks ?? gitCommitChecks(cwd));
-  if (choice.kind === 'none') {
-    return {
-      ok: false,
-      reason: `no map in ${dir} records a commit this checkout can measure change from`,
-      skipped: choice.skipped,
-    };
-  }
 
-  const store = new LocalStore({ cwd, dir: storeDir });
-  // A developer who recorded locally has a map describing their own tree, which
-  // is better than anything an archive holds. Refusing to overwrite it keeps
-  // `fetch` from quietly undoing a recording, and CI never hits this because a
-  // fresh checkout has no local map.
-  if (init.force !== true) {
-    const local = await store.read();
-    if (local !== undefined && isNewer(local.recordedAt, choice.map.recordedAt)) {
+  // Listing reads names, not contents, so whether a chosen map is *usable* is
+  // only known once it is opened. An unusable one is dropped and the choice
+  // retried over what is left, rather than failing the fetch — a single map left
+  // behind by an older schema must not cost a job the newer ones that follow it.
+  const skipped: SkippedMap[] = [];
+  for (;;) {
+    const choice = chooseArchivedMap(remaining, checks);
+    if (choice.kind === 'none') {
       return {
         ok: false,
-        reason:
-          `the local map at ${store.path()} was recorded more recently than ` +
-          `${choice.map.commit}; pass --force to replace it`,
-        skipped: choice.skipped,
+        reason: `no map in ${dir} records a commit this checkout can measure change from`,
+        skipped: [...skipped, ...choice.skipped],
       };
     }
-  }
 
-  let map: unknown;
-  try {
-    map = JSON.parse(readFileSync(choice.map.file, 'utf8'));
-  } catch {
+    const map = readArchivedMap(choice.map);
+    if (map === undefined) {
+      skipped.push({
+        commit: choice.map.commit,
+        reason: 'not a usable map (recorded by a different covsel version?)',
+      });
+      remaining = remaining.filter((entry) => entry !== choice.map);
+      continue;
+    }
+
+    // A developer who recorded locally has a map describing their own tree, which
+    // is better than anything an archive holds. Refusing to overwrite it keeps
+    // `fetch` from quietly undoing a recording, and CI never hits this because a
+    // fresh checkout has no local map.
+    if (init.force !== true) {
+      const local = await store.read();
+      if (local !== undefined && instant(local.recordedAt) > instant(map.recordedAt)) {
+        return {
+          ok: false,
+          reason:
+            `the local map at ${store.path()} was recorded more recently than ` +
+            `${choice.map.commit}; pass --force to replace it`,
+          skipped: [...skipped, ...choice.skipped],
+        };
+      }
+    }
+
+    await store.write(map);
     return {
-      ok: false,
-      reason: `${choice.map.file} could not be read`,
-      skipped: choice.skipped,
+      ok: true,
+      commit: choice.map.commit,
+      how: choice.how,
+      mapPath: store.path(),
+      recordedAt: map.recordedAt,
+      skipped: [...skipped, ...choice.skipped],
     };
   }
-  if (!isUsableMap(map)) {
-    return {
-      ok: false,
-      reason: `${choice.map.file} is not a usable map`,
-      skipped: choice.skipped,
-    };
-  }
-  await store.write(map);
-  return {
-    ok: true,
-    commit: choice.map.commit,
-    how: choice.how,
-    mapPath: store.path(),
-    ...(choice.map.recordedAt !== undefined ? { recordedAt: choice.map.recordedAt } : {}),
-    skipped: choice.skipped,
-  };
-}
-
-/** True when `a` names a later instant than `b`. */
-function isNewer(a: string | undefined, b: string | undefined): boolean {
-  return instant(a) > instant(b);
 }

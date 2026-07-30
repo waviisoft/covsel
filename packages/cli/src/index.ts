@@ -767,7 +767,15 @@ async function cmdPublish(argv: string[]): Promise<number> {
   const store = new LocalStore({ cwd, dir: config.store.dir });
   const map = await store.read();
   if (map === undefined) {
-    err(`covsel publish: no usable map at ${store.path()} -- run covsel record first\n`);
+    // A map that is present but rejected is a different problem from no map at
+    // all, and after a schema bump it is the common one. Pointing at "record
+    // first" would be right by accident and misleading on the way there.
+    err(
+      existsSync(store.path())
+        ? `covsel publish: the map at ${store.path()} is not usable ` +
+            `(recorded by a different covsel version?) -- re-record it\n`
+        : `covsel publish: no map at ${store.path()} -- run covsel record first\n`,
+    );
     return 1;
   }
 
