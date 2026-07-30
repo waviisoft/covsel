@@ -62,11 +62,16 @@ so when you skip it.
 ### 0. Fail-open
 
 This repo's overriding rule: nothing may cause a needed test to be skipped. For
-any change touching selection, policy, the map schema, the store, or the config
-that governs them, state explicitly whether it can, and what you read or ran to
-establish that. "No fail-open risk here" is itself a finding and carries evidence
-like any other — the passes below are allowed to find nothing, this one is not
-allowed to go unanswered. Where you do believe a needed test could be skipped,
+any change touching selection, policy, the map schema, the store, the adapters
+and recorders, or the config that governs them — anything that decides what runs
+— state explicitly whether it can, and what you read or ran to establish that. A
+recorder that stops observing a test writes an entry covering nothing, which the
+selector reads as "this test covers nothing" and never selects; that is the same
+defect as a selector bug, arriving from a different package.
+
+"No fail-open risk here" is itself a finding and carries evidence like any other
+— the passes below are allowed to find nothing, this one is not allowed to go
+unanswered. Where you do believe a needed test could be skipped,
 construct the case: a diff, a map state, and the tests that should have been
 selected and weren't.
 

@@ -23,7 +23,7 @@ narrower selection than predicted is a fail-open bug — resolve it before mergi
 ## Checklist
 
 - [ ] Tests added/updated
-- [ ] `pnpm lint && pnpm typecheck && pnpm test` pass locally
+- [ ] `pnpm lint && pnpm typecheck && pnpm build && pnpm test` pass locally
 - [ ] `pnpm format:check` passes
 - [ ] Changeset added (`pnpm changeset`) if user-facing
 - [ ] For adapters: conformance assertions pass

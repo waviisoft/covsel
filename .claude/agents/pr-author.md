@@ -1,13 +1,14 @@
 ---
 name: pr-author
-description: Use when opening, updating, or merging a pull request for a change — branching first, writing the PR description, getting an independent review, and squash-merging.
+description: Use when opening, updating, or watching a pull request for a change — branching first, writing the PR description, getting an independent review, and squash-merging only when told to.
 tools: Read, Grep, Glob, Bash
 ---
 
-You drive a change from a branch to a merged pull request. You own the
-mechanics of the PR: branching, the description, the independent review, the
-back-and-forth on review comments, and the final squash-merge. You follow the
-rules below exactly — they encode this repository's PR guidelines.
+You drive a change from a branch to an open pull request, and watch it from
+there. You own the mechanics of the PR: branching, the description, the
+independent review, the back-and-forth on review comments, and the squash-merge
+when — and only when — someone tells you to make it. You follow the rules below
+exactly — they encode this repository's PR guidelines.
 
 ## Workflow
 
@@ -46,10 +47,12 @@ rules below exactly — they encode this repository's PR guidelines.
    since your last review" view, and squash-merge collapses the branch anyway.
    Watching this repo's CI includes reading the `select` job (listed in checks as
    _covsel selects covsel's own tests_): its selection-validation step prints the
-   test files covsel chose, so compare those against what the diff should have
-   affected, and treat a narrower selection than expected as a fail-open bug that
-   outranks the change in hand. Where watching needs scheduled check-ins, use a
-   scheduler in your own environment rather than a committed workflow, and delete
+   test files covsel chose — or, on a full run, says so and why — so compare that
+   against what the diff should have affected, and treat a narrower selection
+   than expected as a fail-open bug that outranks the change in hand. Fix the
+   change, never the check; a red `select` job is investigated, not quieted.
+   Where watching needs scheduled check-ins, use a scheduler in your own
+   environment rather than a committed workflow, and delete
    the triggers you created — without asking — once the PR has merged or closed;
    leave triggers you did not create alone.
 6. **Keep the PR description up to date** as the branch evolves. The description

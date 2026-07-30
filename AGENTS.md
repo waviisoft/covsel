@@ -166,7 +166,8 @@ the rationale.
   and VitePress output are gitignored; keep it that way.
 - PRs use the template: a titleless prose **summary** (written to read as the
   squash-merge commit message, with no issue/PR references), optional **Why** and
-  **Changes**, the **checklist**, and any GitHub attributions at the bottom.
+  **Changes**, **Review & selection**, the **checklist**, and any GitHub
+  attributions at the bottom.
 - We squash-merge; the PR summary becomes the commit message.
 - Never put secrets, tokens, or personal data in code, tests, fixtures, commit
   messages, or PR text.
@@ -180,11 +181,15 @@ comments from humans and agents alike. Every one of those is yours to act on —
 fix it, or say in the thread why you are not going to. Leaving a red check or an
 unanswered review comment sitting is not an outcome.
 
-Acting differs by what raised it. A CI failure you caused and a conflict with the
-base branch are yours to fix outright — nobody needs to authorize a green bar. A
-**reviewer's** comment is answered first: agree or explain why not, and get the
+Acting differs by what raised it. A CI failure and a conflict with the base
+branch are yours to fix outright — nobody needs to authorize a green bar. Fix the
+change, though, never the check: a red `select` job is investigated, and
+loosening the check, padding `alwaysRun`, or widening `sentinels` to quiet it is
+the one repair that is off the table. A comment from **someone else's** review is
+the case that waits: answer it first, agree or explain why not, and get the
 go-ahead before you change the code. Never silently apply a suggestion, and never
-silently drop one.
+silently drop one. Findings from the review you ran on your own change are not
+that — fold those in yourself, as below.
 
 Watching may mean scheduling your own check-ins, since not every state change
 arrives as an event. That means a scheduler in your own environment, never a
