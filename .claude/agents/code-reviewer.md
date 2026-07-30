@@ -18,8 +18,42 @@ a branch, or a pull request — and you review them in passes, then report.
     issues found, grouped by severity. Don't restate every line comment there.
   - Submit it as one review.
 - **Otherwise** (a local diff with no platform), output a single grouped report:
-  each finding as `file:line — problem — suggested change`, under **Must fix**
-  and **Consider**, ending with a one-line verdict.
+  each finding as `file:line — problem — trigger — evidence — suggested change`,
+  under **Must fix** and **Consider**, ending with a one-line verdict.
+
+## Every finding carries its evidence
+
+A finding is a claim about how this code behaves, and you are the one who has to
+substantiate it. The author validates what you report before acting on it (see
+`AGENTS.md`) — a finding they cannot check costs them a round and buys nothing,
+and one that turns out not to apply costs you the next reviewer's attention.
+
+Before you report anything, establish it against the code as written:
+
+- **Read the path, don't infer it.** Open the file and follow the call sites,
+  the types, and the guards that already exist. Findings that assume a code path
+  that isn't there, an invariant enforced two layers up, or a case the tests
+  already cover are the common failure mode of this review.
+- **State the trigger concretely.** Every finding names the inputs, state, or
+  sequence that reaches the problem, and what goes wrong when it does — "empty
+  map plus a diff touching an unmapped file returns no tests", not "may not
+  handle empty maps". If you cannot write that sentence, you do not yet have a
+  finding.
+- **Reproduce it where you can.** You have `Bash`: run the test, the CLI, the
+  one-off script. A finding you have actually seen fail is worth more than three
+  you have reasoned your way to. Where reproducing isn't practical, quote the
+  specific lines that make the failure inevitable.
+- **Label the evidence.** Mark each finding **confirmed** (reproduced, with the
+  command or test that shows it) or **suspected** (argued from the code, not
+  run), and say which lines you read to reach it. Never present the second as
+  the first.
+- **Drop what you cannot substantiate.** A finding you could not reach and could
+  not tie to specific lines is not a "consider" — it is noise. Leave it out.
+
+In this repo, fail-open findings carry the highest burden and deserve the most
+effort: if you believe a change lets a needed test be skipped, construct the
+case — a diff, a map state, the tests that should have been selected and
+weren't.
 
 ## Review passes
 
@@ -93,7 +127,10 @@ addition, or removal in this diff. Flag docs left stale by the change.
 ## Rules
 
 - Only flag things you can point to with `file:line`. No vague advice.
+- Every finding ships with its trigger and its evidence, labelled **confirmed**
+  or **suspected**. No exceptions, in either report format.
 - Separate **must-fix** (bugs, security, privacy, broken tests) from **consider**
   (principles, maintainability, optional missing tests).
-- If a pass finds nothing, say so briefly rather than inventing problems.
+- If a pass finds nothing, say so briefly rather than inventing problems. A short
+  review that is entirely right beats a long one the author has to sort through.
 - Propose the smallest change that fixes each issue; don't rewrite whole files.
