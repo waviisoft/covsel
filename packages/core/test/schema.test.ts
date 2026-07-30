@@ -1,5 +1,10 @@
 import { describe, expect, it } from 'vitest';
-import { MAP_SCHEMA_VERSION, isUsableMap, type CoverageMap } from '../src/schema.js';
+import {
+  GRANULARITIES,
+  MAP_SCHEMA_VERSION,
+  isUsableMap,
+  type CoverageMap,
+} from '../src/schema.js';
 
 const validMap: CoverageMap = {
   schemaVersion: MAP_SCHEMA_VERSION,
@@ -20,7 +25,12 @@ describe('MAP_SCHEMA_VERSION', () => {
 describe('isUsableMap', () => {
   it('accepts a current-version map', () => {
     expect(
-      isUsableMap({ schemaVersion: MAP_SCHEMA_VERSION, observed: [], entries: [] }),
+      isUsableMap({
+        schemaVersion: MAP_SCHEMA_VERSION,
+        granularity: 'block',
+        observed: [],
+        entries: [],
+      }),
     ).toBe(true);
   });
 
@@ -59,6 +69,28 @@ describe('isUsableMap', () => {
     expect(isUsableMap(withoutObserved)).toBe(false);
     expect(isUsableMap({ ...validMap, observed: 'src/**' })).toBe(false);
     expect(isUsableMap({ ...validMap, observed: ['src/**', 7] })).toBe(false);
+  });
+
+  it('accepts every granularity covsel implements', () => {
+    for (const granularity of GRANULARITIES) {
+      expect(isUsableMap({ ...validMap, granularity })).toBe(true);
+    }
+  });
+
+  it('rejects a granularity covsel does not implement (fail open)', () => {
+    // Nothing covsel ships writes one, so this map was hand-edited or written by
+    // a covsel that knows something this one does not. Either way its entries
+    // mean something unknown, and a reader that guessed would be guessing about
+    // what to skip.
+    expect(isUsableMap({ ...validMap, granularity: 'line' })).toBe(false);
+    expect(isUsableMap({ ...validMap, granularity: 'statement' })).toBe(false);
+    expect(isUsableMap({ ...validMap, granularity: 7 })).toBe(false);
+  });
+
+  it('rejects a map that does not say what granularity it was recorded at', () => {
+    const withoutGranularity: Record<string, unknown> = { ...validMap };
+    delete withoutGranularity.granularity;
+    expect(isUsableMap(withoutGranularity)).toBe(false);
   });
 
   it('rejects non-object garbage', () => {

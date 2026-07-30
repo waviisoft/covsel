@@ -38,7 +38,24 @@ export interface CoveredFile {
   fileHash: string;
 }
 
-export type Granularity = 'file' | 'block' | 'line';
+/**
+ * The granularities covsel records and selects at, and therefore the only ones
+ * the map may name.
+ *
+ * There is no line granularity, and adding one would contradict the reason
+ * blocks are hashed rather than numbered: line numbers do not survive
+ * reformatting, so a line-keyed map goes stale on a change that alters no
+ * behaviour at all. Wanting finer resolution than a whole function is an
+ * argument for smaller blocks, not for line numbers.
+ */
+export const GRANULARITIES = Object.freeze(['file', 'block'] as const);
+
+export type Granularity = (typeof GRANULARITIES)[number];
+
+/** True when a value is a granularity this covsel can record and select at. */
+export function isGranularity(value: unknown): value is Granularity {
+  return (GRANULARITIES as readonly unknown[]).includes(value);
+}
 
 /** One test's footprint in the map. */
 export interface MapEntry {
@@ -92,6 +109,14 @@ export function isUsableMap(map: unknown): map is CoverageMap {
   if (typeof map !== 'object' || map === null) return false;
   const m = map as Partial<CoverageMap>;
   if (m.schemaVersion !== MAP_SCHEMA_VERSION || !Array.isArray(m.entries)) return false;
+  // A granularity covsel cannot record at says the entries were measured by
+  // something this build does not understand, so what they credit — and what
+  // their silence means — is unknown. Rejecting is the reading that cannot skip
+  // a test whatever a later reader does with the value: a check spelled
+  // `=== 'block'` would degrade it to whole-file, and one spelled `!== 'file'`
+  // would select by blocks the entries may not carry. The map never has to be
+  // read for that to be decided.
+  if (!isGranularity(m.granularity)) return false;
   // A map that does not say what it could observe cannot be told apart from one
   // that observed everything, and guessing "everything" is the guess that skips
   // tests. Require the declaration, and treat its absence as unusable.

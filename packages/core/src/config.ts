@@ -2,6 +2,7 @@ import { existsSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { pathToFileURL } from 'node:url';
 
+import { type Granularity, GRANULARITIES, isGranularity } from './schema.js';
 import type { BuildDirMapping } from './source-map.js';
 
 /** How a recording resolves bundled scripts back to the sources behind them. */
@@ -50,8 +51,12 @@ export interface CovselConfig {
   alwaysRun: string[];
   /** Files whose change invalidates the map and forces a full run. */
   sentinels: string[];
-  /** Recording granularity: 'block' (function-level) narrows selection further. */
-  granularity: 'block' | 'file';
+  /**
+   * Recording granularity: 'block' (function-level) narrows selection further.
+   * The same set the map may name, so a project cannot ask for a recording
+   * covsel could not store.
+   */
+  granularity: Granularity;
   /** How bundled scripts are resolved back to original sources. */
   sourceMaps: SourceMapConfig;
   /** Where the local map is stored. */
@@ -95,6 +100,30 @@ export const DEFAULT_CONFIG: CovselConfig = {
 };
 
 /**
+ * The granularity a project asked for, the default when it asked for none, or a
+ * failure naming what covsel records at.
+ *
+ * A config file is not type-checked, so this is where an unimplemented value
+ * arrives. Neither fallback is honest about it: resolving to `file` records at a
+ * granularity the project never named, and resolving to `block` ignores the ask
+ * entirely -- both silently, on every run thereafter. Failing at load is the one
+ * outcome the project can see, and it cannot cost a test: nothing has been
+ * selected yet, so nothing is skipped.
+ *
+ * An explicit `null` is not that case. It reads as "unchosen" everywhere else in
+ * this file, because every other field takes the default for it, and a config
+ * generator emitting one is not asking covsel for something it cannot do.
+ */
+function resolveGranularity(value: unknown): Granularity {
+  if (value === undefined || value === null) return DEFAULT_CONFIG.granularity;
+  if (isGranularity(value)) return value;
+  throw new Error(
+    `covsel config: granularity ${JSON.stringify(value)} is not supported ` +
+      `-- use one of ${GRANULARITIES.join(', ')}`,
+  );
+}
+
+/**
  * Merge a partial config over the defaults (arrays replace; the grouped fields
  * merge field by field).
  */
@@ -105,7 +134,7 @@ export function resolveConfig(partial?: CovselConfigInput): CovselConfig {
     sourceGlobs: partial?.sourceGlobs ?? DEFAULT_CONFIG.sourceGlobs,
     alwaysRun: partial?.alwaysRun ?? DEFAULT_CONFIG.alwaysRun,
     sentinels: partial?.sentinels ?? DEFAULT_CONFIG.sentinels,
-    granularity: partial?.granularity ?? DEFAULT_CONFIG.granularity,
+    granularity: resolveGranularity(partial?.granularity),
     sourceMaps: { ...DEFAULT_CONFIG.sourceMaps, ...partial?.sourceMaps },
     store: { ...DEFAULT_CONFIG.store, ...partial?.store },
   };

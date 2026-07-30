@@ -194,7 +194,10 @@ with a clear log line rather than trusting stale data.
 
 The `isUsableMap` guard in `@covsel/core` encodes the rule directly: anything it
 does not positively recognize as a current, well-formed map is treated as "run
-everything."
+everything." That includes a map whose granularity is not one covsel records at:
+its entries were measured by something this build cannot interpret, so what they
+credit — and what their silence means — is unknown, and guessing is what skips a
+test.
 
 ```ts
 import { isUsableMap } from '@covsel/core';
