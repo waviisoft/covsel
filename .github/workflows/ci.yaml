@@ -76,6 +76,14 @@ jobs:
       - name: What covsel is about to do, and why
         run: node packages/cli/dist/bin.js status
 
+      # Running the selection proves the tests it chose pass. It says nothing
+      # about whether the choice was right -- a selection that quietly ran
+      # nothing would pass too -- so the promises that can be checked from
+      # outside the selector are checked first. A full run is accepted; there is
+      # nothing there to be wrong about.
+      - name: Check that the selection kept its promises
+        run: node scripts/validate-selection.mjs
+
       - name: Run the affected tests
         run: node packages/cli/dist/bin.js run -- npx vitest run
 
