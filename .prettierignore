@@ -3,3 +3,4 @@ pnpm-lock.yaml
 CHANGELOG.md
 docs/.vitepress/cache/
 docs/.vitepress/dist/
+.claude/worktrees/
