@@ -7,8 +7,8 @@
 **Status: early.** The `covsel record`, `affected`, `run`, `watch`, `status`, and
 `merge` commands work today, with block-hash (function-level) selection, per-test
 selection for node:test, scenario-level selection for cucumber-js, and a
-documented CI recipe for restoring and merging maps. Track the work in the
-[issues](https://github.com/waviisoft/covsel/issues), and see
+documented CI recipe for publishing, restoring, and merging maps. Track the work
+in the [issues](https://github.com/waviisoft/covsel/issues), and see
 [`DESIGN.md`](./DESIGN.md) for the architecture.
 
 ## The problem
@@ -63,6 +63,10 @@ npx covsel merge shard-*/map.json --out .covsel/map.json
 Zero config to start. `covsel affected` prints a file list, so you can pipe it
 into any runner that accepts test files: `node --test $(covsel affected)`.
 
+Every command takes the same `--adapter` as `record` -- the examples above omit
+it where the default (`generic`) is the one being used. Pass it to `affected`,
+`run`, and `watch` too when your runner needs a different one.
+
 Vitest and Jest transform sources before executing them, so raw V8 process
 coverage can't describe your `src/**`; `--adapter vitest` and `--adapter jest`
 record through the runner's own coverage instead. The generic wrap is for
@@ -91,15 +95,16 @@ node:test, and scenario-level selection for cucumber-js.
 
 Every adapter below runs the shared conformance suite, and the generic wrap,
 Vitest, Jest, and cucumber-js scenario selection each have a runnable
-[example](./examples) that CI drives end-to-end on every push:
+[example](./examples) that CI drives end-to-end on every pull request and on
+`main`:
 
-| Runner                     | Per-file          | Per-test / scenario |
-| -------------------------- | ----------------- | ------------------- |
-| Any command (generic wrap) | yes (direct-exec) | no                  |
-| node:test                  | yes (generic)     | yes (`--adapter`)   |
-| cucumber-js                | no                | yes (`--adapter`)   |
-| Vitest                     | yes (`--adapter`) | no                  |
-| Jest                       | yes (`--adapter`) | no                  |
+| Runner                     | Per-file            | Per-test / scenario |
+| -------------------------- | ------------------- | ------------------- |
+| Any command (generic wrap) | yes (direct-exec)   | no                  |
+| node:test                  | yes (generic)       | yes (`--adapter`)   |
+| cucumber-js                | yes (feature files) | yes (`--adapter`)   |
+| Vitest                     | yes (`--adapter`)   | no                  |
+| Jest                       | yes (`--adapter`)   | no                  |
 
 ## Packages
 
@@ -138,8 +143,8 @@ Node >= 22 required. See [CONTRIBUTING.md](./CONTRIBUTING.md).
 
 covsel stands on the shoulders of [pytest-testmon] (Python),
 [Ekstazi](http://ekstazi.org) and STARTS (Java), and
-[Crystalball](https://github.com/toptal/crystalball) (Ruby) -- and on
-`v8-to-istanbul` and the Istanbul ecosystem for source-map remapping.
+[Crystalball](https://github.com/toptal/crystalball) (Ruby) -- and on the
+Istanbul coverage format, which is what the Vitest and Jest adapters read.
 
 [pytest-testmon]: https://testmon.org
 

@@ -61,7 +61,7 @@ it's opt-in.
 ```
 Adapters      generic-wrap, vitest, jest, node:test, cucumber
    (thin, per-runner, OPTIONAL -- only for per-test precision & native selection syntax)
-Observer      V8 inspector snapshot-diff | NODE_V8_COVERAGE (process) | istanbul
+Observer      V8 inspector snapshot-diff | NODE_V8_COVERAGE (process)
    (shared -- turns "a test ran" into a set of executed source ranges)
 Mapper        source-maps -> original files, bundler awareness, block-hash granularity
    (shared -- the hard part; maps transpiled/bundled execution back to src/**)
@@ -107,8 +107,8 @@ stable interfaces from `@covsel/core`.
 
 ### Known-hard: bundles
 
-Node with on-the-fly transpile (tsx/swc/ts-node) stays ~1:1 -> source-mapping via
-`v8-to-istanbul` is straightforward. **Browser bundles** (Turbopack/webpack/
+Node with on-the-fly transpile (tsx/swc/ts-node) stays ~1:1 -> mapping execution
+back to a source is straightforward. **Browser bundles** (Turbopack/webpack/
 esbuild/vite) fuse many sources into one chunk -> they need source maps to fan
 coverage back out, and a bundle whose build published none cannot be traced home
 at all.
@@ -121,8 +121,15 @@ are looked for everywhere a build publishes one (a `sourceMappingURL` comment, a
 inline `data:` URI, the conventional `<script>.map` neighbour, over HTTP, and in
 a build directory served URLs map onto), and a source fetched without a
 disk-relative anchor is confirmed against `sourcesContent` before it is credited.
-Scripts that genuinely never will be mappable are accepted one at a time via
-`sourceMaps.allowUnmappable`, and named on every recording that lets one through.
+Scripts that genuinely never will be mappable are allowed by listing them in
+`sourceMaps.allowUnmappable`, and named on every recording that lets one through
+-- a hatch the generic wrap honors, and the per-test shims do not yet receive.
+
+What a mapped bundle credits is every source it was built from, not the ranges
+that actually executed: the mapping is read for its source list, so a test that
+touches one module in a chunk is recorded against all of them. That
+over-selects, which is the safe direction, and it is why file-level attribution
+through a bundle is coarse rather than wrong.
 
 The consequence is that covsel covers the Node/unit/integration case. Coverage of
 code executing inside a browser is not something it can observe today.
@@ -138,16 +145,18 @@ code executing inside a browser is not something it can observe today.
 covsel record --adapter vitest -- vitest run
 covsel record --adapter cucumber -- cucumber-js
 
-# Print the tests affected by the working-tree diff (or a range)
-covsel affected                       # vs. the commit the map was recorded on
-covsel affected --since origin/main
-covsel affected --format files        # newline-separated test files (default)
+# Print the tests affected by the working-tree diff (or a range).
+# Every command names its adapter; the default is `generic`, and covsel
+# bundles none, so the one your runner needs has to be installed either way.
+covsel affected --adapter vitest      # vs. the commit the map was recorded on
+covsel affected --adapter vitest --since origin/main
+covsel affected --adapter vitest --format files   # test files, one per line (default)
 
 # Run only affected tests (wraps the runner)
-covsel run -- vitest run
+covsel run --adapter vitest -- vitest run
 
 # Watch: rerun affected tests as you edit (the DX magnet)
-covsel watch -- vitest run
+covsel watch --adapter vitest -- vitest run
 
 # Introspect the map: age, size, sentinel drift, whether the next run is full
 covsel status
@@ -159,7 +168,8 @@ covsel merge shard-*/map.json --out .covsel/map.json
 ### Config file (`.covsel.json` / `covsel.config.js`)
 
 Every field has a zero-config default, so a project that installs an adapter
-needs no config file at all.
+needs no config file at all. The comments below are for the reader; `.covsel.json`
+is parsed as strict JSON.
 
 ```jsonc
 {
@@ -180,8 +190,9 @@ needs no config file at all.
   configuration; sensible sentinel/alwaysRun defaults, config only to refine.
 - **Composable, not a framework** -- `covsel affected` prints; users pipe it.
   Never wrap what a runner already does well.
-- **CI-native** -- publish map on `main`, fetch merge-base map on PR, merge shard
-  maps.
+- **CI-native** -- record and cache the map on `main`, restore it on a pull
+  request, merge shard maps with `covsel merge`. The store is a directory, so the
+  CI runner's own cache is the transport.
 - **Ship only what works** -- commands appear when they're real, not as
   "not implemented" stubs.
 
@@ -198,7 +209,7 @@ needs no config file at all.
 | The tool's own tests | **Vitest**                                | Also the first-class adapter target -- dogfood                 |
 | Lint/format          | ESLint (flat) + Prettier                  | Standard                                                       |
 | Releases             | **Changesets**                            | Per-package semver, changelog, automated npm publish           |
-| Coverage->source     | `v8-to-istanbul`, `istanbul-lib-*`        | Battle-tested source-map remapping                             |
+| Coverage->source     | Source-map resolution in `@covsel/core`   | No runtime dependency; the mapper owns what it credits         |
 | Diff                 | shell out to `git` (no libgit2 dep)       | Portable, simple, matches CI                                   |
 | Docs site            | **VitePress**                             | Low-friction, matches many OSS docs                            |
 | License              | **MIT**                                   | Simple, ecosystem default                                      |

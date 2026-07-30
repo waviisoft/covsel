@@ -6,7 +6,7 @@ runner-specific, and it's optional.
 ```
 Adapters      generic-wrap, vitest, jest, node:test, cucumber
    (thin, per-runner, OPTIONAL -- only for per-test precision & native selection syntax)
-Observer      V8 inspector snapshot-diff | NODE_V8_COVERAGE (process) | istanbul
+Observer      V8 inspector snapshot-diff | NODE_V8_COVERAGE (process)
    (shared -- turns "a test ran" into a set of executed source ranges)
 Mapper        source-maps -> original files, bundler awareness, block-hash granularity
    (shared -- the hard part; maps transpiled/bundled execution back to src/**)
@@ -65,5 +65,5 @@ same object through the same code path.
 | `@covsel/conformance`       | The shared suite every adapter must pass                              |
 | `@covsel/adapter-*`         | Per-runner adapters (community contribution lane)                     |
 
-The full founding plan lives in
+The architecture and the reasoning behind it live in
 [DESIGN.md](https://github.com/waviisoft/covsel/blob/main/DESIGN.md).

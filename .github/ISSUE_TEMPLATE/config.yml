@@ -7,4 +7,4 @@ contact_links:
       Security Advisories rather than a public issue. See SECURITY.md.
   - name: 📖 Documentation
     url: https://waviisoft.github.io/covsel/
-    about: Guides, architecture, and the roadmap.
+    about: Guides, adapters, and the architecture.

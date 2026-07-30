@@ -29,7 +29,7 @@ Nothing to install beyond covsel -- the shim ships with the adapter and uses onl
 covsel record --adapter node-test -- node --test
 
 # Print the test files the diff can affect (file-level, pipeable)
-covsel affected
+covsel affected --adapter node-test
 
 # Run only the affected tests -- individual tests, via --test-name-pattern
 covsel run --adapter node-test -- node --test

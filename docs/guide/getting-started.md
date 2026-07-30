@@ -50,6 +50,10 @@ covsel run -- node --test
 covsel watch -- node --test
 ```
 
+Every command takes `--adapter`, not just `record`; the lines above use the
+default, `generic`. A Vitest project passes `--adapter vitest` to `affected`,
+`run`, and `watch` as well.
+
 [Watch mode](/guide/watch) drives the same selection continuously — one run per
 save, debounced, falling open to a full run whenever it cannot tell what a
 change affects.
