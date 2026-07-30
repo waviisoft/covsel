@@ -222,6 +222,20 @@ describe('covsel cli', () => {
     },
   );
 
+  it('explain refuses to run under a granularity covsel does not implement', async () => {
+    // Read-only is not a reason to answer under a configuration covsel cannot
+    // record at: what the map means depends on it, and explaining a file is
+    // saying what that map means.
+    await inProject(
+      { 'covsel.json': `${JSON.stringify({ granularity: 'line' })}\n` },
+      async () => {
+        await expect(main(['explain', 'covsel.json'])).rejects.toThrow(
+          /granularity "line" is not supported/,
+        );
+      },
+    );
+  });
+
   it('affected rejects an unsupported --format', async () => {
     const { code, err } = await captureStderr(() =>
       main(['affected', '--format', 'vitest']),
