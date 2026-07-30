@@ -1,9 +1,10 @@
 # Design -- Runtime-Coverage Test Impact Analysis for JS/TS
 
 > The architecture and rationale behind covsel. This is a living reference for
-> _why_ the pieces are shaped the way they are; day-to-day work is tracked in
-> the [issue tracker](https://github.com/waviisoft/covsel/issues), and
-> contributor conventions live in [`AGENTS.md`](./AGENTS.md).
+> _why_ the pieces are shaped the way they are, and it describes covsel as it is
+> today -- planned work is tracked in the
+> [issue tracker](https://github.com/waviisoft/covsel/issues), never here.
+> Contributor conventions live in [`AGENTS.md`](./AGENTS.md).
 
 ---
 
@@ -14,9 +15,9 @@ executes, builds a persisted **test -> covered-code** map, and -- given a git di
 -- runs only the tests whose covered code changed. Think **code coverage meets
 test selection**: the runtime-coverage branch of _Test Impact Analysis (TIA)_.
 
-**Deliberately runner-agnostic.** It works with Vitest, Jest, Mocha, node:test,
-cucumber-js, Playwright, or a bespoke harness -- because it depends only on the
-two things every JS/TS runner shares (see section 2).
+**Deliberately runner-agnostic.** It works with Vitest, Jest, node:test,
+cucumber-js, Mocha, or a bespoke harness -- because it depends only on the two
+things every JS/TS runner shares (see section 2).
 
 **One-liner positioning:**
 
@@ -29,8 +30,7 @@ two things every JS/TS runner shares (see section 2).
 - **Python** has [`pytest-testmon`], **Java** has Ekstazi/STARTS, **Ruby** has
   Crystalball. **JS/TS has no runtime-coverage equivalent.**
 - JS went all-in on **static import-graph** selection instead: `jest
---changedSince`, `vitest --changed`, `playwright --only-changed`, `nx
-affected`. Three gaps are the wedge:
+--changedSince`, `vitest --changed`, `nx affected`. Three gaps are the wedge:
   1. Static graphs **lie** on dynamic imports, runtime config, DI/plugin
      coupling, and non-import (fs/fixture) dependencies. Runtime coverage sees
      the truth.
@@ -59,15 +59,15 @@ it's opt-in.
 ### Layered design
 
 ```
-Adapters      generic-wrap, vitest, jest, mocha, node:test, cucumber, playwright
+Adapters      generic-wrap, vitest, jest, node:test, cucumber
    (thin, per-runner, OPTIONAL -- only for per-test precision & native selection syntax)
-Observer      V8 inspector snapshot-diff | NODE_V8_COVERAGE (process) | istanbul
+Observer      V8 inspector snapshot-diff | NODE_V8_COVERAGE (process)
    (shared -- turns "a test ran" into a set of executed source ranges)
 Mapper        source-maps -> original files, bundler awareness, block-hash granularity
    (shared -- the hard part; maps transpiled/bundled execution back to src/**)
-Store         .covsel/ local (a directory, so a CI cache can carry it)
-   (pluggable -- publish map on main, fetch merge-base map on PR, merge shards)
-Selector      git diff -> impacted test-ids -> emit(file list | runner-native tags)
+Store         .covsel/ local, the one implementation (a directory, so a CI cache can carry it)
+   (an interface in core; `covsel merge` folds sharded maps into one)
+Selector      git diff -> impacted test-ids -> a test-file list, or a narrowed run via the adapter
    + Policy:   fail-open, always-run globs, new-test detection, full-run sentinels
 ```
 
@@ -79,10 +79,10 @@ stable interfaces from `@covsel/core`.
 
 - **Zero-integration, per-_file_.** Run each test file in its own
   process with `NODE_V8_COVERAGE`; get a per-file map with **no runner
-  integration**. The adapter is just "wrap the command." Works with every
-  runner. **This is the first target**, and the mechanism is already guarded by
-  an integration test in `@covsel/core` that asserts a test file maps to exactly
-  the sources it executes.
+  integration**. The adapter is just "wrap the command." Works with every runner
+  that executes your source directly, and the mechanism is guarded by an
+  integration test in `@covsel/core` that asserts a test file maps to exactly the
+  sources it executes.
 - **Per-_test_.** Snapshot V8 coverage before/after each test via the
   inspector and diff. Selects individual tests/scenarios. Needs one thin
   lifecycle shim per runner. Most of the _wow_, more surface area.
@@ -97,50 +97,69 @@ stable interfaces from `@covsel/core`.
    - New/changed test files with no map entry -> **always run**.
    - **Sentinel files** (`package.json`, tsconfig, test setup, global fixtures,
      lockfile) -> invalidate map, **run everything**.
-   - **Non-JS deps** coverage can't see (fixtures, snapshots, templates) -> track
-     fs _reads_ via a hook, or honor user-declared `alwaysRun` globs.
+   - **Non-JS deps** coverage can't see (fixtures, snapshots, templates) -> honor
+     user-declared `alwaysRun` globs.
    - **Dynamic/data-dependent branches** -> coverage reflects only the path taken;
      document it; always run more, never less.
 
    **Headline guarantee:** _"We never skip a test whose behavior your change
    could alter -- and when we can't be sure, we run it."_
 
-### Known-hard: bundlers (deferred)
+### Known-hard: bundles
 
 Node with on-the-fly transpile (tsx/swc/ts-node) stays ~1:1, so the offsets V8
 reports are the offsets on disk. **Browser bundles** (Turbopack/webpack/
-esbuild/vite) fuse many sources into one chunk -> need source maps to fan
-coverage back out.
+esbuild/vite) fuse many sources into one chunk -> they need source maps to fan
+coverage back out, and a bundle whose build published none cannot be traced home
+at all.
 
-Fanning them out is done from the mapping segments themselves rather than
-through an off-the-shelf istanbul conversion, which was measured to lose the
+covsel's answer to that last case is to refuse rather than guess. A script that
+executed and resolves to no source in the repository **fails the recording**,
+naming the script, and no map is written -- because an entry that credits nothing
+is read afterwards as a test that covers nothing, and that skips it on every
+diff. Maps are looked for everywhere a build publishes one (a `sourceMappingURL`
+comment, an inline `data:` URI, the conventional `<script>.map` neighbour, over
+HTTP, and in a build directory served URLs map onto), and a source fetched
+without a disk-relative anchor is confirmed against `sourcesContent` before it is
+credited. Scripts that genuinely never will be mappable are allowed by listing
+them in `sourceMaps.allowUnmappable`, and named on every recording that lets one
+through -- a hatch the generic wrap honors, and the per-test shims do not yet
+receive.
+
+Fanning coverage back out is done from the mapping segments themselves rather
+than through an off-the-shelf istanbul conversion, which was measured to lose the
 cases that matter: those conversions carry named functions only, so an executed
 arrow handler vanishes, and they attribute unmapped bundler-injected code to the
-map's first source. Both drop blocks, and a dropped block skips a test. The
-projection lives in `@covsel/core`; wiring the recorder to it, and bundler
-plugins emitting cleaner per-source maps, are still ahead.
+map's first source. Both drop blocks, and a dropped block skips a test. That
+projection lives in `@covsel/core` as a primitive the recorder does not call, so
+what a mapped bundle credits today is every source it was built from rather than
+the ranges that executed -- coarse, and over-selecting, which is the safe
+direction to be coarse in.
+
+The consequence is that covsel covers the Node/unit/integration case. Coverage of
+code executing inside a browser is not something it can observe today.
 
 ---
 
-## 3. Target UX (design to this)
-
-> Mostly implemented. `record`, `affected`, `run`, `watch`, `status`, and
-> `merge` ship today; `explain` and the runner-native `--format` outputs below
-> are still target UX.
+## 3. The user-facing surface
 
 ### CLI surface
 
 ```bash
+# Set the project up: detect the runner, install its adapter, write the config
+covsel init
+
 # Record a full run and build/refresh the map
 covsel record -- vitest run
-covsel record --adapter cucumber -- npm run test:cucumber:ui
+covsel record --adapter cucumber -- cucumber-js
 
-# Print the tests affected by the working-tree diff (or a range)
+# Print the tests affected by the working-tree diff (or a range).
+# Every command resolves an adapter, not just `record`: --adapter first, then
+# the one `init` wrote to the config, then `generic`. covsel bundles none, so
+# whichever name wins has to name a package the project installed.
 covsel affected                       # vs. the commit the map was recorded on
 covsel affected --since origin/main
-covsel affected --format files        # newline-separated test files (default)
-covsel affected --format vitest       # runner-native args
-covsel affected --format cucumber     # feature:line / tags
+covsel affected --format files        # test files, one per line (default)
 
 # Run only affected tests (wraps the runner)
 covsel run -- vitest run
@@ -148,22 +167,30 @@ covsel run -- vitest run
 # Watch: rerun affected tests as you edit (the DX magnet)
 covsel watch -- vitest run
 
-# Introspect / debug the map
-covsel explain src/app/foo.ts         # which tests cover this file
-covsel status                         # map age, coverage %, sentinel triggers
+# Introspect the map: age, size, sentinel drift, whether the next run is full
+covsel status
+
+# Fold the maps from a sharded suite into one
+covsel merge shard-*/map.json --out .covsel/map.json
 ```
 
 ### Config file (`covsel.json` / `covsel.config.js`)
 
+Every field but `adapter` has a default, so a project that installs an adapter
+needs no config file at all; `covsel init` writes one so the adapter choice is
+made once. The comments below are for the reader -- `covsel.json` is parsed as
+strict JSON.
+
 ```jsonc
 {
-  "adapter": "vitest",
-  "store": { "type": "local", "dir": ".covsel" },
+  "adapter": "vitest", // what `--adapter` would otherwise say every time
+  "testGlobs": ["**/*.{test,spec}.?(c|m)[jt]s?(x)"],
   "sourceGlobs": ["src/**"],
-  "alwaysRun": ["**/fixtures/**", "src/generated/**"],
+  "alwaysRun": ["**/fixtures/**"],
   "sentinels": ["package.json", "tsconfig*.json", "vitest.setup.ts"],
-  "granularity": "block", // "block" | "file" | "line"
-  "failOpen": true,
+  "granularity": "block", // "block" (function-level) | "file"
+  "sourceMaps": { "buildDirs": [], "http": true, "allowUnmappable": [] },
+  "store": { "dir": ".covsel" },
 }
 ```
 
@@ -174,8 +201,9 @@ covsel status                         # map age, coverage %, sentinel triggers
   configuration; sensible sentinel/alwaysRun defaults, config only to refine.
 - **Composable, not a framework** -- `covsel affected` prints; users pipe it.
   Never wrap what a runner already does well.
-- **CI-native** -- publish map on `main`, fetch merge-base map on PR, merge shard
-  maps.
+- **CI-native** -- record and cache the map on `main`, restore it on a pull
+  request, merge shard maps with `covsel merge`. The store is a directory, so the
+  CI runner's own cache is the transport.
 - **Ship only what works** -- commands appear when they're real, not as
   "not implemented" stubs.
 
@@ -192,7 +220,7 @@ covsel status                         # map age, coverage %, sentinel triggers
 | The tool's own tests | **Vitest**                                | Also the first-class adapter target -- dogfood                 |
 | Lint/format          | ESLint (flat) + Prettier                  | Standard                                                       |
 | Releases             | **Changesets**                            | Per-package semver, changelog, automated npm publish           |
-| Coverage->source     | `v8-to-istanbul`, `istanbul-lib-*`        | Battle-tested source-map remapping                             |
+| Coverage->source     | Source-map resolution in `@covsel/core`   | No runtime dependency; the mapper owns what it credits         |
 | Diff                 | shell out to `git` (no libgit2 dep)       | Portable, simple, matches CI                                   |
 | Docs site            | **VitePress**                             | Low-friction, matches many OSS docs                            |
 | License              | **MIT**                                   | Simple, ecosystem default                                      |
@@ -207,9 +235,10 @@ covsel/
 |   |-- core/                 # Observer + Mapper + Store + Selector + Policy + map schema
 |   |-- cli/                  # `covsel` command; thin over core
 |   |-- adapter-generic/      # wrap-any-command (NODE_V8_COVERAGE)
-|   `-- adapter-*/            # per-runner adapters (vitest, cucumber, jest, ...) as they land
+|   |-- adapter-*/            # per-runner adapters (vitest, jest, node-test, cucumber)
+|   `-- conformance/          # the shared suite every adapter must pass
 |-- docs/                     # VitePress site (deployed to GitHub Pages)
-|-- examples/                 # runnable end-to-end fixtures (as they land)
+|-- examples/                 # runnable end-to-end fixtures, driven by CI
 |-- .github/
 |   |-- workflows/            # ci.yaml, release.yaml, docs.yaml
 |   |-- ISSUE_TEMPLATE/       # bug, feature, adapter, security
@@ -243,11 +272,6 @@ covsel/
 - **Adapter conformance kit** -- one shared suite every adapter must pass
   (start/end boundaries fire, map is stable across reruns, selection is correct
   on a scripted diff).
-- **Pilot on a real, awkward repo.** Target a **cucumber-js + Playwright +
-  bundler** project (the quadrant every existing tool ignores). Success =
-  scenario-level selection that measurably cuts PR test time without ever
-  skipping a test the diff should have triggered. Capture before/after numbers
-  for the README.
 - **Mutation-style safety check** -- deliberately introduce a change and assert
   the affected test is selected; the core guard against fail-_closed_ bugs.
 
@@ -262,7 +286,8 @@ covsel/
 - **Versioning:** semver per package via Changesets. The **map schema is
   versioned** -- a schema bump invalidates stored maps (fail-open: full run) with
   a clear log line. See [`RELEASING.md`](./RELEASING.md).
-- **Roadmap in the open:** GitHub issues, with `good first issue` on adapter work.
+- **Planned work in the open:** it lives in GitHub issues, with `good first issue`
+  on adapter work -- not in this document, which describes covsel as it is.
 
 ---
 
@@ -271,9 +296,8 @@ covsel/
 | Risk / question                                     | Mitigation / current stance                                               |
 | --------------------------------------------------- | ------------------------------------------------------------------------- |
 | Fail-_closed_ bug skips a needed test -> lost trust | Mutation safety check in CI; conservative defaults; loud logging of skips |
-| Bundler source-map fidelity                         | Defer browser coverage; win the Node case first                           |
+| Bundler source-map fidelity                         | A script that maps back to no source fails the recording, loudly          |
 | "Just use `jest --changedSince`" objection          | Lead with the cases static graphs miss + no-native-selection runners      |
 | Map staleness / drift                               | Sentinels + new-test detection + `covsel status` surfacing map age        |
 | Per-test inspector overhead                         | Offer per-file process mode as the low-overhead fallback                  |
-| Monorepo scale                                      | Fuse with Nx/Turbo project graph rather than reimplementing it            |
 | Sharing the map across CI jobs                      | The store is a directory, so the CI runner's own cache covers it          |

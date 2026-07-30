@@ -35,24 +35,23 @@ it's opt-in. See [Architecture](/guide/architecture) for the layered design.
 
 ## Supported runners
 
-Runners that execute source directly work today through the generic wrap.
-Runners that transform sources first (Vitest, Jest) need a per-runner recorder
-that reads the runner's own coverage; both are done. Per-test selection ships for
-node:test, and scenario-level selection for cucumber-js. See
-[Adapters](/guide/adapters/) for how each is observed.
+Runners that execute source directly (`node --test`, Mocha on plain JavaScript)
+work through the generic wrap. Runners that transform sources first (Vitest,
+Jest) need a per-runner recorder that reads the runner's own coverage; both are
+done. Per-test selection ships for node:test, and scenario-level selection for
+cucumber-js. See [Adapters](/guide/adapters/) for how each is observed.
 
-| Runner                     | Per-file          | Per-test / scenario |
-| -------------------------- | ----------------- | ------------------- |
-| Any command (generic wrap) | yes (direct-exec) | --                  |
-| node:test                  | yes (generic)     | yes (`--adapter`)   |
-| cucumber-js                | yes (`--adapter`) | yes (`--adapter`)   |
-| Mocha                      | yes (generic, JS) | no                  |
-| Vitest                     | yes (`--adapter`) | no                  |
-| Jest                       | yes (`--adapter`) | no                  |
+| Runner                     | Per-file            | Per-test / scenario |
+| -------------------------- | ------------------- | ------------------- |
+| Any command (generic wrap) | yes (direct-exec)   | no                  |
+| node:test                  | yes (generic)       | yes (`--adapter`)   |
+| cucumber-js                | yes (feature files) | yes (scenario)      |
+| Vitest                     | yes (`--adapter`)   | no                  |
+| Jest                       | yes (`--adapter`)   | no                  |
 
 ## Prior art & credits
 
 covsel stands on the shoulders of [pytest-testmon](https://testmon.org)
 (Python), [Ekstazi](http://ekstazi.org) and STARTS (Java), and
-[Crystalball](https://github.com/toptal/crystalball) (Ruby) -- and on
-`v8-to-istanbul` and the Istanbul ecosystem for source-map remapping.
+[Crystalball](https://github.com/toptal/crystalball) (Ruby) -- and on the
+Istanbul coverage format, which is what the Vitest and Jest adapters read.

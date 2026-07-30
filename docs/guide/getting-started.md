@@ -117,6 +117,11 @@ covsel run -- node --test
 covsel watch -- node --test
 ```
 
+`affected`, `run`, and `watch` resolve an adapter just as `record` does: the
+`--adapter` flag first, then the adapter `covsel init` wrote to your config,
+then `generic`. The lines above use the default; a project that skipped `init`
+passes the flag to each command.
+
 [Watch mode](/guide/watch) drives the same selection continuously — one run per
 save, debounced, falling open to a full run whenever it cannot tell what a
 change affects.

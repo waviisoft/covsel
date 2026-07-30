@@ -86,6 +86,13 @@ node:test and cucumber-js adapters record each **test** or **scenario**
 individually and run only the affected ones -- which for cucumber-js is the only
 selection it has natively.
 
+Any other runner that executes your source directly is already covered at file
+level by the generic adapter, which does not care what it is wrapping -- Mocha on
+plain JavaScript needs no package of its own. An adapter of its own is what buys
+the two things the wrap cannot do: recording a runner that transforms or bundles
+its sources, and narrowing selection below the file. That is the
+[contribution surface](/guide/adapters/writing-an-adapter) below.
+
 ## Writing an adapter
 
 Adapters are the primary community contribution surface. Each is one exported

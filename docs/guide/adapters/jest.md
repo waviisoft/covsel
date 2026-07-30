@@ -31,10 +31,10 @@ the command line, and leaves your `coverageProvider` alone.
 covsel record --adapter jest -- jest
 
 # Print the test files your working-tree diff can affect
-covsel affected
+covsel affected --adapter jest
 
 # Run only those
-covsel run --adapter jest -- jest   # or: jest $(covsel affected)
+covsel run --adapter jest -- jest   # or: jest $(covsel affected --adapter jest)
 ```
 
 Under the hood, `record` runs Jest once per test file with coverage enabled and

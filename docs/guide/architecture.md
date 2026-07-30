@@ -6,13 +6,13 @@ runner-specific, and it's optional.
 ```
 Adapters      generic-wrap, vitest, jest, node:test, cucumber
    (thin, per-runner, OPTIONAL -- only for per-test precision & native selection syntax)
-Observer      V8 inspector snapshot-diff | NODE_V8_COVERAGE (process) | istanbul
+Observer      V8 inspector snapshot-diff | NODE_V8_COVERAGE (process)
    (shared -- turns "a test ran" into a set of executed source ranges)
 Mapper        source-maps -> original files, bundler awareness, block-hash granularity
    (shared -- the hard part; maps transpiled/bundled execution back to src/**)
-Store         .covsel/ local (a directory, so a CI cache can carry it)
-   (pluggable -- publish map on main, fetch merge-base map on PR, merge shards)
-Selector      git diff -> impacted test-ids -> emit(file list | runner-native tags)
+Store         .covsel/ local, the one implementation (a directory, so a CI cache can carry it)
+   (an interface in core; `covsel merge` folds sharded maps into one)
+Selector      git diff -> impacted test-ids -> a test-file list, or a narrowed run via the adapter
    + Policy:   fail-open, always-run globs, new-test detection, full-run sentinels
 ```
 
@@ -65,5 +65,5 @@ same object through the same code path.
 | `@covsel/conformance`       | The shared suite every adapter must pass                              |
 | `@covsel/adapter-*`         | Per-runner adapters (community contribution lane)                     |
 
-The full founding plan lives in
+The architecture and the reasoning behind it live in
 [DESIGN.md](https://github.com/waviisoft/covsel/blob/main/DESIGN.md).

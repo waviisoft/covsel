@@ -1,9 +1,9 @@
 # Generic adapter
 
-`@covsel/adapter-generic` is the default. It wraps **any** runner command: for
-each test file, covsel runs that file in its own process with `NODE_V8_COVERAGE`
-set and attributes the coverage back to your sources. Zero runner integration,
-nothing to install.
+`@covsel/adapter-generic` is the adapter covsel uses when you name none. It wraps
+**any** runner command: for each test file, covsel runs that file in its own
+process with `NODE_V8_COVERAGE` set and attributes the coverage back to your
+sources. Zero runner integration, and nothing runner-specific to configure.
 
 ## When to use it
 
@@ -20,7 +20,15 @@ If your runner **transforms sources first** (Vitest, Jest), raw
 
 ## Setup
 
-None. The generic adapter is built in and used when you pass no `--adapter`.
+Install it. covsel bundles no adapters, so the default name still resolves to a
+package your project has to have:
+
+```bash
+npm install --save-dev covsel @covsel/adapter-generic
+```
+
+With that in place, every command below works with no `--adapter` flag and no
+configuration.
 
 ## Record → affected → run
 

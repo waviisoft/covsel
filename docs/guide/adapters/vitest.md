@@ -43,10 +43,10 @@ required — the adapter passes the coverage flags it needs on the command line.
 covsel record --adapter vitest -- vitest run
 
 # Print the test files your working-tree diff can affect
-covsel affected
+covsel affected --adapter vitest
 
 # Run only those
-covsel run --adapter vitest -- vitest run   # or: vitest run $(covsel affected)
+covsel run --adapter vitest -- vitest run   # or: vitest run $(covsel affected --adapter vitest)
 ```
 
 Under the hood, `record` runs `vitest run <file>` once per test file with V8
