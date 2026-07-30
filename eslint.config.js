@@ -25,4 +25,11 @@ export default tseslint.config(
       '@typescript-eslint/no-unused-vars': ['error', { argsIgnorePattern: '^_' }],
     },
   },
+  {
+    // Mocha's BDD interface injects `describe`/`it` into the runner's global
+    // scope rather than exporting them, so its specs reference names no import
+    // declares.
+    files: ['examples/mocha-basic/**/*.mjs'],
+    languageOptions: { globals: { describe: 'readonly', it: 'readonly' } },
+  },
 );
