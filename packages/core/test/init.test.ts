@@ -14,8 +14,10 @@ import {
   applyInit,
   type InitPlan,
   installCommand,
+  knownAdapters,
   loadConfig,
   planInit,
+  suggestAdapter,
 } from '../src/index.js';
 
 /**
@@ -342,6 +344,39 @@ describe('covsel init — overrides', () => {
     });
 
     expect((await init(cwd, 'generic')).adapter).toBe('generic');
+  });
+});
+
+/**
+ * A typo of a real adapter is the likeliest reason an install of one comes back
+ * empty-handed, so covsel offers the name it was probably meant to be. This is
+ * help after a failed install and nothing more: covsel keeps no list of the
+ * names that count, because anyone can publish an adapter, so a name it has
+ * never heard of has to plan exactly like one it ships.
+ */
+describe('covsel init — the adapter a typo meant', () => {
+  it('suggests a known adapter a near-miss resembles', () => {
+    expect(suggestAdapter('vitesst')).toBe('vitest');
+    expect(suggestAdapter('jset')).toBe('jest');
+  });
+
+  it('suggests nothing for a name that resembles no adapter', () => {
+    // 'ava' is a real runner with a real community adapter; suggesting 'jest'
+    // for it would be covsel second-guessing a name it simply does not know.
+    expect(suggestAdapter('nope')).toBeUndefined();
+    expect(suggestAdapter('ava')).toBeUndefined();
+  });
+
+  it('suggests, rather than decides: a known name is left alone', () => {
+    expect(suggestAdapter('vitest')).toBe('vitest');
+  });
+
+  it('knows the adapters in its own runner table', () => {
+    // Sourced from the runner table so a new adapter joins the suggestions
+    // without a second list to remember.
+    expect(knownAdapters()).toEqual(
+      expect.arrayContaining(['vitest', 'jest', 'cucumber', 'node-test', 'generic']),
+    );
   });
 });
 
