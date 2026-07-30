@@ -18,16 +18,23 @@ attribution.
 
 ## Setup
 
-Install the matching coverage provider in your project (its version should track
-your Vitest version):
-
 ```bash
-npm install -D @vitest/coverage-v8
-# or: pnpm add -D @vitest/coverage-v8
+covsel init
 ```
 
-No `vitest.config.ts` changes are required — the adapter passes the coverage
-flags it needs on the command line.
+installs the adapter and `@vitest/coverage-v8` together, because the adapter
+records through that provider and would fail at the first `record` without it.
+
+Installing by hand, the provider comes along as a peer dependency under npm, and
+pnpm and yarn will tell you it is missing:
+
+```bash
+npm install -D @covsel/adapter-vitest @vitest/coverage-v8
+# or: pnpm add -D @covsel/adapter-vitest @vitest/coverage-v8
+```
+
+Its version should track your Vitest version. No `vitest.config.ts` changes are
+required — the adapter passes the coverage flags it needs on the command line.
 
 ## Record → affected → run
 
@@ -48,9 +55,11 @@ executed.
 
 ## Notes
 
-- Requires `@vitest/coverage-v8`; without it, `record` fails loudly rather than
-  writing an empty (unsafe) entry.
-- Granularity is per **file**: one recorded unit per test file, so a change to a
-  source it covered selects the whole file rather than the individual test.
+- Requires `@vitest/coverage-v8`. Without it, `record` refuses before running
+  anything and names the install command — Vitest would otherwise run the whole
+  suite and simply write no report, and an entry crediting nothing would read as
+  a test that covers nothing.
+- Granularity is per **file**: editing a source runs every test in a file that
+  executed it.
 - A runnable end-to-end example lives in
   [`examples/vitest-basic`](https://github.com/waviisoft/covsel/tree/main/examples/vitest-basic).

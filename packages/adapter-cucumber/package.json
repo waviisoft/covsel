@@ -26,6 +26,9 @@
   "dependencies": {
     "@covsel/core": "workspace:*"
   },
+  "peerDependencies": {
+    "@cucumber/cucumber": "*"
+  },
   "engines": {
     "node": ">=22"
   },

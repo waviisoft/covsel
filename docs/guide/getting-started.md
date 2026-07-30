@@ -14,9 +14,58 @@ covered in the [CI guide](/guide/ci).
 
 ## Install
 
-covsel ships no adapters, so install the CLI and the one for your runner. Which
-one is the only decision here, and [Adapters](/guide/adapters/) has the full
-picture:
+covsel ships no adapters — one per runner, installed separately — so setting up
+means installing the CLI plus the right adapter. `covsel init` works out which
+one that is:
+
+```bash
+npm install --save-dev covsel
+npx covsel init
+```
+
+`init` reads your `package.json`, works out which runner you use, and shows you
+what it found before touching anything:
+
+```
+covsel init: detected vitest — vitest is a dependency (adapter vitest)
+
+Plan:
+  install  @covsel/adapter-vitest, @vitest/coverage-v8 (pnpm)
+  write    covsel.json (adapter: vitest)
+  ignore   the map directory in .gitignore
+
+Set covsel up this way? [Y/n]
+```
+
+Confirm and it installs the adapter with your own package manager — plus
+anything else recording needs, like Vitest's coverage provider — writes the
+adapter to the config so later commands need no `--adapter`, and keeps the map
+out of version control. Detection is worth a glance before you say yes: a wrong
+adapter is a config that looks settled and records nothing useful.
+
+Decline and nothing happens at all — no config, no install. That is what "no"
+means; `--no-install` is how you ask to be configured without an install.
+
+| Flag               | What it does                                 |
+| ------------------ | -------------------------------------------- |
+| `--auto-approve`   | Carry the plan out without asking            |
+| `--no-install`     | Plan to configure without installing         |
+| `--adapter <name>` | Use this adapter instead of the detected one |
+
+`--no-install` changes the plan rather than skipping the question: the packages
+it will not install are listed under `skip`, with the command you will need, and
+you still confirm before anything is written.
+
+**`init` is interactive.** It writes files and installs packages, so it does
+nothing without an answer. With no terminal to ask — CI, a script, a coding
+agent — it prints the plan, changes nothing, and exits non-zero; pass
+`--auto-approve` to authorise an unattended run.
+
+`init` does not guess. A runner it has no signature for is reported, along with
+a link for requesting an adapter and the environment such a request needs, and
+nothing is written — pass `--adapter <name>` to name one yourself.
+
+### Or choose the adapter yourself
 
 ```bash
 npm install --save-dev covsel @covsel/adapter-generic   # any command, whole-file
@@ -29,7 +78,8 @@ npm install --save-dev covsel @covsel/adapter-cucumber  # cucumber-js, per scena
 Adapters are separate packages because most projects need exactly one: bundling
 five runners' worth of code into every install would make you carry four you
 will never load. A name covsel does not find is reported with the package to
-install, so a missing one is never a mystery.
+install, so a missing one is never a mystery. [Adapters](/guide/adapters/) has
+the full picture.
 
 ## The loop
 
@@ -50,9 +100,10 @@ covsel run -- node --test
 covsel watch -- node --test
 ```
 
-Every command takes `--adapter`, not just `record`; the lines above use the
-default, `generic`. A Vitest project passes `--adapter vitest` to `affected`,
-`run`, and `watch` as well.
+`affected`, `run`, and `watch` resolve an adapter just as `record` does: the
+`--adapter` flag first, then the adapter `covsel init` wrote to your config,
+then `generic`. The lines above use the default; a project that skipped `init`
+passes the flag to each command.
 
 [Watch mode](/guide/watch) drives the same selection continuously — one run per
 save, debounced, falling open to a full run whenever it cannot tell what a
@@ -88,11 +139,12 @@ code:
 
 ## Configuration
 
-Selection needs no configuration once an adapter is installed. To refine, add a `.covsel.json` (or
+Selection needs no configuration once an adapter is installed. To refine, add a `covsel.json` (or
 `covsel.config.js`) at your repo root:
 
 ```jsonc
 {
+  "adapter": "vitest", // the installed adapter to record with; --adapter overrides
   "testGlobs": ["**/*.{test,spec}.?(c|m)[jt]s?(x)"],
   "sourceGlobs": ["**/*"], // repo minus node_modules/dist/coverage/.covsel and tests
   "alwaysRun": ["**/fixtures/**"], // test files that must always run

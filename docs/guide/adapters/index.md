@@ -83,8 +83,8 @@ of covsel is identical regardless of which path recorded the map.
 
 The generic, Vitest, and Jest adapters record at whole-file granularity. The
 node:test and cucumber-js adapters record each **test** or **scenario**
-individually and run only the affected ones -- which is the only selection
-cucumber-js has.
+individually and run only the affected ones -- which for cucumber-js is the only
+selection it has natively.
 
 Any other runner that executes your source directly is already covered at file
 level by the generic adapter, which does not care what it is wrapping -- Mocha on

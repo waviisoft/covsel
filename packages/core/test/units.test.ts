@@ -40,10 +40,10 @@ describe('config', () => {
     expect(c.sentinels).toEqual(DEFAULT_CONFIG.sentinels);
   });
 
-  it('loads .covsel.json over defaults', async () => {
+  it('loads covsel.json over defaults', async () => {
     const dir = mkdtempSync(join(tmpdir(), 'covsel-cfg-'));
     try {
-      writeFileSync(join(dir, '.covsel.json'), JSON.stringify({ alwaysRun: ['e2e/**'] }));
+      writeFileSync(join(dir, 'covsel.json'), JSON.stringify({ alwaysRun: ['e2e/**'] }));
       const c = await loadConfig(dir);
       expect(c.alwaysRun).toEqual(['e2e/**']);
       expect(c.testGlobs).toEqual(DEFAULT_CONFIG.testGlobs);

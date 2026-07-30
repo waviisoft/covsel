@@ -7,6 +7,10 @@ have run_. So every design tension resolves toward **over-selection**:
   map says nothing about — unknown coverage never reads as "covers nothing".
 - Changes to **sentinel files** (`package.json`, tsconfig, lockfile, test setup)
   invalidate the map and trigger a **full run**.
+- Changes to **covsel's own config** trigger a **full run**, whatever your
+  `sentinels` say. A map means what it means only under the config it was
+  recorded with — narrowing `sourceGlobs`, for instance, stops changes outside
+  the new globs counting at all, and nothing else would notice.
 - A stale, unreadable, or wrong-schema map means a **full run**, never a skipped
   one.
 - A map whose recorded commit this checkout does not have, or that records no

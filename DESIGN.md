@@ -107,29 +107,34 @@ stable interfaces from `@covsel/core`.
 
 ### Known-hard: bundles
 
-Node with on-the-fly transpile (tsx/swc/ts-node) stays ~1:1 -> mapping execution
-back to a source is straightforward. **Browser bundles** (Turbopack/webpack/
+Node with on-the-fly transpile (tsx/swc/ts-node) stays ~1:1, so the offsets V8
+reports are the offsets on disk. **Browser bundles** (Turbopack/webpack/
 esbuild/vite) fuse many sources into one chunk -> they need source maps to fan
 coverage back out, and a bundle whose build published none cannot be traced home
 at all.
 
-covsel's answer is to refuse rather than guess. A script that executed and
-resolves to no source in the repository **fails the recording**, naming the
-script, and no map is written -- because an entry that credits nothing is read
-afterwards as a test that covers nothing, and that skips it on every diff. Maps
-are looked for everywhere a build publishes one (a `sourceMappingURL` comment, an
-inline `data:` URI, the conventional `<script>.map` neighbour, over HTTP, and in
-a build directory served URLs map onto), and a source fetched without a
-disk-relative anchor is confirmed against `sourcesContent` before it is credited.
-Scripts that genuinely never will be mappable are allowed by listing them in
-`sourceMaps.allowUnmappable`, and named on every recording that lets one through
--- a hatch the generic wrap honors, and the per-test shims do not yet receive.
+covsel's answer to that last case is to refuse rather than guess. A script that
+executed and resolves to no source in the repository **fails the recording**,
+naming the script, and no map is written -- because an entry that credits nothing
+is read afterwards as a test that covers nothing, and that skips it on every
+diff. Maps are looked for everywhere a build publishes one (a `sourceMappingURL`
+comment, an inline `data:` URI, the conventional `<script>.map` neighbour, over
+HTTP, and in a build directory served URLs map onto), and a source fetched
+without a disk-relative anchor is confirmed against `sourcesContent` before it is
+credited. Scripts that genuinely never will be mappable are allowed by listing
+them in `sourceMaps.allowUnmappable`, and named on every recording that lets one
+through -- a hatch the generic wrap honors, and the per-test shims do not yet
+receive.
 
-What a mapped bundle credits is every source it was built from, not the ranges
-that actually executed: the mapping is read for its source list, so a test that
-touches one module in a chunk is recorded against all of them. That
-over-selects, which is the safe direction, and it is why file-level attribution
-through a bundle is coarse rather than wrong.
+Fanning coverage back out is done from the mapping segments themselves rather
+than through an off-the-shelf istanbul conversion, which was measured to lose the
+cases that matter: those conversions carry named functions only, so an executed
+arrow handler vanishes, and they attribute unmapped bundler-injected code to the
+map's first source. Both drop blocks, and a dropped block skips a test. That
+projection lives in `@covsel/core` as a primitive the recorder does not call, so
+what a mapped bundle credits today is every source it was built from rather than
+the ranges that executed -- coarse, and over-selecting, which is the safe
+direction to be coarse in.
 
 The consequence is that covsel covers the Node/unit/integration case. Coverage of
 code executing inside a browser is not something it can observe today.
@@ -141,22 +146,26 @@ code executing inside a browser is not something it can observe today.
 ### CLI surface
 
 ```bash
+# Set the project up: detect the runner, install its adapter, write the config
+covsel init
+
 # Record a full run and build/refresh the map
-covsel record --adapter vitest -- vitest run
+covsel record -- vitest run
 covsel record --adapter cucumber -- cucumber-js
 
 # Print the tests affected by the working-tree diff (or a range).
-# Every command names its adapter; the default is `generic`, and covsel
-# bundles none, so the one your runner needs has to be installed either way.
-covsel affected --adapter vitest      # vs. the commit the map was recorded on
-covsel affected --adapter vitest --since origin/main
-covsel affected --adapter vitest --format files   # test files, one per line (default)
+# Every command resolves an adapter, not just `record`: --adapter first, then
+# the one `init` wrote to the config, then `generic`. covsel bundles none, so
+# whichever name wins has to name a package the project installed.
+covsel affected                       # vs. the commit the map was recorded on
+covsel affected --since origin/main
+covsel affected --format files        # test files, one per line (default)
 
 # Run only affected tests (wraps the runner)
-covsel run --adapter vitest -- vitest run
+covsel run -- vitest run
 
 # Watch: rerun affected tests as you edit (the DX magnet)
-covsel watch --adapter vitest -- vitest run
+covsel watch -- vitest run
 
 # Introspect the map: age, size, sentinel drift, whether the next run is full
 covsel status
@@ -165,14 +174,16 @@ covsel status
 covsel merge shard-*/map.json --out .covsel/map.json
 ```
 
-### Config file (`.covsel.json` / `covsel.config.js`)
+### Config file (`covsel.json` / `covsel.config.js`)
 
-Every field has a zero-config default, so a project that installs an adapter
-needs no config file at all. The comments below are for the reader; `.covsel.json`
-is parsed as strict JSON.
+Every field but `adapter` has a default, so a project that installs an adapter
+needs no config file at all; `covsel init` writes one so the adapter choice is
+made once. The comments below are for the reader -- `covsel.json` is parsed as
+strict JSON.
 
 ```jsonc
 {
+  "adapter": "vitest", // what `--adapter` would otherwise say every time
   "testGlobs": ["**/*.{test,spec}.?(c|m)[jt]s?(x)"],
   "sourceGlobs": ["src/**"],
   "alwaysRun": ["**/fixtures/**"],
