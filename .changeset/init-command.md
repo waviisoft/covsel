@@ -18,9 +18,8 @@ setup does not end with a config that looks complete and fails at the first
 
 Detection is shown before anything happens, because detection can be wrong and a
 wrong adapter is a config that looks settled while recording nothing useful.
-`-y` skips the prompt, `--no-install` writes the config and installs nothing, and
-`--adapter <name>` names one yourself. Without a terminal to ask — CI, a script,
-a coding agent — `init` proceeds, since running it is itself the intent. If the
+`--auto-approve` carries the plan out without asking, `--no-install` plans to
+configure without installing, and `--adapter <name>` names one yourself. If the
 install fails, the config is still correct and the exact command that finishes
 the job is printed rather than left implied.
 

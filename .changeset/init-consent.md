@@ -25,3 +25,11 @@ that installs them, and named again once the config is written.
 Declining is unchanged and stays that way: nothing is written and nothing is
 installed. Declining the plan and asking for a plan without an install are
 different answers, and `--no-install` is how you say the second.
+
+The two refusals exit differently, deliberately. Declining exits 0 — you were
+asked and you answered, and the command did what you told it to. An unattended
+run with no approval exits non-zero, because nothing asked and nothing answered:
+a `covsel init && covsel record` chain must not carry on as though the project
+were configured. Mind that a declined interactive run does let such a chain
+continue; if you script around `init`, check for the config rather than the exit
+code.
