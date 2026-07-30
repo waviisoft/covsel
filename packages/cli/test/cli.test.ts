@@ -3,6 +3,7 @@ import {
   existsSync,
   mkdirSync,
   mkdtempSync,
+  readdirSync,
   readFileSync,
   rmSync,
   writeFileSync,
@@ -51,6 +52,30 @@ afterEach(() => {
 afterAll(() => {
   for (const dir of dirs) rmSync(dir, { recursive: true, force: true });
 });
+
+/**
+ * Whether an archive holds a map for a commit. Archived names carry the recorded
+ * instant as well as the commit, so the commit is a suffix rather than the name.
+ */
+function archivedUnder(dir: string, commit: string): boolean {
+  return existsSync(dir) && readdirSync(dir).some((n) => n.endsWith(`-${commit}.json`));
+}
+
+/** Write a map into a project's store, with only the fields a test cares about. */
+function writeMap(cwd: string, fields: { commit?: string; recordedAt: string }): void {
+  mkdirSync(join(cwd, '.covsel'), { recursive: true });
+  writeFileSync(
+    join(cwd, '.covsel', 'map.json'),
+    JSON.stringify({
+      schemaVersion: MAP_SCHEMA_VERSION,
+      granularity: 'file',
+      ...fields,
+      sentinelHashes: {},
+      observed: ['**'],
+      entries: [],
+    }),
+  );
+}
 
 async function captureStdout(
   fn: () => Promise<number>,
@@ -101,6 +126,14 @@ describe('covsel cli', () => {
   it('help documents the watch options', async () => {
     const { out } = await captureStdout(() => main(['--help']));
     for (const opt of ['--debounce', '--record', '--no-initial-run']) {
+      expect(out).toContain(opt);
+    }
+  });
+
+  it('help documents the archive commands and their options', async () => {
+    const { out } = await captureStdout(() => main(['--help']));
+    for (const cmd of ['publish', 'fetch']) expect(out).toContain(`covsel ${cmd}`);
+    for (const opt of ['--archive', '--keep', '--require', '--force']) {
       expect(out).toContain(opt);
     }
   });
@@ -895,5 +928,84 @@ describe('the persisted adapter', () => {
 
     expect(err).toContain("adapter 'from-flag' is not installed");
     expect(err).not.toContain('from-config');
+  });
+});
+
+/**
+ * publish and fetch read and write real directories, so these run in a throwaway
+ * project. The interesting behavior is in core (see `archive.test.ts`); what
+ * matters here is that a CI job cannot be told a lie by the exit code.
+ */
+describe('covsel publish and fetch', () => {
+  it('publish rejects a --keep that would archive nothing', async () => {
+    const { code, err } = await inProject({ 'package.json': pkg({}) }, () =>
+      capture(() => main(['publish', '--keep', '0'])),
+    );
+    expect(code).toBe(1);
+    expect(err).toContain('--keep needs a whole number');
+  });
+
+  it('publish says to record first when there is no map', async () => {
+    const { code, err } = await inProject({ 'package.json': pkg({}) }, () =>
+      capture(() => main(['publish'])),
+    );
+    expect(code).toBe(1);
+    expect(err).toContain('run covsel record first');
+  });
+
+  it('publish refuses a map that records no commit', async () => {
+    const { code, err } = await inProject({ 'package.json': pkg({}) }, (cwd) => {
+      writeMap(cwd, { recordedAt: '2026-07-01T00:00:00.000Z' });
+      return capture(() => main(['publish']));
+    });
+    expect(code).toBe(1);
+    expect(err).toContain('records no commit');
+  });
+
+  it('publish archives a map under its commit', async () => {
+    const commit = 'a'.repeat(40);
+    const { code, err, archived } = await inProject(
+      { 'package.json': pkg({}) },
+      async (cwd) => {
+        writeMap(cwd, { commit, recordedAt: '2026-07-01T00:00:00.000Z' });
+        const res = await capture(() => main(['publish']));
+        return {
+          ...res,
+          archived: archivedUnder(join(cwd, '.covsel', 'archive'), commit),
+        };
+      },
+    );
+    expect(code).toBe(0);
+    expect(err).toContain('archived aaaaaaaaaaaa');
+    expect(archived).toBe(true);
+  });
+
+  it('publish honours --archive', async () => {
+    const commit = 'b'.repeat(40);
+    const { code, archived } = await inProject(
+      { 'package.json': pkg({}) },
+      async (cwd) => {
+        writeMap(cwd, { commit, recordedAt: '2026-07-01T00:00:00.000Z' });
+        const res = await capture(() => main(['publish', '--archive', 'maps']));
+        return { ...res, archived: archivedUnder(join(cwd, 'maps'), commit) };
+      },
+    );
+    expect(code).toBe(0);
+    expect(archived).toBe(true);
+  });
+
+  it('fetch finding nothing exits 0 and says the next run is a full one', async () => {
+    const { code, err } = await inProject({ 'package.json': pkg({}) }, () =>
+      capture(() => main(['fetch'])),
+    );
+    expect(code).toBe(0);
+    expect(err).toContain('full run');
+  });
+
+  it('fetch finding nothing exits non-zero with --require', async () => {
+    const { code } = await inProject({ 'package.json': pkg({}) }, () =>
+      capture(() => main(['fetch', '--require'])),
+    );
+    expect(code).toBe(1);
   });
 });

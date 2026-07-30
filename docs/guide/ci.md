@@ -25,10 +25,61 @@ Two cases resolve to a **full run**, loudly, rather than a quiet under-selection
 
 Both are reported by `covsel status` under `next:`.
 
+## The archive: keep several maps, and pick the right one
+
+Keeping only the newest map is the obvious thing and the wrong thing. The newest
+map was recorded on whatever commit was current when it was written, and that may
+be a commit your pull request's checkout has never heard of — another branch, a
+force-push, a pruned history. covsel then falls open to a full run, which is safe
+and costs you the minutes you installed covsel to save, while a slightly older
+map recorded on an ancestor of your branch would have selected perfectly.
+
+So covsel keeps maps in an **archive**, addressed by the commit each was recorded
+on, and picks between them:
+
+```bash
+covsel publish   # add the recorded map to the archive, under its commit
+covsel fetch     # install the best archived map as this checkout's map
+```
+
+`fetch` prefers the most recently recorded map whose commit is an **ancestor of
+`HEAD`** — the tight case, and the one a pull request hits. Failing that it takes
+the newest commit your checkout _has_, which still selects soundly (covsel diffs
+that commit's tree against yours directly, so nothing is missed) but diffs more
+files, so it over-selects. Failing that too, it installs nothing and the next run
+is a full one. It says which it did, and why the others were passed over:
+
+```
+covsel fetch: skipped 3f2a1c9e8b7d -- not in this checkout (fetch more history?)
+covsel fetch: installed the map recorded at 9c81de4a2f60 (2026-07-28T04:11:02.884Z) to /repo/.covsel/map.json
+```
+
+The archive lives at `.covsel/archive` by default, so whatever you already cache
+to carry `.covsel` between jobs carries it too. `--archive <dir>` puts it
+somewhere else — a shared volume, an artifact directory. Publishing keeps the 20
+newest maps and prunes the rest; `--keep <n>` changes that.
+
+Each archived map is named for the instant it was recorded and the commit it
+records, so choosing one needs no file opened until the choice is made. That
+matters at scale: a map is not small — covsel's own is over half a megabyte for a
+modest repository — so `keep` multiplies whatever yours weighs. Twenty maps of half
+a megabyte is nothing; twenty of fifty megabytes is a gigabyte, against a 10 GB
+per-repository limit on the GitHub Actions cache. If your maps are large, lower
+`--keep` rather than discovering the ceiling later.
+
+Two things `publish` refuses, both loudly:
+
+- A map that records **no commit**, since nothing could ever measure change from
+  it. That is what a map recorded from a dirty working tree looks like, so
+  publish from a clean checkout.
+- A commit that is not a commit hash, so a hand-edited map cannot decide where
+  covsel writes.
+
 ## Publish on the default branch
 
-Record the map on `main` and cache it. The store is just a directory, so
-`actions/cache` is all you need:
+Record the map on `main` and add it to the archive. Restore the archive first, so
+publishing grows it rather than replacing it — an archive of exactly one map is
+the problem this section opened with:
 
 ```yaml
 name: covsel map
@@ -36,6 +87,10 @@ name: covsel map
 on:
   push:
     branches: [main]
+
+concurrency:
+  group: covsel-map # two records would race on the cache key
+  cancel-in-progress: false
 
 jobs:
   record:
@@ -48,17 +103,20 @@ jobs:
         with:
           node-version: 22
       - run: npm ci
+      - uses: actions/cache/restore@v4
+        with:
+          path: .covsel/archive
+          key: covsel-archive-${{ github.sha }}
+          restore-keys: covsel-archive-
       - run: npx covsel record -- npm test
+      - run: npx covsel publish
       - uses: actions/cache/save@v4
         with:
-          path: .covsel
-          key: covsel-map-${{ github.sha }}
+          path: .covsel/archive
+          key: covsel-archive-${{ github.sha }}
 ```
 
-## Restore on pull requests
-
-Restore the newest map with `restore-keys` — an older map is still safe, because
-selection measures from the commit that map records:
+## Fetch on pull requests
 
 ```yaml
 name: PR tests
@@ -78,15 +136,35 @@ jobs:
       - run: npm ci
       - uses: actions/cache/restore@v4
         with:
-          path: .covsel
-          key: covsel-map-${{ github.sha }}
-          restore-keys: covsel-map-
+          path: .covsel/archive
+          key: covsel-archive-${{ github.sha }}
+          restore-keys: covsel-archive-
+      - run: npx covsel fetch
       - run: npx covsel status
       - run: npx covsel run -- npm test
 ```
 
-No cache hit means no map, which means a full run — the safe default. Nothing
-about a missing or stale map can cause a test to be skipped.
+No archive means no map, which means a full run — the safe default. Nothing about
+a missing or stale map can cause a test to be skipped, so `fetch` exits 0 when it
+finds nothing usable and says the next run will be a full one. A job that would
+rather know asks with `--require`, which exits non-zero instead.
+
+`fetch` will not overwrite a local map recorded more recently than the archived
+one — that only happens on a developer's machine, where the local recording is
+the better map. `--force` overrides it.
+
+## covsel's own CI does this
+
+The workflows in this repository are the worked example:
+[`.github/workflows/covsel-map.yaml`](https://github.com/waviisoft/covsel/blob/main/.github/workflows/covsel-map.yaml)
+records and publishes on `main`, and the `select` job in
+[`.github/workflows/ci.yaml`](https://github.com/waviisoft/covsel/blob/main/.github/workflows/ci.yaml)
+fetches and runs the affected tests on every pull request.
+
+One detail there is worth copying: the selecting job runs **alongside** the job
+that runs the whole suite, not instead of it. Until you trust a selection, the
+full run is what gates the merge and the selected run is what you compare it
+against.
 
 ## Sharded suites
 

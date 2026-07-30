@@ -13,6 +13,7 @@ export * from './source-map.js';
 export * from './mapper.js';
 export * from './store.js';
 export * from './merge.js';
+export * from './archive.js';
 export * from './combine.js';
 export * from './git.js';
 export * from './blocks.js';

@@ -1,14 +1,17 @@
 import { spawnSync } from 'node:child_process';
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
-import { dirname, join } from 'node:path';
+import { dirname, join, resolve } from 'node:path';
 import { createInterface } from 'node:readline/promises';
 
 import {
   type Adapter,
   type AffectedResult,
+  archiveDirFor,
   computeStatus,
   type CoverageMap,
   type CovselConfig,
+  DEFAULT_ARCHIVE_KEEP,
+  fetchMap,
   type InitDiagnostics,
   type Recorder,
   type RecorderInit,
@@ -21,8 +24,10 @@ import {
   isDirtyWorkTree,
   isUsableMap,
   loadRawConfig,
+  LocalStore,
   MAP_SCHEMA_VERSION,
   mergeMaps,
+  publishMap,
   recordMap,
   resolveConfigFor,
   runAffected,
@@ -50,6 +55,8 @@ Usage:
   covsel watch -- <command>                        Rerun affected tests as you edit
   covsel status                                    Show map age, size, and next action
   covsel merge <maps...> [--out <file>]            Merge CI shard maps into one
+  covsel publish [--archive <dir>] [--keep <n>]    Archive the map under its commit
+  covsel fetch [--archive <dir>] [--require]       Install the best archived map
   covsel --help                                    Show this help
   covsel --version                                 Show version
 
@@ -65,6 +72,10 @@ Options:
   --debounce <ms>    watch: quiet period after a change before running (default 200)
   --record           watch: re-record the map after a run that passes
   --no-initial-run   watch: wait for the first change instead of running at startup
+  --archive <dir>    publish/fetch: the archive directory (default <store>/archive)
+  --keep <n>         publish: maps to keep, oldest pruned first (default ${DEFAULT_ARCHIVE_KEEP})
+  --require          fetch: exit non-zero when no archived map can be used
+  --force            fetch: replace a local map recorded more recently
 
 init detects the runner, shows what it would change, and on your say-so installs
 its adapter and writes that adapter to the config, so later commands need no
@@ -906,6 +917,97 @@ async function cmdMerge(argv: string[]): Promise<number> {
   return 0;
 }
 
+/** The archive directory for this invocation: `--archive`, or the configured one. */
+function archiveDir(opts: string[], cwd: string, config: CovselConfig): string {
+  const flagged = flag(opts, 'archive');
+  return flagged === undefined ? archiveDirFor(cwd, config) : resolve(cwd, flagged);
+}
+
+async function cmdPublish(argv: string[]): Promise<number> {
+  const cwd = process.cwd();
+  const config = await loadConfig(cwd);
+  const keepRaw = flag(argv, 'keep');
+  const keep = keepRaw === undefined ? undefined : Number(keepRaw);
+  if (keep !== undefined && (!Number.isInteger(keep) || keep < 1)) {
+    err('covsel publish: --keep needs a whole number of maps, at least 1\n');
+    return 1;
+  }
+
+  const store = new LocalStore({ cwd, dir: config.store.dir });
+  const map = await store.read();
+  if (map === undefined) {
+    // A map that is present but rejected is a different problem from no map at
+    // all, and after a schema bump it is the common one. Pointing at "record
+    // first" would be right by accident and misleading on the way there.
+    err(
+      existsSync(store.path())
+        ? `covsel publish: the map at ${store.path()} is not usable ` +
+            `(recorded by a different covsel version?) -- re-record it\n`
+        : `covsel publish: no map at ${store.path()} -- run covsel record first\n`,
+    );
+    return 1;
+  }
+
+  const dir = archiveDir(argv, cwd, config);
+  const result = publishMap({ dir, map, ...(keep !== undefined ? { keep } : {}) });
+  if (!result.ok) {
+    err(`covsel publish: ${result.reason}\n`);
+    return 1;
+  }
+  err(
+    `covsel publish: archived ${result.commit.slice(0, 12)} ` +
+      `(${map.entries.length} entries) to ${result.file}\n`,
+  );
+  if (result.pruned.length > 0) {
+    err(
+      `covsel publish: pruned ${result.pruned.length} older map(s): ` +
+        `${result.pruned.map((c) => c.slice(0, 12)).join(', ')}\n`,
+    );
+  }
+  return 0;
+}
+
+async function cmdFetch(argv: string[]): Promise<number> {
+  const cwd = process.cwd();
+  const config = await loadConfig(cwd);
+  const dir = archiveDir(argv, cwd, config);
+  const result = await fetchMap({
+    cwd,
+    dir,
+    storeDir: config.store.dir,
+    ...(hasFlag(argv, 'force') ? { force: true } : {}),
+  });
+
+  // Every candidate that was passed over is a map someone published expecting it
+  // to be used, so the reason it was not is worth the line in a CI log.
+  for (const skipped of result.skipped) {
+    err(`covsel fetch: skipped ${skipped.commit.slice(0, 12)} -- ${skipped.reason}\n`);
+  }
+
+  if (!result.ok) {
+    err(`covsel fetch: ${result.reason}\n`);
+    // Not finding a map is the fail-open path, not a failure: the tests still
+    // have to run, and they run in full. A caller that would rather know says so.
+    if (hasFlag(argv, 'require')) return 1;
+    err('covsel fetch: the next selection will be a full run\n');
+    return 0;
+  }
+
+  err(
+    `covsel fetch: installed the map recorded at ${result.commit.slice(0, 12)}` +
+      `${result.recordedAt !== undefined ? ` (${result.recordedAt})` : ''} to ${result.mapPath}\n`,
+  );
+  if (result.how === 'present') {
+    // Sound, but the diff is two diverged trees against each other rather than a
+    // branch's own work, so the selection is wider than it looks.
+    err(
+      'covsel fetch: that commit is not an ancestor of HEAD, so the diff spans ' +
+        'both trees and selection will be wider than usual\n',
+    );
+  }
+  return 0;
+}
+
 export async function main(argv: string[] = process.argv.slice(2)): Promise<number> {
   const [cmd, ...rest] = argv;
 
@@ -932,6 +1034,10 @@ export async function main(argv: string[] = process.argv.slice(2)): Promise<numb
       return cmdStatus();
     case 'merge':
       return cmdMerge(rest);
+    case 'publish':
+      return cmdPublish(rest);
+    case 'fetch':
+      return cmdFetch(rest);
     default:
       err(`covsel: unknown command '${cmd}'. Run covsel --help.\n`);
       return 1;

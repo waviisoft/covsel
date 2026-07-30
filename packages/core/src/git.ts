@@ -32,6 +32,24 @@ export function commitExists(cwd: string, ref: string): boolean {
 }
 
 /**
+ * True when `ref` is an ancestor of `HEAD` — reachable by walking back from it.
+ *
+ * Only precision rides on this. A map recorded on an ancestor diffs to `HEAD`
+ * as this branch's own work plus whatever landed in between, while one recorded
+ * on a diverged commit diffs as everything that differs between two trees, which
+ * over-selects. Both are sound, so an answer this cannot get (no such commit, a
+ * git that fails) is `false`: the caller then prefers a diverged map or a full
+ * run, and neither can skip a test.
+ */
+export function isAncestorCommit(cwd: string, ref: string, of = 'HEAD'): boolean {
+  try {
+    return git(cwd, ['merge-base', '--is-ancestor', ref, of]).ok;
+  } catch {
+    return false;
+  }
+}
+
+/**
  * True when `cwd` is inside a git work tree. The command also succeeds in a bare
  * repository and inside `.git/`, printing `false`, so the output is what counts.
  */

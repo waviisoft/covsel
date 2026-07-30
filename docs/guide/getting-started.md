@@ -167,7 +167,10 @@ Selection needs no configuration once an adapter is installed. To refine, add a 
   "alwaysRun": ["**/fixtures/**"], // test files that must always run
   "sentinels": ["package.json", "pnpm-lock.yaml", "tsconfig*.json"],
   "granularity": "block", // "block" (function-level) | "file"
-  "store": { "dir": ".covsel" },
+  "store": {
+    "dir": ".covsel",
+    "archiveDir": "archive", // where publish/fetch keep maps by commit, under dir
+  },
 }
 ```
 
