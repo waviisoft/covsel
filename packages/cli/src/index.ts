@@ -11,6 +11,8 @@ import {
   type CoverageMap,
   type CovselConfig,
   DEFAULT_ARCHIVE_KEEP,
+  type ExplainResult,
+  explainPath,
   fetchMap,
   type InitDiagnostics,
   type Recorder,
@@ -33,6 +35,7 @@ import {
   runAffected,
   runAffectedSelection,
   selectAffected,
+  type TestId,
   watchAffected,
   type WatchEvent,
 } from '@covsel/core';
@@ -44,6 +47,9 @@ import {
   loadAdapter,
 } from './adapters.js';
 
+/** How many tests or sources `explain` lists before summarizing the rest. */
+const EXPLAIN_LIMIT = 20;
+
 const HELP = `covsel -- runtime-coverage test impact analysis for any JS/TS runner
 
 Usage:
@@ -54,6 +60,8 @@ Usage:
   covsel run -- <command>                          Run only the affected tests
   covsel watch -- <command>                        Rerun affected tests as you edit
   covsel status                                    Show map age, size, and next action
+  covsel explain <path> [--all]                    Show what covers a file, or what
+                                                   a test covers
   covsel merge <maps...> [--out <file>]            Merge CI shard maps into one
   covsel publish [--archive <dir>] [--keep <n>]    Archive the map under its commit
   covsel fetch [--archive <dir>] [--require]       Install the best archived map
@@ -76,6 +84,7 @@ Options:
   --keep <n>         publish: maps to keep, oldest pruned first (default ${DEFAULT_ARCHIVE_KEEP})
   --require          fetch: exit non-zero when no archived map can be used
   --force            fetch: replace a local map recorded more recently
+  --all              explain: list every test and source instead of the first ${EXPLAIN_LIMIT}
 
 init detects the runner, shows what it would change, and on your say-so installs
 its adapter and writes that adapter to the config, so later commands need no
@@ -83,6 +92,8 @@ its adapter and writes that adapter to the config, so later commands need no
 to learn which sources it executes. affected prints those test files a diff can
 affect, so \`<runner> $(covsel affected)\` runs only what is needed. watch drives
 the same selection continuously, running the affected tests on every save.
+explain reads the map in the other direction -- what covers this file, what this
+test covered, and what a change to it would select.
 
 covsel never skips a test whose behavior your change could alter -- and when it
 can't be sure, it runs it (fail-open). Map schema v${MAP_SCHEMA_VERSION}.
@@ -859,6 +870,147 @@ async function cmdStatus(): Promise<number> {
   return 0;
 }
 
+/** A unit as the map identifies it: the file, plus the test name when there is one. */
+function unitLabel(test: TestId): string {
+  return test.name === undefined ? test.file : `${test.file} > ${test.name}`;
+}
+
+/**
+ * Print an indented list, summarizing the tail rather than filling a terminal
+ * with it. A file 400 tests cover is a real answer to a real question, and it is
+ * also not one anybody reads 400 lines of — but the count is never elided, so
+ * what was left out is visible rather than implied.
+ */
+function printList(items: string[], all: boolean, indent = '  '): void {
+  const shown = all ? items : items.slice(0, EXPLAIN_LIMIT);
+  for (const item of shown) out(`${indent}${item}\n`);
+  if (shown.length < items.length) {
+    out(`${indent}... and ${items.length - shown.length} more (--all)\n`);
+  }
+}
+
+/** The `path:` .. `alwaysRun:` header: the path, and what decides a change to it. */
+function printExplainHeader(r: ExplainResult): void {
+  out(`path:       ${r.file}${r.present ? '' : ' (not in the working tree)'}\n`);
+  out(`map:        ${r.mapPath}\n`);
+  out(`recorded:   ${r.recordedAt ?? 'never'} (${r.granularity ?? 'no'} granularity)\n`);
+  // Said before anything about coverage, because it decides what the absence of
+  // coverage means: outside the observed scope the map's silence is where the
+  // recorder was looking, not a measurement of what ran.
+  out(
+    r.observed === false
+      ? 'observed:   no -- the recording could not observe this path, so a change\n' +
+          '            here falls open to a full run\n'
+      : 'observed:   yes (the recording could see this path)\n',
+  );
+  if (r.sentinel) {
+    out('sentinel:   yes -- a change here forces a full run, whatever covers it\n');
+  }
+  if (r.alwaysRun) {
+    out('alwaysRun:  yes -- this test runs whatever the diff says\n');
+  }
+}
+
+/** The source view: what covers this file, block by block where the map has them. */
+function printCoveredBy(r: ExplainResult, all: boolean): void {
+  const source = r.source;
+  if (source === undefined) return;
+  if (source.coveredBy.length === 0) {
+    out(
+      r.observed === false
+        ? 'covered by: nothing recorded, and the recording could not observe it\n'
+        : 'covered by: no recorded test covers this file -- a change to it selects\n' +
+            '            nothing, unless a sentinel or an alwaysRun glob matches\n',
+    );
+  } else {
+    out(`covered by: ${source.coveredBy.length} test(s)\n`);
+    printList(source.coveredBy.map(unitLabel), all);
+  }
+
+  if (source.blocks !== undefined) {
+    const covered = source.blocks.filter((b) => b.coveredBy.length > 0);
+    const width = Math.max(...source.blocks.map((b) => b.name.length));
+    out(`blocks:     ${covered.length} of ${source.blocks.length} covered\n`);
+    printList(
+      source.blocks.map((b) => {
+        const label = b.name.padEnd(width);
+        return b.coveredBy.length === 0
+          ? `uncovered  ${label}  no recorded test executes it`
+          : `covered    ${label}  ${b.coveredBy.map(unitLabel).join(', ')}`;
+      }),
+      all,
+    );
+    if (source.fileOnly.length > 0) {
+      out(
+        `  ${source.fileOnly.length} test(s) credit the whole file without ` +
+          'recording blocks in it\n',
+      );
+    }
+  } else if (source.blocksUnavailable !== undefined) {
+    out(`blocks:     not shown -- ${source.blocksUnavailable}\n`);
+  }
+  if (source.changedBlocks > 0) {
+    // A recorded hash the file no longer contains is the very thing selection
+    // reads as "this test's code changed", so it is worth naming as drift rather
+    // than leaving as a silent gap between the block list and the recording.
+    out(
+      `drift:      ${source.changedBlocks} recorded block(s) are no longer in this ` +
+        'file -- they changed since the recording\n',
+    );
+  }
+}
+
+/** The test view: the units recorded in this file, and what each one covered. */
+function printCovers(r: ExplainResult, all: boolean): void {
+  const test = r.test;
+  if (test === undefined) return;
+  if (test.unrecorded) {
+    out(
+      'covers:     nothing recorded -- the map does not record this test, so it\n' +
+        '            always runs until it is\n',
+    );
+    return;
+  }
+  out(`covers:     ${test.units.length} recorded unit(s)\n`);
+  for (const unit of test.units) {
+    const name = unit.test.name ?? '(whole file)';
+    out(`  ${name} -- ${unit.sources.length} source(s)\n`);
+    printList(unit.sources, all, '      ');
+  }
+}
+
+async function cmdExplain(argv: string[]): Promise<number> {
+  const target = argv.find((a) => !a.startsWith('--'));
+  if (target === undefined) {
+    err('covsel explain: expected a path, e.g. covsel explain src/thing.ts\n');
+    return 1;
+  }
+  const all = hasFlag(argv, 'all');
+  const cwd = process.cwd();
+  const config = await loadConfig(cwd);
+  const result = await explainPath({ cwd, config, path: target });
+  if (!result.ok) {
+    err(`covsel explain: ${result.error ?? `cannot explain ${target}`}\n`);
+    return 1;
+  }
+
+  if (!result.mapExists) {
+    // Nothing to index, which is an answer rather than an error: with no map
+    // every test runs, so nothing about this path is being decided by coverage.
+    out(`path:       ${result.file}\n`);
+    out(`map:        ${result.mapPath} (none recorded)\n`);
+    out(
+      `nothing to explain -- ${result.noMapReason ?? 'no usable map recorded'}, so\n` +
+        'the next selection is a full run\n',
+    );
+    return 0;
+  }
+  printExplainHeader(result);
+  printCoveredBy(result, all);
+  printCovers(result, all);
+  return 0;
+}
+
 async function cmdMerge(argv: string[]): Promise<number> {
   if (argv.at(-1) === '--out') {
     err('covsel merge: --out needs a file path\n');
@@ -1046,6 +1198,8 @@ export async function main(argv: string[] = process.argv.slice(2)): Promise<numb
       return cmdWatch(rest);
     case 'status':
       return cmdStatus();
+    case 'explain':
+      return cmdExplain(rest);
     case 'merge':
       return cmdMerge(rest);
     case 'publish':

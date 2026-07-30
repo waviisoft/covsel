@@ -5,7 +5,7 @@
 > no selection at all.
 
 **Status: early.** The `covsel init`, `record`, `affected`, `run`, `watch`,
-`status`, and `merge` commands work today, with block-hash (function-level)
+`status`, `explain`, and `merge` commands work today, with block-hash (function-level)
 selection, per-test selection for node:test, scenario-level selection for
 cucumber-js, and a documented CI recipe for publishing, restoring, and merging
 maps. Track the work in
@@ -65,6 +65,10 @@ npx covsel run --adapter cucumber -- cucumber-js
 
 # Inspect the map: age, size, sentinel drift, next action
 npx covsel status
+
+# Ask the map about one file: what covers it, or what a test covered
+npx covsel explain src/thing.ts
+npx covsel explain test/thing.test.ts
 
 # In CI: merge the maps from a sharded suite before publishing
 npx covsel merge shard-*/map.json --out .covsel/map.json

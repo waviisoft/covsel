@@ -1,7 +1,7 @@
 # Getting started
 
 Selection ships today: `covsel record`, `affected`, `run`, `watch`, `status`,
-and `merge` -- with function-level (block-hash) precision, per-test selection for
+`explain`, and `merge` -- with function-level (block-hash) precision, per-test selection for
 node:test, and scenario-level selection for cucumber-js. Running covsel in CI is
 covered in the [CI guide](/guide/ci).
 
@@ -141,6 +141,33 @@ covsel status
 
 shows the store path, the map's age and size, whether any sentinel changed since
 record, and whether the next `affected` would be a full run.
+
+### Ask about one file
+
+`status` describes the map as a whole and `affected` answers what a diff
+selects. When the question is about a single file — _what covers this, and why
+didn't my test run?_ — `explain` reads the map in the other direction:
+
+```bash
+covsel explain src/thing.ts        # the tests whose recordings credit this file
+covsel explain test/thing.test.ts  # the sources this test covered, unit by unit
+```
+
+For a source file it lists the tests that cover it, and at block granularity
+which of its functions they ran — a covered file with an uncovered function is
+exactly the case where selection looks wrong and is right. It names blocks by
+re-reading the file as it stands now, so a recorded block the file no longer
+contains is reported as drift: that block changed since the recording, and a
+change to it selects the tests that ran it.
+
+When the map says nothing about a path, the answer is why that is safe: a test
+the map does not record always runs, a path outside what the recording could
+observe falls open to a full run, and a source no test covers selects nothing
+unless a sentinel or `alwaysRun` glob matches. A path that is both a test and
+something another test covers is explained as both. Long lists are summarized;
+`--all` prints them in full.
+
+It is read-only — it changes no selection, no policy, and nothing on disk.
 
 ## Which adapter?
 

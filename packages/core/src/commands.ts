@@ -1,11 +1,11 @@
 import { spawnSync } from 'node:child_process';
-import { readFileSync } from 'node:fs';
-import { join } from 'node:path';
+import { readFileSync, statSync } from 'node:fs';
+import { join, resolve } from 'node:path';
 
-import { blockHashesOf } from './blocks.js';
+import { blockHashesOf, extractBlocks } from './blocks.js';
 import { agreedScope } from './combine.js';
 import { type CovselConfig, type CovselConfigInput, resolveConfig } from './config.js';
-import { discoverTestFiles } from './discover.js';
+import { discoverTestFiles, isTestFile } from './discover.js';
 import {
   commitExists,
   diffChanges,
@@ -21,10 +21,10 @@ import type {
   RecordedUnit,
   SelectionRunInit,
 } from './interfaces.js';
-import { makeMatcher, matchesAny } from './match.js';
+import { makeMatcher, makeStrictMatcher, matchesAny } from './match.js';
 import { type MapperConfig, V8FileMapper } from './mapper.js';
 import { ProcessObserver } from './observer.js';
-import { hashFileContents, walkFiles } from './paths.js';
+import { hashFileContents, toRepoRelative, walkFiles } from './paths.js';
 import { FailOpenPolicy, fullRunReason } from './policy.js';
 import {
   type CoverageMap,
@@ -817,5 +817,298 @@ export async function computeStatus(init: StatusInit): Promise<StatusResult> {
     changedSentinels,
     nextIsFullRun,
     ...(nextFullRunReason ? { nextFullRunReason } : {}),
+  };
+}
+
+/** One block of a source file as it stands now, and what the map says ran it. */
+export interface ExplainedBlock {
+  /** Function name, or the module block for the file's top-level skeleton. */
+  name: string;
+  hash: string;
+  /**
+   * Recorded units that executed this block. Empty means no recorded test ran
+   * it — a measurement, since the tests crediting this file did record blocks
+   * in it.
+   */
+  coveredBy: TestId[];
+}
+
+/** One recorded test unit, and the sources its entry credits. */
+export interface ExplainedUnit {
+  test: TestId;
+  /** Sources the unit covered, sorted and deduplicated. */
+  sources: string[];
+}
+
+/** What the map knows about a path read as a source: what covers it. */
+export interface SourceExplanation {
+  /** Units whose entry credits this file, sorted by file then name. */
+  coveredBy: TestId[];
+  /**
+   * The file's blocks as it stands on disk now, each with the units that ran
+   * it. Present only at block granularity, and only when some entry actually
+   * recorded blocks here — naming a block means re-parsing the current file, so
+   * this is the current shape of the code answered against past recordings.
+   */
+  blocks?: ExplainedBlock[];
+  /** Why block detail is absent, when the map is block-granular and it is. */
+  blocksUnavailable?: string;
+  /**
+   * Recorded block hashes this file no longer contains: blocks that changed
+   * since the recording. These are exactly the hashes that make a change to
+   * this file select the tests that ran them.
+   */
+  changedBlocks: number;
+  /**
+   * Units that credit the whole file without recording a block in it. Their
+   * coverage cannot be attributed to any one block, so block detail below them
+   * is not the whole answer for this file.
+   */
+  fileOnly: TestId[];
+}
+
+/** What the map knows about a path read as a test: what it covered. */
+export interface TestExplanation {
+  units: ExplainedUnit[];
+  /**
+   * True when no entry records this test file. An unrecorded test's coverage is
+   * unknown rather than empty, so selection always runs it.
+   */
+  unrecorded: boolean;
+}
+
+export interface ExplainResult {
+  /** False when the path itself could not be explained; `error` says why. */
+  ok: boolean;
+  error?: string;
+  /** The path, repo-relative, or as given when it could not be resolved. */
+  file: string;
+  mapPath: string;
+  /** True when a usable map is in the store. */
+  mapExists: boolean;
+  /** Why there is nothing to explain, when no usable map is stored. */
+  noMapReason?: string;
+  recordedAt?: string;
+  granularity?: Granularity;
+  /** True when the path is in the working tree; a map may outlive its files. */
+  present: boolean;
+  /**
+   * True when the map's observed globs cover this path. Outside them the map's
+   * silence is an artifact of where the recorder was looking rather than a
+   * measurement, and a change here falls open to a full run.
+   */
+  observed?: boolean;
+  /** True when a change here forces a full run because a sentinel matches it. */
+  sentinel: boolean;
+  /** True when an alwaysRun glob matches, so this test runs whatever the diff. */
+  alwaysRun: boolean;
+  /** True when the configured test globs match this path. */
+  isTestPath: boolean;
+  source?: SourceExplanation;
+  test?: TestExplanation;
+}
+
+export interface ExplainInit {
+  cwd: string;
+  config: CovselConfig;
+  /** The path to explain: absolute, or relative to `cwd`. */
+  path: string;
+}
+
+/** Append `test` under `key`, creating the bucket on first use. */
+function pushUnit(index: Map<string, TestId[]>, key: string, test: TestId): void {
+  let bucket = index.get(key);
+  if (!bucket) index.set(key, (bucket = []));
+  bucket.push(test);
+}
+
+/** Sort a unit list, dropping units that appear twice (a merged map can repeat). */
+function distinctUnits(units: TestId[]): TestId[] {
+  const seen = new Set<string>();
+  const out: TestId[] = [];
+  for (const unit of units) {
+    const key = `${unit.file}\0${unit.name ?? ''}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    out.push(unit);
+  }
+  sortUnits(out);
+  return out;
+}
+
+/**
+ * The map, read in the other direction: what the map says about one path.
+ *
+ * The entries answer "what did this test cover"; the question a developer has
+ * when selection looks wrong is the reverse one, about a file. This indexes the
+ * entries by covered path and reports what it finds, along with the facts that
+ * decide what a change there would do — whether the recording could observe it,
+ * whether a sentinel or alwaysRun glob matches, and whether the map records this
+ * test at all.
+ *
+ * Read-only, and deliberately unopinionated about which direction the path is:
+ * a path that is both a test and something another test covers gets both
+ * answers, since either one alone is a half-truth about what a change to it
+ * selects.
+ */
+export async function explainPath(init: ExplainInit): Promise<ExplainResult> {
+  const { cwd, config } = init;
+  const store = new LocalStore({ cwd, dir: config.store.dir });
+  const mapPath = store.path();
+  const fail = (file: string, error: string): ExplainResult => ({
+    ok: false,
+    error,
+    file,
+    mapPath,
+    mapExists: false,
+    present: false,
+    sentinel: false,
+    alwaysRun: false,
+    isTestPath: false,
+  });
+
+  const abs = resolve(cwd, init.path);
+  const rel = toRepoRelative(cwd, abs);
+  if (rel === undefined) {
+    return fail(init.path, `${init.path} is outside ${cwd}`);
+  }
+
+  let present: boolean;
+  try {
+    const stats = statSync(abs);
+    // A directory would have to be answered as a summary over everything under
+    // it, which is a different question with a different shape; refusing names
+    // what was asked rather than answering something else.
+    if (stats.isDirectory()) {
+      return fail(rel, `${rel} is a directory -- explain takes a single file`);
+    }
+    present = stats.isFile();
+  } catch {
+    // A path the map records but the tree no longer has is still explainable,
+    // and saying so is the answer to "why does nothing cover this now".
+    present = false;
+  }
+
+  const isTestPath = isTestFile(rel, config);
+  const sentinel = matchesAny(rel, config.sentinels);
+  const alwaysRun = matchesAny(rel, config.alwaysRun);
+
+  const map = await store.read();
+  if (map === undefined) {
+    if (!present) return fail(rel, `${rel} is not in ${cwd}`);
+    return {
+      ok: true,
+      file: rel,
+      mapPath,
+      mapExists: false,
+      noMapReason: fullRunReason(config, undefined, []),
+      present,
+      sentinel,
+      alwaysRun,
+      isTestPath,
+    };
+  }
+
+  const coveredBy: TestId[] = [];
+  const fileOnly: TestId[] = [];
+  const units: ExplainedUnit[] = [];
+  const unitsByBlock = new Map<string, TestId[]>();
+  const recordedHashes = new Set<string>();
+  for (const entry of map.entries) {
+    if (entry.test.file === rel) {
+      units.push({
+        test: entry.test,
+        sources: [...new Set(entry.files.map((f) => f.file))].sort(),
+      });
+    }
+    const creditsFile = entry.files.some((f) => f.file === rel);
+    let creditsBlock = false;
+    for (const block of entry.blocks ?? []) {
+      if (block.file !== rel) continue;
+      creditsBlock = true;
+      recordedHashes.add(block.blockHash);
+      pushUnit(unitsByBlock, block.blockHash, entry.test);
+    }
+    if (creditsFile || creditsBlock) coveredBy.push(entry.test);
+    if (creditsFile && !creditsBlock) fileOnly.push(entry.test);
+  }
+  // Same order selection uses, so a unit here and a selected unit read alike.
+  const unitKey = (u: ExplainedUnit): string => `${u.test.file}\0${u.test.name ?? ''}`;
+  units.sort((a, b) => (unitKey(a) < unitKey(b) ? -1 : unitKey(a) > unitKey(b) ? 1 : 0));
+
+  // Nothing on disk and nothing in the map: covsel has no answer to give, and an
+  // empty report would read as "nothing covers this" for a path that is most
+  // likely a typo.
+  if (!present && coveredBy.length === 0 && units.length === 0) {
+    return fail(rel, `${rel} is not in ${cwd} and the map does not mention it`);
+  }
+
+  // A path is explained as a source when it is not a test, and also when it is
+  // one that something else covers — a test file another test imports is both,
+  // and only saying so answers what a change to it selects.
+  const wantSource = !isTestPath || coveredBy.length > 0;
+  const wantTest = isTestPath || units.length > 0;
+
+  let source: SourceExplanation | undefined;
+  if (wantSource) {
+    let blocks: ExplainedBlock[] | undefined;
+    let blocksUnavailable: string | undefined;
+    let changedBlocks = 0;
+    if (map.granularity === 'block') {
+      if (recordedHashes.size === 0) {
+        // Every function would be listed as covered by nothing. For a file its
+        // own tests credit whole that is a rendering artifact rather than a gap,
+        // and worth saying; for a file nothing covers at all, the file-level
+        // answer has already said it.
+        if (coveredBy.length > 0) {
+          blocksUnavailable = 'the tests that cover this file recorded whole files';
+        }
+      } else if (!present) {
+        blocksUnavailable =
+          'the file is not in the working tree, so its blocks cannot be named';
+      } else {
+        try {
+          // Block hashes are opaque, so naming one means parsing the file as it
+          // is now and matching hashes. That is also what makes drift visible: a
+          // recorded hash the current file no longer contains is a block that
+          // changed since the recording.
+          const current = extractBlocks(readFileSync(abs, 'utf8'), rel);
+          blocks = current.map((block) => ({
+            name: block.name,
+            hash: block.hash,
+            coveredBy: distinctUnits(unitsByBlock.get(block.hash) ?? []),
+          }));
+          const currentHashes = new Set(current.map((b) => b.hash));
+          changedBlocks = [...recordedHashes].filter((h) => !currentHashes.has(h)).length;
+        } catch (e) {
+          blocksUnavailable = `the file could not be read: ${
+            e instanceof Error ? e.message : String(e)
+          }`;
+        }
+      }
+    }
+    source = {
+      coveredBy: distinctUnits(coveredBy),
+      ...(blocks !== undefined ? { blocks } : {}),
+      ...(blocksUnavailable !== undefined ? { blocksUnavailable } : {}),
+      changedBlocks,
+      fileOnly: distinctUnits(fileOnly),
+    };
+  }
+
+  return {
+    ok: true,
+    file: rel,
+    mapPath,
+    mapExists: true,
+    recordedAt: map.recordedAt,
+    granularity: map.granularity,
+    present,
+    observed: makeStrictMatcher(map.observed)(rel),
+    sentinel,
+    alwaysRun,
+    isTestPath,
+    ...(source !== undefined ? { source } : {}),
+    ...(wantTest ? { test: { units, unrecorded: units.length === 0 } } : {}),
   };
 }
