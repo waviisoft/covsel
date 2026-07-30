@@ -203,16 +203,50 @@ const pkg = (fields: Record<string, unknown>) =>
 
 /**
  * Put a fake package manager first on PATH, so an install is observable without
- * reaching the network. Returns the file it logs its arguments to.
+ * reaching the network. Returns the file it logs its arguments to. `failsFor`
+ * rejects only the installs whose arguments contain that string, which is how a
+ * registry answers for a package published under one specifier and not another.
  */
-function stubPackageManager(cwd: string, name: string, exitCode = 0): string {
+function stubPackageManager(
+  cwd: string,
+  name: string,
+  exitCode = 0,
+  failsFor?: string,
+): string {
   const bin = join(cwd, 'stub-bin');
   const log = join(cwd, 'install.log');
   mkdirSync(bin, { recursive: true });
-  writeFileSync(join(bin, name), `#!/bin/sh\necho "$@" >> ${log}\nexit ${exitCode}\n`);
+  const reject =
+    failsFor === undefined ? '' : `case "$*" in *${failsFor}*) exit 1 ;; esac\n`;
+  writeFileSync(
+    join(bin, name),
+    `#!/bin/sh\necho "$@" >> ${log}\n${reject}exit ${exitCode}\n`,
+  );
   chmodSync(join(bin, name), 0o755);
   vi.stubEnv('PATH', `${bin}:${process.env['PATH'] ?? ''}`);
   return log;
+}
+
+/**
+ * Install a working adapter into the project under a package name of its own.
+ * A community adapter is a package like any other, and only an installed one
+ * tells "covsel has not heard of this name" apart from "nothing provides it".
+ */
+function stubAdapterPackage(cwd: string, packageName: string, name: string): void {
+  const dir = join(cwd, 'node_modules', packageName);
+  mkdirSync(dir, { recursive: true });
+  writeFileSync(
+    join(dir, 'package.json'),
+    `${JSON.stringify({ name: packageName, type: 'module', main: 'index.js' })}\n`,
+  );
+  writeFileSync(
+    join(dir, 'index.js'),
+    'export const adapter = {\n' +
+      `  name: ${JSON.stringify(name)},\n` +
+      '  formatSelection: (tests) => tests.map((t) => t.file),\n' +
+      "  createRecorder: () => ({ observes: ['**'], record: async () => [] }),\n" +
+      '};\n',
+  );
 }
 
 describe('covsel init', () => {
@@ -255,22 +289,6 @@ describe('covsel init', () => {
 
     expect(out).toContain('  install  @covsel/adapter-not-a-real-runner');
     expect(installed).toBe('add --save-dev @covsel/adapter-not-a-real-runner');
-  });
-
-  it('reports an install that failed without pretending setup finished', async () => {
-    const { code, err } = await inProject(
-      { 'package.json': pkg({ devDependencies: { vitest: '^3.0.0' } }) },
-      async (cwd) => {
-        stubPackageManager(cwd, 'npm', 1);
-        return capture(() =>
-          main(['init', '--adapter', 'not-a-real-runner', '--auto-approve']),
-        );
-      },
-    );
-
-    expect(code).toBe(1);
-    expect(err).toContain('the install failed');
-    expect(err).toContain('npm install --save-dev @covsel/adapter-not-a-real-runner');
   });
 
   it('installs what the runner needs beyond the adapter', async () => {
@@ -358,6 +376,165 @@ describe('covsel init', () => {
     expect(code).toBe(1);
     expect(err).toContain('no adapter records playwright yet');
     expect(err).toContain('Keep running that suite in full');
+  });
+});
+
+/**
+ * Whether a name has a package behind it is the registry's answer, not covsel's,
+ * so the install is the check — and it has to run before anything is written, or
+ * a name nothing provides leaves a project configured for an adapter that does
+ * not exist and every later command fails on it. Every test here stubs the
+ * package manager: one that reached a real registry would be asking the network
+ * what these tests assert.
+ */
+describe('covsel init — the package manager decides whether a name is real', () => {
+  it('installs an adapter published only under the community prefix', async () => {
+    const { code, config, installed } = await inProject(
+      { 'package.json': pkg({ devDependencies: { ava: '^6.0.0' } }) },
+      async (cwd) => {
+        // Nothing is published as @covsel/adapter-ava; covsel-adapter-ava is.
+        const log = stubPackageManager(cwd, 'npm', 0, '@covsel/adapter-ava');
+        const captured = await capture(() =>
+          main(['init', '--adapter', 'ava', '--auto-approve']),
+        );
+        return {
+          ...captured,
+          config: readFileSync(join(cwd, 'covsel.json'), 'utf8'),
+          installed: readFileSync(log, 'utf8'),
+        };
+      },
+    );
+
+    expect(code).toBe(0);
+    expect(installed).toContain('@covsel/adapter-ava');
+    expect(installed).toContain('covsel-adapter-ava');
+    expect(JSON.parse(config)).toEqual({ adapter: 'ava' });
+  });
+
+  it('accepts an adapter the project installed under either specifier', async () => {
+    const { code, config, installed } = await inProject(
+      { 'package.json': pkg({ devDependencies: { ava: '^6.0.0' } }) },
+      async (cwd) => {
+        const log = stubPackageManager(cwd, 'npm');
+        stubAdapterPackage(cwd, 'covsel-adapter-ava', 'ava');
+        const captured = await capture(() =>
+          main(['init', '--adapter', 'ava', '--auto-approve']),
+        );
+        return {
+          ...captured,
+          config: readFileSync(join(cwd, 'covsel.json'), 'utf8'),
+          installed: existsSync(log),
+        };
+      },
+    );
+
+    // An installed adapter is the answer already; asking the registry again
+    // would fail a project whose adapter came from somewhere else entirely.
+    expect(code).toBe(0);
+    expect(installed).toBe(false);
+    expect(JSON.parse(config)).toEqual({ adapter: 'ava' });
+  });
+
+  it('writes nothing when no specifier could be installed', async () => {
+    const { code, files } = await inProject(
+      { 'package.json': pkg({ devDependencies: { vitest: '^3.0.0' } }) },
+      async (cwd) => {
+        stubPackageManager(cwd, 'npm', 1);
+        const captured = await capture(() =>
+          main(['init', '--adapter', 'nope', '--auto-approve']),
+        );
+        return {
+          ...captured,
+          files: {
+            config: existsSync(join(cwd, 'covsel.json')),
+            gitignore: existsSync(join(cwd, '.gitignore')),
+          },
+        };
+      },
+    );
+
+    expect(code).not.toBe(0);
+    expect(files).toEqual({ config: false, gitignore: false });
+  });
+
+  it('names the specifiers it asked the package manager for', async () => {
+    const { err } = await inProject(
+      { 'package.json': pkg({ devDependencies: { vitest: '^3.0.0' } }) },
+      (cwd) => {
+        stubPackageManager(cwd, 'npm', 1);
+        return capture(() => main(['init', '--adapter', 'nope', '--auto-approve']));
+      },
+    );
+
+    expect(err).toContain('the install failed');
+    expect(err).toContain('npm install --save-dev @covsel/adapter-nope');
+    expect(err).toContain('npm install --save-dev covsel-adapter-nope');
+    expect(err).toContain('Nothing was written');
+    // What a failed install does and does not prove: a private registry, an
+    // offline machine and a name with nothing behind it all look alike here.
+    expect(err).not.toContain('does not exist');
+    // The old order wrote first and installed second, and said so.
+    expect(err).not.toContain('covsel is configured');
+  });
+
+  it('suggests the adapter a near-miss was probably meant to be', async () => {
+    const { err } = await inProject(
+      { 'package.json': pkg({ devDependencies: { vitest: '^3.0.0' } }) },
+      (cwd) => {
+        stubPackageManager(cwd, 'npm', 1);
+        return capture(() => main(['init', '--adapter', 'vitesst', '--auto-approve']));
+      },
+    );
+
+    expect(err).toContain('covsel init --adapter vitest');
+  });
+
+  it('claims no rollback when a failed install had nothing to roll back', async () => {
+    const { code, err, config } = await inProject(
+      {
+        'package.json': pkg({ devDependencies: { vitest: '^3.0.0' } }),
+        'covsel.json': `${JSON.stringify({ adapter: 'vitest' })}\n`,
+      },
+      async (cwd) => {
+        stubPackageManager(cwd, 'npm', 1);
+        const captured = await capture(() => main(['init', '--auto-approve']));
+        return { ...captured, config: readFileSync(join(cwd, 'covsel.json'), 'utf8') };
+      },
+    );
+
+    expect(code).not.toBe(0);
+    expect(err).toContain('the install failed');
+    expect(err).toContain('npm install --save-dev @vitest/coverage-v8');
+    // The config was the project's already, so "nothing was written" would read
+    // as covsel having taken it away.
+    expect(err).toContain('already names vitest');
+    expect(err).not.toContain('Nothing was written');
+    expect(JSON.parse(config)).toEqual({ adapter: 'vitest' });
+  });
+
+  it('writes the config under --no-install, where no install can vouch for it', async () => {
+    const { code, out, config, installed } = await inProject(
+      { 'package.json': pkg({ devDependencies: { ava: '^6.0.0' } }) },
+      async (cwd) => {
+        const log = stubPackageManager(cwd, 'npm');
+        const captured = await capture(() =>
+          main(['init', '--adapter', 'private-thing', '--no-install', '--auto-approve']),
+        );
+        return {
+          ...captured,
+          config: readFileSync(join(cwd, 'covsel.json'), 'utf8'),
+          installed: existsSync(log),
+        };
+      },
+    );
+
+    // --no-install says the project brings its own packages, so there is no
+    // install to prove the name with and nothing to withhold the config for —
+    // the way in for an adapter from a private registry or a workspace link.
+    expect(code).toBe(0);
+    expect(installed).toBe(false);
+    expect(JSON.parse(config)).toEqual({ adapter: 'private-thing' });
+    expect(out).toContain('npm install --save-dev @covsel/adapter-private-thing');
   });
 });
 
