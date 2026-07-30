@@ -27,6 +27,16 @@ const repoRoot = fileURLToPath(new URL('../../../', import.meta.url));
 const cjsBundle = fileURLToPath(new URL('../dist/index.cjs', import.meta.url));
 
 /**
+ * Both builds the child actually loads. Freshness judged on the CLI's bundle
+ * alone would pass a tree where the CLI was rebuilt after a core edit but core
+ * was not -- and the child would then run stale core, which is the failure this
+ * check exists to prevent.
+ */
+const builtBundles = ['../dist/index.cjs', '../../core/dist/index.cjs'].map((rel) =>
+  fileURLToPath(new URL(rel, import.meta.url)),
+);
+
+/**
  * Everything the bundle's behavior comes from. The CLI leaves `@covsel/core`
  * external, so the child loads core's build too, and a bundle judged fresh on
  * the CLI's sources alone would run last week's core against this week's tests.
@@ -49,7 +59,10 @@ beforeAll(() => {
   // underneath it, which is the one outcome that makes the test worthless -- so
   // rebuild when it is missing or older than the sources rather than trusting
   // whatever the last build left behind.
-  if (!existsSync(cjsBundle) || statSync(cjsBundle).mtimeMs < newestSource()) {
+  const oldestBuild = builtBundles.every((f) => existsSync(f))
+    ? Math.min(...builtBundles.map((f) => statSync(f).mtimeMs))
+    : 0;
+  if (oldestBuild < newestSource()) {
     execSync('pnpm --filter covsel... build', { cwd: repoRoot, stdio: 'ignore' });
   }
 }, 300_000);

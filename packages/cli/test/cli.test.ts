@@ -212,15 +212,24 @@ function stubPackageManager(
   name: string,
   exitCode = 0,
   failsFor?: string,
+  killedFor?: string,
 ): string {
   const bin = join(cwd, 'stub-bin');
   const log = join(cwd, 'install.log');
   mkdirSync(bin, { recursive: true });
+  // The needle is quoted inside the glob, so a pattern carrying `*`, `?` or `[`
+  // matches literally rather than silently widening.
   const reject =
-    failsFor === undefined ? '' : `case "$*" in *${failsFor}*) exit 1 ;; esac\n`;
+    failsFor === undefined ? '' : `case "$*" in *"${failsFor}"*) exit 1 ;; esac\n`;
+  // What Ctrl-C during an install looks like to spawnSync: no exit status, a
+  // signal instead.
+  const killed =
+    killedFor === undefined
+      ? ''
+      : `case "$*" in *"${killedFor}"*) kill -TERM $$ ;; esac\n`;
   writeFileSync(
     join(bin, name),
-    `#!/bin/sh\necho "$@" >> ${log}\n${reject}exit ${exitCode}\n`,
+    `#!/bin/sh\necho "$@" >> ${log}\n${reject}${killed}exit ${exitCode}\n`,
   );
   chmodSync(join(bin, name), 0o755);
   vi.stubEnv('PATH', `${bin}:${process.env['PATH'] ?? ''}`);
@@ -439,7 +448,7 @@ describe('covsel init — the package manager decides whether a name is real', (
     expect(JSON.parse(config)).toEqual({ adapter: 'ava' });
   });
 
-  it('writes nothing when no specifier could be installed', async () => {
+  it('writes no config when no specifier could be installed', async () => {
     const { code, files } = await inProject(
       { 'package.json': pkg({ devDependencies: { vitest: '^3.0.0' } }) },
       async (cwd) => {
@@ -457,8 +466,10 @@ describe('covsel init — the package manager decides whether a name is real', (
       },
     );
 
+    // The config is withheld — that is what installing first buys. Ignoring the
+    // map directory is unrelated to the install and still happens.
     expect(code).not.toBe(0);
-    expect(files).toEqual({ config: false, gitignore: false });
+    expect(files).toEqual({ config: false, gitignore: true });
   });
 
   it('names the specifiers it asked the package manager for', async () => {
@@ -473,7 +484,7 @@ describe('covsel init — the package manager decides whether a name is real', (
     expect(err).toContain('the install failed');
     expect(err).toContain('npm install --save-dev @covsel/adapter-nope');
     expect(err).toContain('npm install --save-dev covsel-adapter-nope');
-    expect(err).toContain('Nothing was written');
+    expect(err).toContain('No config was written');
     // What a failed install does and does not prove: a private registry, an
     // offline machine and a name with nothing behind it all look alike here.
     expect(err).not.toContain('does not exist');
@@ -501,6 +512,11 @@ describe('covsel init — the package manager decides whether a name is real', (
       },
       async (cwd) => {
         stubPackageManager(cwd, 'npm', 1);
+        // The adapter is present and only its support package is missing, which
+        // is what puts the failure on a project that already had its config.
+        // Stated here rather than inherited from whatever resolves around the
+        // test process, which would make this pass for the wrong reason.
+        stubAdapterPackage(cwd, '@covsel/adapter-vitest', 'vitest');
         const captured = await capture(() => main(['init', '--auto-approve']));
         return { ...captured, config: readFileSync(join(cwd, 'covsel.json'), 'utf8') };
       },
@@ -512,7 +528,7 @@ describe('covsel init — the package manager decides whether a name is real', (
     // The config was the project's already, so "nothing was written" would read
     // as covsel having taken it away.
     expect(err).toContain('already names vitest');
-    expect(err).not.toContain('Nothing was written');
+    expect(err).not.toContain('No config was written');
     expect(JSON.parse(config)).toEqual({ adapter: 'vitest' });
   });
 
@@ -774,6 +790,67 @@ describe('covsel init — --no-install', () => {
     expect(installed).toBe(false);
     expect(out).toContain('not installed (--no-install)');
     expect(out).toContain('npm install --save-dev');
+  });
+});
+
+describe('covsel init — when the install fails', () => {
+  it('ignores the map directory anyway, and says so', async () => {
+    // The gitignore line never depended on the install: whether covsel can
+    // record has no bearing on whether its output belongs in version control,
+    // and the user agreed to that line of the plan.
+    const { code, err, gitignore } = await inProject(
+      {
+        'package.json': pkg({ devDependencies: { vitest: '^3.0.0' } }),
+        'covsel.json': `${JSON.stringify({ adapter: 'vitest' })}\n`,
+      },
+      async (cwd) => {
+        stubPackageManager(cwd, 'npm', 1);
+        const captured = await capture(() => main(['init', '--auto-approve']));
+        return { ...captured, gitignore: existsSync(join(cwd, '.gitignore')) };
+      },
+    );
+
+    expect(code).not.toBe(0);
+    expect(gitignore).toBe(true);
+    expect(err).toContain('map directory is ignored');
+  });
+
+  it('does not blame the adapter when only a support package failed', async () => {
+    const { err } = await inProject(
+      { 'package.json': pkg({ devDependencies: { vitest: '^3.0.0' } }) },
+      async (cwd) => {
+        // The adapter resolves in-process here, so the only thing installed is
+        // the coverage provider — nothing about the adapter name is at stake.
+        stubPackageManager(cwd, 'npm', 1);
+        return capture(() => main(['init', '--auto-approve']));
+      },
+    );
+
+    expect(err).toContain('@vitest/coverage-v8');
+    expect(err).not.toContain('an adapter that could not be installed');
+  });
+
+  it('does not try another package name when the install was interrupted', async () => {
+    // Ctrl-C during the scoped install must not escalate into installing a
+    // differently-named, unscoped package and reporting success.
+    const { code, config, installed } = await inProject(
+      { 'package.json': pkg({}) },
+      async (cwd) => {
+        const log = stubPackageManager(cwd, 'npm', 0, undefined, '@covsel/adapter-nope');
+        const captured = await capture(() =>
+          main(['init', '--adapter', 'nope', '--auto-approve']),
+        );
+        return {
+          ...captured,
+          config: existsSync(join(cwd, 'covsel.json')),
+          installed: readFileSync(log, 'utf8'),
+        };
+      },
+    );
+
+    expect(code).not.toBe(0);
+    expect(config).toBe(false);
+    expect(installed).not.toContain('covsel-adapter-nope');
   });
 });
 

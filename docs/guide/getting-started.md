@@ -71,13 +71,16 @@ looks for it under `@covsel/adapter-<name>` and then `covsel-adapter-<name>`, an
 if neither is installed it asks your package manager for them, in that order.
 Whether the name has a package behind it is the registry's answer, not covsel's.
 
-The install runs before anything is written, so a name nothing provides leaves
-your project untouched — no config naming an adapter that does not exist for
-every later command to fail on. When no specifier can be installed, `init` prints
-what it asked for, suggests the adapter you probably meant if the name is a
-near-miss of one covsel knows, and stops. `--no-install` is the exception: with
-no install to answer the question, the config is written on your word, which is
-the way in for an adapter you install by other means.
+The install runs before the config is written, so a name nothing provides leaves
+you with no config naming an adapter that does not exist for every later command
+to fail on. When no specifier can be installed, `init` prints what it asked for,
+suggests the adapter you probably meant if the name is a near-miss of one covsel
+knows, and stops. The one thing it still does is add the map directory to your
+`.gitignore`: that line never depended on the install, you agreed to it, and it
+keeps `.covsel/` uncommittable whether or not setup finished. `--no-install` is
+the exception to the withheld config: with no install to answer the question, it
+is written on your word, which is the way in for an adapter you install by other
+means.
 
 ### Or choose the adapter yourself
 
