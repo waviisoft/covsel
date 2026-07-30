@@ -12,7 +12,7 @@ import { join } from 'node:path';
  * is pinned out so a local `init.defaultBranch`, hooks, or signing settings
  * cannot change what these tests measure.
  */
-export function git(cwd: string, args: string[]): void {
+export function git(cwd: string, args: string[]): string {
   const res = spawnSync('git', args, {
     cwd,
     encoding: 'utf8',
@@ -23,6 +23,7 @@ export function git(cwd: string, args: string[]): void {
     },
   });
   if (res.status !== 0) throw new Error(`git ${args.join(' ')} failed: ${res.stderr}`);
+  return res.stdout.trim();
 }
 
 /** Write a repo-relative file, creating its directories. */

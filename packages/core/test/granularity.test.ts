@@ -1,23 +1,26 @@
-import { spawnSync } from 'node:child_process';
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
 import {
+  blockHashesOf,
+  changedBlockHashes,
   computeStatus,
   type CoverageMap,
+  type CoveredBlock,
   GRANULARITIES,
   isGranularity,
   LocalStore,
   loadConfig,
   MAP_SCHEMA_VERSION,
+  OBSERVES_EVERYTHING,
   type Recorder,
   recordMap,
   resolveConfig,
-  OBSERVES_EVERYTHING,
   selectAffected,
 } from '../src/index.js';
+import { commitAll, git, write } from './helpers/repo.js';
 
 /**
  * The granularities the map may name are the ones covsel records and selects at.
@@ -35,32 +38,35 @@ import {
 
 const config = resolveConfig();
 
+const SRC_B = `function one() {
+  return 1;
+}
+
+function two() {
+  return 2;
+}
+
+module.exports = { one, two };
+`;
+
+/** The same file with only `two` edited, so `one`'s block hash survives. */
+const SRC_B_TWO_EDITED = SRC_B.replace('return 2;', 'return 22;');
+
 let cwd: string;
-
-function git(args: string[]): string {
-  const res = spawnSync('git', args, { cwd, encoding: 'utf8' });
-  if (res.status !== 0) throw new Error(`git ${args.join(' ')} failed: ${res.stderr}`);
-  return res.stdout.trim();
-}
-
-function write(rel: string, content: string): void {
-  const abs = join(cwd, rel);
-  mkdirSync(join(abs, '..'), { recursive: true });
-  writeFileSync(abs, content);
-}
 
 const mapPath = (): string => join(cwd, config.store.dir, 'map.json');
 
 /**
  * A map covering one source per test, written with whatever granularity the
  * caller names — including one covsel does not implement, which is why this
- * takes a `string` rather than a `Granularity`.
+ * takes a `string` rather than a `Granularity`. Blocks, when given, belong to
+ * the entry for `test/b.test.js`.
  */
-function writeMap(granularity: string): void {
+function writeMap(granularity: string, blocks: CoveredBlock[] = []): void {
   const map = {
     schemaVersion: MAP_SCHEMA_VERSION,
     granularity,
-    commit: git(['rev-parse', 'HEAD']),
+    commit: git(cwd, ['rev-parse', 'HEAD']),
     recordedAt: new Date().toISOString(),
     sentinelHashes: {},
     observed: ['**'],
@@ -72,11 +78,24 @@ function writeMap(granularity: string): void {
       {
         test: { file: 'test/b.test.js' },
         files: [{ file: 'src/b.js', fileHash: 'sha256:b' }],
+        ...(blocks.length > 0 ? { blocks } : {}),
       },
     ],
   };
   mkdirSync(join(cwd, config.store.dir), { recursive: true });
   writeFileSync(mapPath(), JSON.stringify(map));
+}
+
+/** Block hashes of `src/b.js` as committed, split by whether editing `two` alters them. */
+function blocksOfB(): { touched: CoveredBlock[]; untouched: CoveredBlock[] } {
+  const before = readFileSync(join(cwd, 'src/b.js'), 'utf8');
+  const changed = new Set(changedBlockHashes(before, SRC_B_TWO_EDITED, 'src/b.js'));
+  const block = (blockHash: string): CoveredBlock => ({ file: 'src/b.js', blockHash });
+  const all = [...blockHashesOf(before, 'src/b.js')];
+  return {
+    touched: all.filter((h) => changed.has(h)).map(block),
+    untouched: all.filter((h) => !changed.has(h)).map(block),
+  };
 }
 
 /** A recorder that yields fixed coverage, so recording needs no runner. */
@@ -97,17 +116,13 @@ function stubRecorder(blocks: boolean): Recorder {
 
 beforeEach(() => {
   cwd = mkdtempSync(join(tmpdir(), 'covsel-granularity-'));
-  write('src/a.js', 'exports.a = () => 1;\n');
-  write('src/b.js', 'exports.b = () => 2;\n');
-  write('test/a.test.js', "require('../src/a.js');\n");
-  write('test/b.test.js', "require('../src/b.js');\n");
-  write('package.json', '{\n  "name": "fixture",\n  "private": true\n}\n');
-  write('.gitignore', '.covsel/\n');
-  git(['init', '-q', '-b', 'main']);
-  git(['config', 'user.email', 'test@example.com']);
-  git(['config', 'user.name', 'covsel test']);
-  git(['add', '.']);
-  git(['commit', '-q', '-m', 'fixture']);
+  write(cwd, 'src/a.js', 'exports.a = () => 1;\n');
+  write(cwd, 'src/b.js', SRC_B);
+  write(cwd, 'test/a.test.js', "require('../src/a.js');\n");
+  write(cwd, 'test/b.test.js', "require('../src/b.js');\n");
+  write(cwd, 'package.json', '{\n  "name": "fixture",\n  "private": true\n}\n');
+  write(cwd, '.gitignore', '.covsel/\n');
+  commitAll(cwd);
 });
 
 afterEach(() => rmSync(cwd, { recursive: true, force: true }));
@@ -145,28 +160,28 @@ describe('a recorded map', () => {
 describe('a stored map naming a granularity covsel does not implement', () => {
   it('is not usable, so selection falls open to a full run', async () => {
     writeMap('line');
-    write('src/a.js', 'exports.a = () => 99;\n');
+    write(cwd, 'src/a.js', 'exports.a = () => 99;\n');
 
     const result = await selectAffected({ cwd, config });
     expect(result.fullRun).toBe(true);
     expect(result.tests).toEqual(['test/a.test.js', 'test/b.test.js']);
   });
 
-  it('never selects fewer tests than the same map at whole-file granularity', async () => {
-    write('src/a.js', 'exports.a = () => 99;\n');
+  it('selects strictly more than the same map at whole-file granularity', async () => {
+    write(cwd, 'src/a.js', 'exports.a = () => 99;\n');
 
     writeMap('file');
     const wholeFile = await selectAffected({ cwd, config });
     writeMap('line');
     const unknown = await selectAffected({ cwd, config });
 
-    // The point of the guard: a map that means nothing must not out-narrow one
-    // that means whole-file. Whole-file here selects only the test covering the
-    // changed source, so a silent degradation to it would look like a working
-    // selection.
+    // The point of the guard, and the reason this asserts more rather than no
+    // fewer: degrading an unrecognized granularity to whole-file selects exactly
+    // what the whole-file map selects, so an assertion satisfied by equality
+    // would pass with no guard at all.
     expect(wholeFile.tests).toEqual(['test/a.test.js']);
     for (const test of wholeFile.tests) expect(unknown.tests).toContain(test);
-    expect(unknown.tests.length).toBeGreaterThanOrEqual(wholeFile.tests.length);
+    expect(unknown.tests.length).toBeGreaterThan(wholeFile.tests.length);
   });
 
   it('reads back from the store as no map at all', async () => {
@@ -184,16 +199,27 @@ describe('a stored map naming a granularity covsel does not implement', () => {
 describe('a map written before this change', () => {
   it('selects exactly as it did at whole-file granularity', async () => {
     writeMap('file');
-    write('src/b.js', 'exports.b = () => 99;\n');
+    write(cwd, 'src/b.js', SRC_B_TWO_EDITED);
 
     const result = await selectAffected({ cwd, config });
     expect(result.fullRun).toBe(false);
     expect(result.tests).toEqual(['test/b.test.js']);
   });
 
-  it('selects exactly as it did at block granularity', async () => {
-    writeMap('block');
-    write('src/b.js', 'exports.b = () => 99;\n');
+  it('still narrows by the blocks a block-granularity map recorded', async () => {
+    // The test executed everything the edit leaves alone, so a block-granularity
+    // map excludes it — the narrowing this change must not disturb.
+    writeMap('block', blocksOfB().untouched);
+    write(cwd, 'src/b.js', SRC_B_TWO_EDITED);
+
+    const result = await selectAffected({ cwd, config });
+    expect(result.fullRun).toBe(false);
+    expect(result.tests).toEqual([]);
+  });
+
+  it('still selects when a block the test executed is the one that changed', async () => {
+    writeMap('block', blocksOfB().touched);
+    write(cwd, 'src/b.js', SRC_B_TWO_EDITED);
 
     const result = await selectAffected({ cwd, config });
     expect(result.fullRun).toBe(false);
@@ -202,34 +228,33 @@ describe('a map written before this change', () => {
 });
 
 describe('a config asking for a granularity covsel does not implement', () => {
-  it('fails naming the supported values', () => {
+  it('fails naming the supported values, rather than falling back to one of them', () => {
+    // Silently resolving to `file` would record and select at a granularity the
+    // project never named, and silently resolving to `block` would ignore the
+    // ask altogether. Neither is something the project could see happening.
     expect(() => resolveConfig({ granularity: 'line' as never })).toThrow(/line/);
     expect(() => resolveConfig({ granularity: 'line' as never })).toThrow(/block/);
     expect(() => resolveConfig({ granularity: 'line' as never })).toThrow(/file/);
   });
 
-  it('fails when any command loads the config file', async () => {
-    write('covsel.json', `${JSON.stringify({ granularity: 'line' })}\n`);
+  it('fails when a command loads the config file', async () => {
+    write(cwd, 'covsel.json', `${JSON.stringify({ granularity: 'line' })}\n`);
     await expect(loadConfig(cwd)).rejects.toThrow(/granularity/);
-  });
-
-  it('does not fall back to a granularity the project did not ask for', () => {
-    // Silently resolving to `file` would record and select at a granularity the
-    // project never named, and silently resolving to `block` would ignore the
-    // ask altogether. Neither is something the project could see happening.
-    let resolved: unknown;
-    try {
-      resolved = resolveConfig({ granularity: 'line' as never });
-    } catch {
-      resolved = undefined;
-    }
-    expect(resolved).toBeUndefined();
   });
 
   it('accepts the granularities covsel does implement', () => {
     expect(resolveConfig({ granularity: 'block' }).granularity).toBe('block');
     expect(resolveConfig({ granularity: 'file' }).granularity).toBe('file');
     expect(resolveConfig().granularity).toBe('block');
+  });
+
+  it('treats an unset granularity as unset, however the config spells it', () => {
+    // Every other field reads a null the same way a missing one reads, and a
+    // generator emitting null for "the project did not choose" is not asking
+    // for something covsel cannot do.
+    expect(resolveConfig({}).granularity).toBe('block');
+    expect(resolveConfig({ granularity: undefined as never }).granularity).toBe('block');
+    expect(resolveConfig({ granularity: null as never }).granularity).toBe('block');
   });
 });
 

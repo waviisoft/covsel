@@ -100,8 +100,8 @@ export const DEFAULT_CONFIG: CovselConfig = {
 };
 
 /**
- * The granularity a project asked for, or a failure naming what covsel records
- * at.
+ * The granularity a project asked for, the default when it asked for none, or a
+ * failure naming what covsel records at.
  *
  * A config file is not type-checked, so this is where an unimplemented value
  * arrives. Neither fallback is honest about it: resolving to `file` records at a
@@ -109,8 +109,13 @@ export const DEFAULT_CONFIG: CovselConfig = {
  * entirely -- both silently, on every run thereafter. Failing at load is the one
  * outcome the project can see, and it cannot cost a test: nothing has been
  * selected yet, so nothing is skipped.
+ *
+ * An explicit `null` is not that case. It reads as "unchosen" everywhere else in
+ * this file, because every other field takes the default for it, and a config
+ * generator emitting one is not asking covsel for something it cannot do.
  */
-function checkedGranularity(value: unknown): Granularity {
+function resolveGranularity(value: unknown): Granularity {
+  if (value === undefined || value === null) return DEFAULT_CONFIG.granularity;
   if (isGranularity(value)) return value;
   throw new Error(
     `covsel config: granularity ${JSON.stringify(value)} is not supported ` +
@@ -129,10 +134,7 @@ export function resolveConfig(partial?: CovselConfigInput): CovselConfig {
     sourceGlobs: partial?.sourceGlobs ?? DEFAULT_CONFIG.sourceGlobs,
     alwaysRun: partial?.alwaysRun ?? DEFAULT_CONFIG.alwaysRun,
     sentinels: partial?.sentinels ?? DEFAULT_CONFIG.sentinels,
-    granularity:
-      partial?.granularity === undefined
-        ? DEFAULT_CONFIG.granularity
-        : checkedGranularity(partial.granularity),
+    granularity: resolveGranularity(partial?.granularity),
     sourceMaps: { ...DEFAULT_CONFIG.sourceMaps, ...partial?.sourceMaps },
     store: { ...DEFAULT_CONFIG.store, ...partial?.store },
   };

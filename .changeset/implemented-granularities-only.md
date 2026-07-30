@@ -1,6 +1,6 @@
 ---
 '@covsel/core': minor
-'covsel': patch
+'covsel': minor
 ---
 
 Admit only the granularities covsel records at, and refuse a map or a config
@@ -35,11 +35,18 @@ block extraction, not about line numbers.
   `block`, instead of resolving it to a value the project never asked for. It
   cannot cost a test: nothing has been selected at the point it fails.
 
-**Migration: none, and no schema bump.** `MAP_SCHEMA_VERSION` stays at 2. No map
-in the wild can contain `'line'`, since nothing ever wrote it, so bumping would
-invalidate every stored map — a full recording run for every user — to reject a
-value none of them have. Maps recorded at `file` or `block` keep selecting
-exactly as they did.
+**Migration: no map needs to change, and there is no schema bump.**
+`MAP_SCHEMA_VERSION` stays at 2. No map in the wild can contain `'line'`, since
+nothing ever wrote it, so bumping would invalidate every stored map — a full
+recording run for every user — to reject a value none of them have. Maps
+recorded at `file` or `block` keep selecting exactly as they did.
+
+**One config does need editing, and this is the breaking part.** A `covsel.json`
+or `covsel.config.js` naming a granularity covsel does not implement used to
+resolve through and record at `block` or `file` anyway; every command now fails
+under it. Change such a value to `block` (the default, function-level) or `file`.
+An explicit `null` still means "unset" and takes the default, as it does for
+every other field.
 
 Two maps do become unusable, and both fall open to a full run rather than
 selecting anything: one hand-edited to a granularity covsel does not implement,

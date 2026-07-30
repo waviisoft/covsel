@@ -204,6 +204,24 @@ describe('covsel cli', () => {
     },
   );
 
+  it.each(['status', 'affected'])(
+    '%s refuses to run under a granularity covsel does not implement',
+    async (cmd) => {
+      // The command has to stop here rather than resolve the value to something
+      // covsel can do: recording at a granularity the project did not name is
+      // invisible from the outside, and so is ignoring the one it did.
+      await inProject(
+        { 'covsel.json': `${JSON.stringify({ granularity: 'line' })}\n` },
+        async () => {
+          await expect(main([cmd])).rejects.toThrow(
+            /granularity "line" is not supported/,
+          );
+          await expect(main([cmd])).rejects.toThrow(/file, block/);
+        },
+      );
+    },
+  );
+
   it('affected rejects an unsupported --format', async () => {
     const { code, err } = await captureStderr(() =>
       main(['affected', '--format', 'vitest']),
