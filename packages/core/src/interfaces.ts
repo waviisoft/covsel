@@ -215,4 +215,25 @@ export interface Adapter {
    * runner is handed the formatted file list.
    */
   runSelection?(init: SelectionRunInit): number;
+  /**
+   * The shape of coverage this adapter's runner produces, when covsel is what
+   * reads it.
+   *
+   * A runner that transforms sources before executing them cannot be observed at
+   * the process boundary, so its adapter asks the runner for its own already
+   * source-mapped coverage report and hands that to covsel. Declaring the shape
+   * says who interprets it: `'istanbul'` means core's reader decides which files
+   * are credited and whether blocks are extracted, from the same config
+   * everything else reads.
+   *
+   * It is a claim with consequences, not a label. An adapter that says
+   * `'istanbul'` and then interprets the report itself is free to disagree with
+   * covsel about what its own coverage means — which is how two readings of one
+   * report drift apart, and how a runner ends up quietly under-recording. The
+   * conformance suite holds a declaring adapter to covsel's reading.
+   *
+   * Absent means the adapter obtains coverage some other way — raw V8 through
+   * `NODE_V8_COVERAGE`, the inspector — and nothing here applies.
+   */
+  readonly coverageReport?: 'istanbul';
 }

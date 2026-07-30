@@ -12,26 +12,20 @@
  * formatting is a plain file list, exactly like the generic wrap.
  */
 import { spawnSync } from 'node:child_process';
-import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
+import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
 import {
   type Adapter,
-  type CoveredBlock,
-  type CoveredFile,
   type CovselConfig,
-  type ExecRegion,
-  hashFileContents,
-  makeSourceFilter,
+  istanbulCoverage,
   OBSERVES_EVERYTHING,
-  positionToOffset,
+  readIstanbulReport,
   type Recorder,
   type RecordedUnit,
   type RecorderInit,
-  selectExecutedBlocks,
   type TestId,
-  toRepoRelative,
 } from '@covsel/core';
 
 export const jestAdapter: Adapter = {
@@ -39,6 +33,8 @@ export const jestAdapter: Adapter = {
   formatSelection(tests: TestId[]): string[] {
     return [...new Set(tests.map((t) => t.file))];
   },
+  // covsel reads this runner's report, so covsel decides what it credits.
+  coverageReport: 'istanbul',
   createRecorder(init: RecorderInit): Recorder {
     return createJestRecorder(init);
   },
@@ -49,52 +45,6 @@ export const jestAdapter: Adapter = {
  * specifier exactly as a third-party adapter is.
  */
 export const adapter = jestAdapter;
-
-interface IstanbulPosition {
-  line: number;
-  column: number;
-}
-
-/** One file's entry in an istanbul-shaped `coverage-final.json`. */
-interface CoverageFinalEntry {
-  path?: string;
-  s?: Record<string, number>;
-  f?: Record<string, number>;
-  b?: Record<string, number[]>;
-  fnMap?: Record<string, { loc?: { start: IstanbulPosition; end: IstanbulPosition } }>;
-}
-
-function executed(entry: CoverageFinalEntry): boolean {
-  const anyCount = (counts?: Record<string, number>): boolean =>
-    counts !== undefined && Object.values(counts).some((c) => c > 0);
-  const anyBranch = (b?: Record<string, number[]>): boolean =>
-    b !== undefined && Object.values(b).some((arr) => arr.some((c) => c > 0));
-  return anyCount(entry.s) || anyCount(entry.f) || anyBranch(entry.b);
-}
-
-/** Executed blocks of one source, from its istanbul function map + hit counts. */
-function blocksFor(entry: CoverageFinalEntry, rel: string, abs: string): CoveredBlock[] {
-  let source: string;
-  try {
-    source = readFileSync(abs, 'utf8');
-  } catch {
-    return [];
-  }
-  const toOffset = positionToOffset(source);
-  const regions: ExecRegion[] = [];
-  for (const [id, fn] of Object.entries(entry.fnMap ?? {})) {
-    if (!fn.loc) continue;
-    regions.push({
-      start: toOffset(fn.loc.start.line, fn.loc.start.column),
-      end: toOffset(fn.loc.end.line, fn.loc.end.column),
-      count: entry.f?.[id] ?? 0,
-    });
-  }
-  return selectExecutedBlocks(source, rel, regions).map((b) => ({
-    file: rel,
-    blockHash: b.hash,
-  }));
-}
 
 export interface JestRecorderInit {
   /** Base command, e.g. `['jest']`. */
@@ -110,8 +60,6 @@ export interface JestRecorderInit {
  * so no extra dependency is needed in the target project.
  */
 export function createJestRecorder(init: JestRecorderInit): Recorder {
-  const isSource = makeSourceFilter(init.config);
-  const wantBlocks = init.config.granularity !== 'file';
   return {
     // Jest's coverage reports every module its registry loaded, remapped to the
     // original file, so any source under the repo that a test reaches shows up
@@ -154,31 +102,21 @@ export function createJestRecorder(init: JestRecorderInit): Recorder {
           );
         }
 
-        let report: Record<string, CoverageFinalEntry>;
-        try {
-          report = JSON.parse(
-            readFileSync(join(reportsDir, 'coverage-final.json'), 'utf8'),
-          ) as Record<string, CoverageFinalEntry>;
-        } catch {
+        // core owns what a report means; the adapter owns what a missing one
+        // means, which for Jest -- whose coverage is built in -- points at the
+        // project's own reporter or directory configuration rather than at a
+        // missing dependency.
+        const report = readIstanbulReport(join(reportsDir, 'coverage-final.json'));
+        if (report === undefined) {
           throw new Error(
             `no coverage report produced for ${testFile} -- does the jest config ` +
               `override coverageReporters or coverageDirectory?`,
           );
         }
-
-        const files: CoveredFile[] = [];
-        const blocks: CoveredBlock[] = [];
-        const seenFile = new Set<string>();
-        for (const [key, entry] of Object.entries(report)) {
-          const abs = entry.path ?? key;
-          const rel = toRepoRelative(init.cwd, abs);
-          if (rel === undefined || !isSource(rel) || seenFile.has(rel)) continue;
-          if (!executed(entry)) continue;
-          seenFile.add(rel);
-          files.push({ file: rel, fileHash: hashFileContents(abs) });
-          if (wantBlocks) blocks.push(...blocksFor(entry, rel, abs));
-        }
-        files.sort((a, b) => (a.file < b.file ? -1 : a.file > b.file ? 1 : 0));
+        const { files, blocks } = istanbulCoverage(report, {
+          cwd: init.cwd,
+          config: init.config,
+        });
         return [{ test: { file: testFile }, files, blocks }];
       } finally {
         rmSync(reportsDir, { recursive: true, force: true });
