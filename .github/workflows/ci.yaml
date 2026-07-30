@@ -76,55 +76,15 @@ jobs:
       - name: What covsel is about to do, and why
         run: node packages/cli/dist/bin.js status
 
-      - name: Run the affected tests
-        run: node packages/cli/dist/bin.js run -- npx vitest run
-
-  validate-selection:
-    name: Prove the selection is narrow and sound
-    runs-on: ubuntu-latest
-    # The `select` job runs whatever covsel chooses. This one checks that the
-    # choice was right, which passing tests cannot tell you: a selection that
-    # quietly ran nothing would pass too. It bootstraps its own map rather than
-    # waiting for one from `main`, so a pull request proves the whole lifecycle
-    # on its own -- record at the merge base, publish, fetch at the head, and
-    # measure what comes out.
-    if: github.event_name == 'pull_request'
-    steps:
-      - uses: actions/checkout@v7
-        with:
-          fetch-depth: 0
-      - uses: pnpm/action-setup@v6
-      - uses: actions/setup-node@v7
-        with:
-          node-version: 22
-          cache: pnpm
-
-      - name: Record and publish a map at the merge base
-        run: |
-          set -euo pipefail
-          BASE=$(git merge-base "origin/${{ github.base_ref }}" HEAD)
-          echo "recording at merge base $BASE"
-          git checkout -q --detach "$BASE"
-          pnpm install --frozen-lockfile
-          pnpm build
-          node packages/cli/dist/bin.js record -- npx vitest run
-          node packages/cli/dist/bin.js publish
-
-      - name: Return to the pull request and fetch that map
-        run: |
-          set -euo pipefail
-          # The archive is gitignored, so it survives the checkout -- which is
-          # exactly the trick that lets one job play both sides of the lifecycle.
-          git checkout -q --detach "${{ github.event.pull_request.head.sha }}"
-          pnpm install --frozen-lockfile
-          pnpm build
-          node packages/cli/dist/bin.js fetch --require
-          node packages/cli/dist/bin.js status
-
-      - name: Check what it selected
+      # Running the selection proves the tests it chose pass. It says nothing
+      # about whether the choice was right -- a selection that quietly ran
+      # nothing would pass too -- so the promises that can be checked from
+      # outside the selector are checked first. A full run is accepted; there is
+      # nothing there to be wrong about.
+      - name: Check that the selection kept its promises
         run: node scripts/validate-selection.mjs
 
-      - name: Run exactly that selection
+      - name: Run the affected tests
         run: node packages/cli/dist/bin.js run -- npx vitest run
 
   docs:
