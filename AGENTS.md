@@ -180,6 +180,27 @@ them without asking once the pull request has merged or closed, or whenever the
 work they were watching for is done. That applies only to triggers you made —
 leave anything you did not create alone.
 
+### Never force-push a branch that is under review
+
+Once a pull request is open, its branch only ever gains commits. Bring `main` in
+with a merge commit when you need it and push the resolution on top; do not
+rebase, amend, or squash locally and force-push the result.
+
+A force-push destroys the review. GitHub compares pushes to show a reviewer what
+changed since they last looked, and rewritten history leaves nothing to compare
+against: the "changes since your last review" view is lost, and line comments
+detach from the code they were written on. From the reviewer's side a
+conflict-resolving rebase and a substantive rewrite are indistinguishable, so
+they have to re-read the whole diff to find out which one you did — and it does
+not matter that the tree came out identical. Squash-merge collapses the branch to
+one commit at the end anyway, so nothing about the final history is worth that
+cost.
+
+The exception is a branch nobody is reviewing yet — before the pull request
+exists, or after the pull request it carried was merged and the branch is being
+restarted from `main` for follow-up work. Use `--force-with-lease` when you do,
+so a push you did not know about is not silently overwritten.
+
 ### Merging is never yours to decide
 
 Watching a pull request through to green is not permission to merge it. Only an

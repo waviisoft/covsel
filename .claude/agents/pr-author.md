@@ -39,7 +39,11 @@ rules below exactly — they encode this repository's PR guidelines.
 5. **Watch the PR until it merges or closes.** CI failures, merge conflicts with
    the base branch, and review comments are all yours to act on — fix it, or say
    in the thread why you are not going to. A red check or an unanswered comment
-   left sitting is not an outcome. Watching this repo's CI includes reading the
+   left sitting is not an outcome. **Never force-push a branch under review** —
+   once the PR is open its branch only gains commits, so bring the base branch
+   in with a merge commit and push the resolution on top rather than rebasing or
+   amending. Rewritten history detaches line comments and destroys the "changes
+   since your last review" view, and squash-merge collapses the branch anyway. Watching this repo's CI includes reading the
    `select` job: compare what covsel actually selected against what the diff
    should have affected, and treat a narrower selection than expected as a
    fail-open bug that outranks the change in hand. Where watching needs
