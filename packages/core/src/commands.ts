@@ -185,6 +185,13 @@ export async function recordMap(init: RecordInit): Promise<RecordResult> {
   const { cwd, config, recorder } = init;
   const testFiles = discoverTestFiles(cwd, config);
   const store = new LocalStore({ cwd, dir: config.store.dir });
+  // Sampled before a single test runs, because this asks what tree the recording
+  // was taken against — and that is the tree as it stood when the suite started.
+  // Asking afterwards would answer a different question and get it wrong in a
+  // common case: a suite that writes anything untracked inside the repository,
+  // such as a snapshot created on first run, leaves the tree dirty by the end,
+  // and the map would never be anchored for as long as that suite exists.
+  const dirty = isDirtyWorkTree(cwd);
   const entries: MapEntry[] = [];
   const failures: { file: string; reason: string }[] = [];
   const scopes: (readonly string[])[] = [];
@@ -248,9 +255,6 @@ export async function recordMap(init: RecordInit): Promise<RecordResult> {
   // failed the recording above. With a single-window recorder every unit reports
   // that declaration, so this is it.
   const observed = entries.length > 0 ? agreedScope(scopes) : recorder.observes;
-  // Asked once, before the map is assembled: `git status` over a large repository
-  // is not free, and the answer must be the one that held while recording ran.
-  const dirty = isDirtyWorkTree(cwd);
   const map = assembleMap(entries, cwd, config, recordedAt, observed, dirty);
   await store.write(map);
   return {
@@ -260,7 +264,10 @@ export async function recordMap(init: RecordInit): Promise<RecordResult> {
     mapPath: store.path(),
     testFiles,
     map,
-    ...(map.commit === undefined && isGitWorkTree(cwd) ? { unanchored: true } : {}),
+    // Keyed on the dirty tree specifically, not on the absence of a commit. A
+    // repository with no commits yet also has no commit to stamp, and telling
+    // someone their uncommitted changes caused it would be a lie.
+    ...(dirty && isGitWorkTree(cwd) ? { unanchored: true } : {}),
   };
 }
 

@@ -154,6 +154,13 @@ loudly until a recording from a committed tree replaces it. `covsel watch
 the loop refreshes the map at each commit rather than at each save. In CI it never
 comes up — a fresh checkout is clean.
 
+The tree is checked **before** the suite runs, not after, because the question is
+what tree the recording was taken against. That matters if your tests write
+anything into the repository — a snapshot created on first run, a report, a log —
+since such a suite leaves the tree dirty by the end through no fault of your
+sources. Checking afterwards would leave those projects permanently unanchored and
+always falling open, which would look exactly like covsel not working.
+
 ## How the map enforces it
 
 The persisted map is a **versioned contract**. Bumping the schema version

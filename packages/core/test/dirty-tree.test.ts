@@ -5,6 +5,7 @@ import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
 import {
+  computeStatus,
   type CoverageMap,
   createGenericRecorder,
   recordMap,
@@ -114,6 +115,30 @@ describe('a map recorded from a dirty tree claims no commit', () => {
   it('does not call a clean recording unanchored', async () => {
     expect((await record()).unanchored).toBeUndefined();
   }, 60_000);
+
+  it('still anchors when the suite itself dirties the tree while running', async () => {
+    // The tree is what the recording was taken against, which is how it stood
+    // when the suite started. A suite that writes into the repository — a
+    // snapshot on first run, a report, a stray log — is dirty by the end through
+    // no fault of the code under test, and sampling then would leave such a
+    // project permanently unanchored and always falling open.
+    write(
+      'test/writes.test.mjs',
+      "import { test } from 'node:test';\nimport { writeFileSync } from 'node:fs';\n" +
+        "test('writes a snapshot', () => {\n" +
+        "  writeFileSync(new URL('./snapshot.txt', import.meta.url), 'written\\n');\n" +
+        '});\n',
+    );
+    git(['add', '.']);
+    git(['commit', '-q', '-m', 'add a test that writes']);
+
+    const result = await record();
+    expect(result.ok).toBe(true);
+    expect(result.unanchored).toBeUndefined();
+    expect(readMap().commit).toBe(git(['rev-parse', 'HEAD']));
+    // The suite really did dirty the tree; the map is anchored regardless.
+    expect(git(['status', '--porcelain'])).not.toBe('');
+  }, 60_000);
 });
 
 describe('the fail-closed case the stamp caused', () => {
@@ -141,7 +166,6 @@ describe('the fail-closed case the stamp caused', () => {
     expect((await record()).ok).toBe(true);
     git(['checkout', '--', 'src/a.mjs']);
 
-    const { computeStatus } = await import('../src/index.js');
     const status = await computeStatus({ cwd, config });
     expect(status.nextIsFullRun).toBe(true);
     expect(status.nextFullRunReason).toMatch(/records no commit/);

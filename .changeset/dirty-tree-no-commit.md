@@ -22,6 +22,12 @@ so changes since it was recorded are unknown"_. `covsel record` says so when it
 writes the map, rather than leaving it to be discovered when selection later
 declines to narrow, and `RecordResult` carries `unanchored` for embedders.
 
+The tree is sampled before the suite runs rather than after, because the question
+is what tree the recording was taken against. A suite that writes into the
+repository — a snapshot on first run, a report, a log — is dirty by the end through
+no fault of its sources, and sampling then would leave such a project permanently
+unanchored and always falling open.
+
 The cost is deliberate: recording with uncommitted work now yields full runs until
 you commit and re-record. That is what covsel actually knows about such a map. CI
 is unaffected, since it records on a clean checkout.
