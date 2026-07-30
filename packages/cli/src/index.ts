@@ -620,6 +620,16 @@ async function cmdRecord(argv: string[]): Promise<number> {
     return 1;
   }
   err(`covsel record: wrote ${result.recorded} entries to ${result.mapPath}\n`);
+  if (result.unanchored) {
+    // Said here rather than left for selection to explain later: the map is
+    // correct about what it saw, and deliberately claims no commit, so every
+    // selection until the next recording is a full run.
+    err(
+      'covsel record: recorded from a tree with uncommitted changes, so the map ' +
+        'is not anchored to a commit -- selection will fall open to a full run ' +
+        'until you commit and re-record.\n',
+    );
+  }
   return 0;
 }
 

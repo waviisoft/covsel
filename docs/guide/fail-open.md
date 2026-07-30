@@ -129,6 +129,41 @@ honors that setting; the per-test shims (node:test, cucumber-js) are not handed
 it yet, so an unmappable script under those adapters fails the recording with no
 way to accept it.
 
+## A map recorded from a dirty tree
+
+A map is trusted for the commit it names, and the comparison against that commit
+is exact. So a map may only name a commit it genuinely describes — which means
+recording from a working tree with uncommitted changes produces a map with **no
+commit at all**:
+
+```
+covsel record: wrote 12 entries to /repo/.covsel/map.json
+covsel record: recorded from a tree with uncommitted changes, so the map is not
+anchored to a commit -- selection will fall open to a full run until you commit
+and re-record.
+```
+
+The alternative is worse than it looks. Stamping `HEAD` on such a map passes every
+guard covsel has: the commit exists, and once the edits are reverted the tree
+matches it exactly, so the diff is empty and the map is fully trusted — for a tree
+it never described. Coverage the edited tree did not execute is then missing from
+a map that `covsel status` reports as healthy, and the test that needed it is
+skipped.
+
+Recording while you are mid-edit is the normal local case, so this is not an
+error: the map is still written, still serves `status`, and selection falls open
+loudly until a recording from a committed tree replaces it. `covsel watch
+--record` declines to re-record while the tree is dirty for the same reason, so
+the loop refreshes the map at each commit rather than at each save. In CI it never
+comes up — a fresh checkout is clean.
+
+The tree is checked **before** the suite runs, not after, because the question is
+what tree the recording was taken against. That matters if your tests write
+anything into the repository — a snapshot created on first run, a report, a log —
+since such a suite leaves the tree dirty by the end through no fault of your
+sources. Checking afterwards would leave those projects permanently unanchored and
+always falling open, which would look exactly like covsel not working.
+
 ## How the map enforces it
 
 The persisted map is a **versioned contract**. Bumping the schema version
