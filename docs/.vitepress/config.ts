@@ -19,7 +19,6 @@ export default defineConfig({
       { text: 'Guide', link: '/guide/what-is-covsel' },
       { text: 'Adapters', link: '/guide/adapters/' },
       { text: 'Design', link: '/guide/architecture' },
-      { text: 'Roadmap', link: '/guide/roadmap' },
     ],
     sidebar: {
       '/guide/': [
@@ -47,10 +46,7 @@ export default defineConfig({
         },
         {
           text: 'Under the hood',
-          items: [
-            { text: 'Architecture', link: '/guide/architecture' },
-            { text: 'Roadmap', link: '/guide/roadmap' },
-          ],
+          items: [{ text: 'Architecture', link: '/guide/architecture' }],
         },
       ],
     },
