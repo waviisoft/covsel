@@ -5,6 +5,7 @@ import {
   type CoveredFile,
   isUsableMap,
   MAP_SCHEMA_VERSION,
+  type MapDependencies,
   type MapEntry,
 } from './schema.js';
 
@@ -19,6 +20,49 @@ function testKey(entry: MapEntry): string {
  */
 function byKey(a: string, b: string): number {
   return a < b ? -1 : a > b ? 1 : 0;
+}
+
+/**
+ * The installed tree every shard agrees it recorded against, if there is one.
+ *
+ * The analogue of {@link agreedScope}, and safe for the same reason: a smaller
+ * inventory falls open more. Any shard without dependencies drops them for the
+ * whole merge — its entries say nothing about packages, and the merged map
+ * claims one set of dependencies for every entry in it.
+ *
+ * Shards whose markers disagree installed different trees. Their entries then
+ * describe different resolutions of the same names, and a merged inventory
+ * would vouch for a package at a version half the entries never ran.
+ */
+function agreedDependencies(maps: CoverageMap[]): MapDependencies | undefined {
+  const first = maps[0]?.dependencies;
+  if (first === undefined) return undefined;
+  const identical = maps.every(
+    (m) =>
+      m.dependencies?.manager === first.manager &&
+      m.dependencies.marker === first.marker &&
+      m.dependencies.markerHash === first.markerHash,
+  );
+  if (!identical) return undefined;
+
+  // Equal markers should mean equal inventories, but the intersection is what
+  // makes that a fact rather than an assumption: a name any shard did not see,
+  // or saw at other versions, is dropped and falls open.
+  const key = (versions: string[]): string => versions.join('\0');
+  const inventory: Record<string, string[]> = {};
+  for (const [name, versions] of Object.entries(first.inventory)) {
+    const shared = maps.every((m) => {
+      const other = m.dependencies?.inventory[name];
+      return other !== undefined && key(other) === key(versions);
+    });
+    if (shared) inventory[name] = [...versions];
+  }
+  return {
+    manager: first.manager,
+    marker: first.marker,
+    markerHash: first.markerHash,
+    inventory,
+  };
 }
 
 /**
@@ -52,8 +96,20 @@ export function mergeMaps(maps: CoverageMap[]): CoverageMap {
           test: entry.test,
           files: [...entry.files],
           ...(entry.blocks ? { blocks: [...entry.blocks] } : {}),
+          ...(entry.packages ? { packages: [...entry.packages] } : {}),
         });
         continue;
+      }
+      // Packages behave like blocks and for the same reason: a shard that
+      // recorded none for this test knows nothing about which packages it ran,
+      // and keeping the other's list would let a bump to a package only this
+      // shard's run executed miss the entry.
+      if (existing.packages === undefined || entry.packages === undefined) {
+        delete existing.packages;
+      } else {
+        existing.packages = [...new Set([...existing.packages, ...entry.packages])].sort(
+          byKey,
+        );
       }
       const files = new Map<string, CoveredFile>();
       for (const f of [...existing.files, ...entry.files]) files.set(f.file, f);
@@ -96,6 +152,13 @@ export function mergeMaps(maps: CoverageMap[]): CoverageMap {
   const sentinelHashes: Record<string, string> = {};
   for (const map of usable) Object.assign(sentinelHashes, map.sentinelHashes);
 
+  // An inventory is only meaningful when every entry says which packages it
+  // ran: one that does not would be read as a test running no vendored code,
+  // and every dependency it really uses would go unselected on a bump. Keeping
+  // the two in step is what lets selection rely on the pairing.
+  const everyEntryHasPackages = entries.every((e) => e.packages !== undefined);
+  const dependencies = everyEntryHasPackages ? agreedDependencies(usable) : undefined;
+
   return {
     schemaVersion: MAP_SCHEMA_VERSION,
     granularity: allBlocks ? 'block' : 'file',
@@ -103,6 +166,7 @@ export function mergeMaps(maps: CoverageMap[]): CoverageMap {
     recordedAt,
     sentinelHashes,
     observed,
+    ...(dependencies ? { dependencies } : {}),
     entries,
   };
 }

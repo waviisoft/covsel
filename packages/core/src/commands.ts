@@ -13,6 +13,7 @@ import {
   isDirtyWorkTree,
   isGitWorkTree,
 } from './git.js';
+import { readInstalledInventory } from './inventory.js';
 import type {
   Adapter,
   Change,
@@ -57,12 +58,18 @@ export function createGenericRecorder(init: GenericRecorderInit): Recorder {
     // they load, so anything the run executes anywhere in the process tree is
     // visible to this recorder wherever it lives in the repo.
     observes: OBSERVES_EVERYTHING,
+    // The same dump is what makes packages visible: it holds every script the
+    // process tree loaded, vendored code included, before any coverage provider
+    // has had the chance to filter `node_modules` out of it.
+    observesPackages: true,
     async record(testFile: string) {
       await observer.startTest({ file: testFile });
       const raw = await observer.endTest({ file: testFile });
       const files = await mapper.toFiles(raw);
       const blocks = wantBlocks ? await mapper.toBlocks(raw) : [];
-      return [{ test: { file: testFile }, files, blocks }];
+      return [
+        { test: { file: testFile }, files, blocks, packages: mapper.toPackages(raw) },
+      ];
     },
     unmappableAllowed: () => mapper.takeAllowedUnmappable(),
   };
@@ -98,6 +105,7 @@ function assembleMap(
   recordedAt: string,
   observed: readonly string[],
   dirty: boolean,
+  observesPackages: boolean,
 ): CoverageMap {
   // A commit is a claim that this map describes that commit's tree, and selection
   // treats it as exact. Recording from an edited tree describes a state no commit
@@ -112,6 +120,13 @@ function assembleMap(
   const hasBlocks = entries.some((e) => (e.blocks?.length ?? 0) > 0);
   const granularity: Granularity =
     config.granularity !== 'file' && hasBlocks ? 'block' : 'file';
+  // Both halves are required, and each is useless without the other. Entries
+  // say which packages ran; the inventory says which packages were there to
+  // run, which is what tells "installed and never executed" apart from "not
+  // installed at the time, so the map has no opinion". A recorder that cannot
+  // see packages, or a package manager that leaves no proof its tree is
+  // current, leaves this absent and every dependency change falls open.
+  const dependencies = observesPackages ? readInstalledInventory(cwd) : undefined;
   return {
     schemaVersion: MAP_SCHEMA_VERSION,
     granularity,
@@ -119,6 +134,7 @@ function assembleMap(
     recordedAt,
     sentinelHashes: hashSentinels(cwd, config.sentinels),
     observed: [...observed],
+    ...(dependencies ? { dependencies } : {}),
     entries,
   };
 }
@@ -195,6 +211,32 @@ function overclaimedGlobs(
 }
 
 /**
+ * Why a unit's package list contradicts its recorder's declaration, if it does.
+ *
+ * The two have to agree exactly, in both directions, because absence is what
+ * carries the meaning. A declaring recorder that produces a unit without
+ * packages would have that entry read as a test running no vendored code, and
+ * every dependency in it would go unselected on a bump. A non-declaring one
+ * that produces packages anyway is claiming a recall it has not stood behind,
+ * and the entry would be trusted for exactly the packages its blind spots hid.
+ *
+ * Refusing both keeps a single invariant worth relying on downstream: packages
+ * are present on every entry of a map, or on none of them.
+ */
+function packageClaimMismatch(
+  unit: RecordedUnit,
+  observesPackages: boolean,
+): string | undefined {
+  if (observesPackages && unit.packages === undefined) {
+    return 'recorded no package list, though the recorder declares it observes packages';
+  }
+  if (!observesPackages && unit.packages !== undefined) {
+    return 'recorded a package list, though the recorder does not declare it observes packages';
+  }
+  return undefined;
+}
+
+/**
  * Record a fresh map. Runs the recorder over every discovered test file. If any
  * file fails to record (e.g. a failing test invalidates its coverage), the map
  * is *not* written — a partial map cannot be trusted for selection.
@@ -232,6 +274,7 @@ export async function recordMap(init: RecordInit): Promise<RecordResult> {
   const scopes: (readonly string[])[] = [];
 
   const wantBlocks = config.granularity !== 'file';
+  const observesPackages = recorder.observesPackages === true;
   for (const file of testFiles) {
     try {
       const units = await recorder.record(file);
@@ -243,6 +286,8 @@ export async function recordMap(init: RecordInit): Promise<RecordResult> {
               `does not declare (it declares ${[...recorder.observes].join(', ') || 'nothing'})`,
           );
         }
+        const mismatch = packageClaimMismatch(unit, observesPackages);
+        if (mismatch !== undefined) throw new Error(mismatch);
       }
       let sources = 0;
       for (const unit of units) {
@@ -250,6 +295,7 @@ export async function recordMap(init: RecordInit): Promise<RecordResult> {
           test: unit.test,
           files: unit.files,
           ...(wantBlocks && unit.blocks.length > 0 ? { blocks: unit.blocks } : {}),
+          ...(unit.packages ? { packages: unit.packages } : {}),
         });
         // A unit combined from several observation windows knows the scope those
         // windows add up to, which is what its entry was really watched for; a
@@ -295,7 +341,15 @@ export async function recordMap(init: RecordInit): Promise<RecordResult> {
   // failed the recording above. With a single-window recorder every unit reports
   // that declaration, so this is it.
   const observed = entries.length > 0 ? agreedScope(scopes) : recorder.observes;
-  const map = assembleMap(entries, cwd, config, recordedAt, observed, dirty);
+  const map = assembleMap(
+    entries,
+    cwd,
+    config,
+    recordedAt,
+    observed,
+    dirty,
+    observesPackages,
+  );
   await store.write(map);
   return {
     ok: true,

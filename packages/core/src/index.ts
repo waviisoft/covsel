@@ -6,6 +6,7 @@ export * from './init.js';
 export * from './match.js';
 export * from './packages.js';
 export * from './paths.js';
+export * from './inventory.js';
 export * from './discover.js';
 export * from './observer.js';
 export * from './inspector-observer.js';

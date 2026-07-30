@@ -139,6 +139,21 @@ const partialViewSpec: AdapterConformanceSpec = {
   },
 };
 
+/**
+ * The package declaration of the recorder being wrapped.
+ *
+ * These stand-ins vary one thing each and pass the real recorder's units
+ * through otherwise, packages included. The declaration has to travel with
+ * them: recording refuses a recorder whose units report packages it has not
+ * claimed to watch, so a wrapper that dropped it would fail for a reason none
+ * of these tests is about.
+ */
+function forwardPackageClaim(real: Recorder): { observesPackages?: boolean } {
+  return real.observesPackages === undefined
+    ? {}
+    : { observesPackages: real.observesPackages };
+}
+
 /** The honest adapter, recording through it and then damaging what it reported. */
 const derive = (
   damage: (
@@ -151,6 +166,7 @@ const derive = (
     const real = probeAdapter.createRecorder(init);
     return {
       observes: real.observes,
+      ...forwardPackageClaim(real),
       async record(file) {
         return (await real.record(file)).map((unit) => damage(unit, init.cwd));
       },
@@ -177,6 +193,7 @@ const partialView = (observes: readonly string[]): Adapter => ({
     const inView = (file: string): boolean => file.startsWith('src/');
     return {
       observes,
+      ...forwardPackageClaim(real),
       async record(file) {
         return (await real.record(file)).map((unit) => ({
           ...unit,

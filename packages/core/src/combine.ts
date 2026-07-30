@@ -138,10 +138,22 @@ export function combineObservations(
     }
   }
 
+  // Packages union like files, and only when every window reported them. A
+  // window that saw the execution but was blind to vendored code knows nothing
+  // about which packages ran, and taking the others' word for it would credit
+  // the unit with a package list missing whatever ran inside that isolate. The
+  // recorder declaring `observesPackages` is what rules that out, and a
+  // combined unit missing packages fails that declaration loudly at record time
+  // rather than quietly under-crediting here.
+  const packages = observations.every((o) => o.packages !== undefined)
+    ? [...new Set(observations.flatMap((o) => o.packages ?? []))].sort()
+    : undefined;
+
   const byPath = (a: string, b: string): number => (a < b ? -1 : a > b ? 1 : 0);
   return {
     test,
     files: [...files.values()].sort((a, b) => byPath(a.file, b.file)),
+    ...(packages ? { packages } : {}),
     blocks: [...blocks.values()].sort(
       (a, b) => byPath(a.file, b.file) || byPath(a.blockHash, b.blockHash),
     ),

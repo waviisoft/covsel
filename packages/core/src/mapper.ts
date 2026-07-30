@@ -7,7 +7,7 @@ import { makeSourceFilter } from './discover.js';
 import type { Mapper, RawCoverage } from './interfaces.js';
 import { makeStrictMatcher } from './match.js';
 import type { ScriptCoverage } from './observer.js';
-import { isVendoredRelPath } from './packages.js';
+import { isVendoredRelPath, packageNameFromRelPath } from './packages.js';
 import {
   DEFAULT_EXCLUDES,
   hashFileContents,
@@ -180,8 +180,9 @@ export class V8FileMapper implements Mapper {
    *   source. Recorded when it passes the source filter, and deliberately
    *   skipped when it does not — a test file, or a path the project put outside
    *   `sourceGlobs`.
-   * - **Vendored code** under `node_modules` is outside what a recording maps by
-   *   design; a dependency change is caught by the lockfile sentinel instead.
+   * - **Vendored code** under `node_modules` has no source of its own to record,
+   *   but the package it belongs to is worth knowing: a dependency change can
+   *   then be resolved to the tests that ran that package's code.
    * - **Foreign and runtime scripts** — a file outside the repository, a `node:`
    *   builtin, `eval` — are not this project's code.
    *
@@ -325,6 +326,38 @@ export class V8FileMapper implements Mapper {
     return [...covered]
       .map(([file, fileHash]) => ({ file, fileHash }))
       .sort((a, b) => (a.file < b.file ? -1 : a.file > b.file ? 1 : 0));
+  }
+
+  /**
+   * The installed packages this coverage executed code in, sorted.
+   *
+   * Vendored code has no source of its own to record, but which package it
+   * belongs to is exactly what a dependency change needs to be resolved
+   * against. A separate pass from `toFiles` because it is a separate axis:
+   * these are package names, not repo paths, and synthesising `node_modules/`
+   * paths into the file list would make every change to one look like a change
+   * to a source the recorder was never watching.
+   *
+   * Path segments only. This runs once per executed script — hundreds of
+   * thousands of times over a suite — so the manifest is never read here; all
+   * of that happens once per recording, in the inventory pass.
+   *
+   * A vendored script with no derivable package name contributes nothing, and
+   * cannot leave a gap: the inventory is keyed by the same function over the
+   * same directories, so a package that has an inventory entry necessarily has
+   * a name here too.
+   */
+  toPackages(raw: RawCoverage): string[] {
+    const names = new Set<string>();
+    for (const script of raw.scripts as ScriptCoverage[]) {
+      const executed = script.functions.some((fn) => fn.ranges.some((r) => r.count > 0));
+      if (!executed) continue;
+      const rel = this.repoRelative(script.url);
+      if (rel === undefined || !isVendoredRelPath(rel)) continue;
+      const name = packageNameFromRelPath(rel);
+      if (name !== undefined) names.add(name);
+    }
+    return [...names].sort();
   }
 
   /**

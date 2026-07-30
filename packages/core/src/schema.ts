@@ -5,7 +5,7 @@
  */
 
 /** Bump on any breaking change to the persisted map shape. */
-export const MAP_SCHEMA_VERSION = 2;
+export const MAP_SCHEMA_VERSION = 3;
 
 /**
  * Identifies a test at the finest granularity we know about.
@@ -45,6 +45,53 @@ export interface MapEntry {
   test: TestId;
   files: CoveredFile[];
   blocks?: CoveredBlock[];
+  /**
+   * Names of the installed packages this test executed code in, sorted.
+   *
+   * Present on every entry of a map recorded by a package-observing recorder,
+   * or on none — an empty array is a test that ran no vendored code, which is a
+   * measurement, while absence means the recorder never watched for it and
+   * nothing may be concluded. Selection needs `dependencies` as well, since a
+   * package list is only meaningful against a known, provably current install.
+   */
+  packages?: string[];
+}
+
+/**
+ * What was installed when the map was recorded, and the proof the install was
+ * current — the "before" side a later dependency change is measured against.
+ *
+ * Absent means fall open: covsel could not observe packages, could not identify
+ * the package manager, or the map predates this being recorded at all. Since
+ * every existing map is in exactly that position, absence has to keep meaning
+ * today's behaviour, which is a full run on any lockfile change.
+ */
+export interface MapDependencies {
+  /** The package manager whose installed tree this describes. */
+  manager: string;
+  /** Repo-relative path of that manager's install marker. */
+  marker: string;
+  /**
+   * Content hash of the marker at record time.
+   *
+   * A lockfile pulled without an install is the case this catches: the tree
+   * would show no difference from the inventory, and "nothing changed" computed
+   * against a stale install is the answer that skips tests. The marker is the
+   * only sound freshness check, because a tree stale for one reason can still
+   * differ for another and hide the change.
+   */
+  markerHash: string;
+  /**
+   * Every installed package the recorder could have observed executing, and the
+   * versions it was installed at.
+   *
+   * The distinction this exists for: a changed package *in* here that no entry
+   * mentions was watched and never ran, so nothing need be selected for it,
+   * while a changed package *absent* from here is one the map never had an
+   * opinion about, and falls open. Without it the two are indistinguishable and
+   * everything falls open.
+   */
+  inventory: Record<string, string[]>;
 }
 
 /** The persisted map. */
@@ -74,6 +121,12 @@ export interface CoverageMap {
    * and is then held to it.
    */
   observed: string[];
+  /**
+   * The installed tree this was recorded against, when the recorder could see
+   * what packages a test executed and the package manager left a freshness
+   * proof. Absent means every dependency change falls open.
+   */
+  dependencies?: MapDependencies;
   entries: MapEntry[];
 }
 

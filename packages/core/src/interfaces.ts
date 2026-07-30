@@ -72,6 +72,16 @@ export interface RecordedTest {
   files: CoveredFile[];
   /** Executed function/module blocks, when recording at block granularity. */
   blocks: CoveredBlock[];
+  /**
+   * Names of the installed packages this execution ran code in, sorted.
+   *
+   * Set exactly when the recorder declares `observesPackages` — on every unit
+   * then, empty array included, and on none otherwise. Recording refuses the
+   * mismatch either way, because an entry that is silent about packages for a
+   * recorder that claims to watch them would be read as a test running no
+   * vendored code at all.
+   */
+  packages?: string[];
 }
 
 /** One recorded map entry: a test id and the sources that test executed. */
@@ -148,6 +158,31 @@ export interface Recorder {
    * A recorder that would see anything that ran declares `OBSERVES_EVERYTHING`.
    */
   readonly observes: readonly string[];
+  /**
+   * Whether this recorder sees which installed packages a test executed code
+   * in. Absent means no, and no is the answer for all but one recorder shipped
+   * today.
+   *
+   * A separate claim from `observes`, and not expressible through it: `['**']`
+   * already matches every `node_modules` path, so a scope cannot distinguish a
+   * recorder that watches vendored code from one that never sees it. The two
+   * questions have genuinely different answers. A runner's own coverage
+   * provider filters `node_modules` out before covsel is handed anything, so
+   * Vitest and Jest see nothing there while declaring they observe everything.
+   * A per-test recorder opens its window in a `beforeEach`, after the test
+   * file's imports have already evaluated, so a dependency imported for its
+   * side effects is invisible to it.
+   *
+   * Declare it only when, had a test executed any package's code anywhere, this
+   * recorder would have seen it — including code that ran while the module
+   * graph was being evaluated. A recorder combining several observation windows
+   * declares it only when every one of its windows can see packages, since the
+   * windows union and one blind window would silently under-credit the unit.
+   *
+   * Under-claiming costs CI minutes on dependency bumps; over-claiming skips
+   * tests.
+   */
+  readonly observesPackages?: boolean;
   record(testFile: string): Promise<RecordedUnit[]>;
   /**
    * Scripts the most recent `record` executed, could not map back to any source,
