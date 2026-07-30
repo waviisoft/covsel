@@ -18,6 +18,12 @@ import { findConfigFile, loadConfig } from './config.js';
  * adapter is a config that looks settled and records nothing useful. `planInit`
  * touches nothing; `applyInit` writes what the plan describes.
  *
+ * Which adapter names are acceptable is not decided here. An adapter is an
+ * ordinary package that anyone can publish, so the only authority on whether a
+ * name has something behind it is the registry the caller installs from — this
+ * plans the install and reports what it can see locally, and a name with nothing
+ * behind it is the install's answer to give.
+ *
  * What this deliberately does not do is guess. A runner covsel has no signature
  * for is reported, with what an adapter request needs, rather than resolved to
  * the generic wrap on the theory that something is better than nothing. Whether
@@ -90,6 +96,56 @@ const RUNNERS: readonly RunnerSignature[] = [
   },
   { name: 'playwright', deps: ['@playwright/test'], scripts: [/\bplaywright\b/] },
 ];
+
+/**
+ * The adapter names covsel itself knows, read off the runner table so a new
+ * adapter joins the moment its runner does. This is not the set of names init
+ * accepts — anyone can publish an adapter, and covsel has no list of those — it
+ * is only what a typo can be measured against.
+ */
+export function knownAdapters(): string[] {
+  return [
+    ...new Set(RUNNERS.flatMap((r) => (r.adapter === undefined ? [] : [r.adapter]))),
+  ];
+}
+
+/** Edit distance, capped at `limit` so a far-off name costs almost nothing. */
+function editDistance(a: string, b: string, limit: number): number {
+  if (Math.abs(a.length - b.length) > limit) return limit + 1;
+  let previous = Array.from({ length: b.length + 1 }, (_, i) => i);
+  for (let i = 1; i <= a.length; i++) {
+    const row = [i];
+    for (let j = 1; j <= b.length; j++) {
+      row[j] = Math.min(
+        (row[j - 1] ?? 0) + 1,
+        (previous[j] ?? 0) + 1,
+        (previous[j - 1] ?? 0) + (a[i - 1] === b[j - 1] ? 0 : 1),
+      );
+    }
+    if (Math.min(...row) > limit) return limit + 1;
+    previous = row;
+  }
+  return previous[b.length] ?? limit + 1;
+}
+
+/**
+ * The adapter a name was probably meant to be, if any. A typo of a real adapter
+ * is the likeliest reason an install of one comes back empty-handed, and the set
+ * of names to compare against is small, so guessing costs little — as help after
+ * the fact, never as a substitution and never as a reason to refuse a name.
+ */
+export function suggestAdapter(name: string): string | undefined {
+  const limit = 2;
+  let best: { name: string; distance: number } | undefined;
+  for (const known of knownAdapters()) {
+    const distance = editDistance(name.toLowerCase(), known, limit);
+    // A suggestion has to be closer to the name than it is different from it,
+    // or every three-letter typo suggests every three-letter adapter.
+    if (distance > limit || distance >= known.length) continue;
+    if (best === undefined || distance < best.distance) best = { name: known, distance };
+  }
+  return best?.name;
+}
 
 /** Dependency names worth naming in a bug report. */
 const TEST_RELATED =
@@ -185,6 +241,9 @@ export interface InitOptions {
    * Whether an adapter package is installed. Resolving a name to a package is
    * the consumer's job — the CLI knows the specifiers and the resolution rules —
    * so init asks rather than guesses, and simply reports less when it cannot.
+   *
+   * It decides only whether the plan has to install the adapter, never whether
+   * the name is acceptable — a name nothing provides is the install's answer.
    */
   isAdapterInstalled?: (name: string) => Promise<boolean>;
 }

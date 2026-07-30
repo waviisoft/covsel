@@ -1,8 +1,10 @@
 import { execSync, spawnSync } from 'node:child_process';
 import {
+  chmodSync,
   existsSync,
   mkdirSync,
   mkdtempSync,
+  readFileSync,
   readdirSync,
   rmSync,
   statSync,
@@ -24,12 +26,31 @@ import { beforeAll, describe, expect, it } from 'vitest';
 const repoRoot = fileURLToPath(new URL('../../../', import.meta.url));
 const cjsBundle = fileURLToPath(new URL('../dist/index.cjs', import.meta.url));
 
-const cliSources = fileURLToPath(new URL('../src/', import.meta.url));
+/**
+ * Both builds the child actually loads. Freshness judged on the CLI's bundle
+ * alone would pass a tree where the CLI was rebuilt after a core edit but core
+ * was not -- and the child would then run stale core, which is the failure this
+ * check exists to prevent.
+ */
+const builtBundles = ['../dist/index.cjs', '../../core/dist/index.cjs'].map((rel) =>
+  fileURLToPath(new URL(rel, import.meta.url)),
+);
 
-/** Newest mtime among the CLI's sources, to tell a stale bundle from a fresh one. */
+/**
+ * Everything the bundle's behavior comes from. The CLI leaves `@covsel/core`
+ * external, so the child loads core's build too, and a bundle judged fresh on
+ * the CLI's sources alone would run last week's core against this week's tests.
+ */
+const bundledSources = ['../src/', '../../core/src/'].map((rel) =>
+  fileURLToPath(new URL(rel, import.meta.url)),
+);
+
+/** Newest mtime among those sources, to tell a stale build from a fresh one. */
 function newestSource(): number {
   return Math.max(
-    ...readdirSync(cliSources).map((f) => statSync(join(cliSources, f)).mtimeMs),
+    ...bundledSources.flatMap((dir) =>
+      readdirSync(dir).map((f) => statSync(join(dir, f)).mtimeMs),
+    ),
   );
 }
 
@@ -38,7 +59,10 @@ beforeAll(() => {
   // underneath it, which is the one outcome that makes the test worthless -- so
   // rebuild when it is missing or older than the sources rather than trusting
   // whatever the last build left behind.
-  if (!existsSync(cjsBundle) || statSync(cjsBundle).mtimeMs < newestSource()) {
+  const oldestBuild = builtBundles.every((f) => existsSync(f))
+    ? Math.min(...builtBundles.map((f) => statSync(f).mtimeMs))
+    : 0;
+  if (oldestBuild < newestSource()) {
     execSync('pnpm --filter covsel... build', { cwd: repoRoot, stdio: 'ignore' });
   }
 }, 300_000);
@@ -133,6 +157,44 @@ describe('the built CommonJS CLI', () => {
       expect(res.status, res.stderr).toBe(1);
       expect(res.stderr).toContain('covsel ships none');
       expect(res.stderr).toContain('npm install --save-dev @covsel/adapter-generic');
+    } finally {
+      rmSync(cwd, { recursive: true, force: true });
+    }
+  }, 120_000);
+
+  it('init installs the adapter a detected runner needs but the project lacks', () => {
+    // The normal adoption path, and the one a check on unresolvable names must
+    // not break: covsel ships no adapters, so the adapter for a detected runner
+    // is missing on every first run. Only a child process with a user's
+    // environment can show it missing -- in-process, pnpm's flat store makes
+    // every workspace adapter resolve from anywhere.
+    const cwd = mkdtempSync(join(tmpdir(), 'covsel-init-'));
+    try {
+      writeFileSync(
+        join(cwd, 'package.json'),
+        `${JSON.stringify({ name: 'host', private: true, devDependencies: { vitest: '^3.0.0' } })}\n`,
+      );
+      const bin = join(cwd, 'stub-bin');
+      const log = join(cwd, 'install.log');
+      mkdirSync(bin, { recursive: true });
+      writeFileSync(join(bin, 'npm'), `#!/bin/sh\necho "$@" >> ${log}\nexit 0\n`);
+      chmodSync(join(bin, 'npm'), 0o755);
+      const env = userEnv();
+      env['PATH'] = `${bin}:${env['PATH'] ?? ''}`;
+
+      const res = spawnSync(
+        process.execPath,
+        [
+          '-e',
+          `const { main } = require(${JSON.stringify(cjsBundle)});` +
+            `main(['init', '--auto-approve']).then((c) => process.exit(c));`,
+        ],
+        { cwd, encoding: 'utf8', env },
+      );
+
+      expect(res.status, res.stderr).toBe(0);
+      expect(readFileSync(log, 'utf8')).toContain('@covsel/adapter-vitest');
+      expect(existsSync(join(cwd, 'covsel.json'))).toBe(true);
     } finally {
       rmSync(cwd, { recursive: true, force: true });
     }

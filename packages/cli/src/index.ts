@@ -15,6 +15,7 @@ import {
   type InitPlan,
   installCommand,
   planInit,
+  suggestAdapter,
   applyInit,
   loadConfig,
   isDirtyWorkTree,
@@ -266,17 +267,141 @@ function describePlan(plan: InitPlan, needed: string[], install: boolean): void 
   }
 }
 
+/**
+ * What one invocation of the package manager did. `aborted` separates a run
+ * that was killed — Ctrl-C, or anything else that signals it — from one that
+ * exited with a failing status, because the two mean opposite things about
+ * whether to try something else.
+ */
+interface InstallOutcome {
+  status: number;
+  aborted: boolean;
+}
+
 /** Hand the install to the project's own package manager, output and all. */
-function installPackages(cwd: string, manager: string, packages: string[]): number {
+function installPackages(
+  cwd: string,
+  manager: string,
+  packages: string[],
+): InstallOutcome {
   const [command, ...args] = installCommand(manager, packages);
-  if (command === undefined) return 1;
+  if (command === undefined) return { status: 1, aborted: false };
   out(`\ncovsel init: ${[command, ...args].join(' ')}\n`);
-  const { status, error } = spawnSync(command, args, { cwd, stdio: 'inherit' });
+  const { status, signal, error } = spawnSync(command, args, { cwd, stdio: 'inherit' });
   if (error !== undefined) {
     err(`covsel init: ${manager} could not be run: ${error.message}\n`);
-    return 1;
+    return { status: 1, aborted: false };
   }
-  return status ?? 1;
+  // A null status means the package manager was killed rather than finishing.
+  if (status === null) {
+    err(
+      `covsel init: ${manager} was interrupted${signal === null ? '' : ` (${signal})`}\n`,
+    );
+    return { status: 1, aborted: true };
+  }
+  return { status, aborted: false };
+}
+
+/**
+ * Install what the project is missing, trying each specifier the adapter name
+ * can mean until one takes. The specifiers are alternatives rather than a list
+ * to install: a short name expands to the official scope first and the community
+ * prefix second, only the registry knows which one was published, and a failure
+ * on the first therefore says nothing about the name.
+ *
+ * Reports the status that decided it and every command it asked the package
+ * manager to run — a name installed under its second specifier is an ordinary
+ * success, and one installed under neither has to be able to say what was tried.
+ */
+function installMissing(
+  cwd: string,
+  plan: InitPlan,
+  candidates: string[],
+): { status: number; attempted: string[]; failed: 'adapter' | 'support' | undefined } {
+  const attempted: string[] = [];
+  const attempt = (packages: string[]): InstallOutcome => {
+    attempted.push(installCommand(plan.packageManager, packages).join(' '));
+    return installPackages(cwd, plan.packageManager, packages);
+  };
+
+  // The adapter goes in on its own, separately from the support packages. Sent
+  // together, a support package that will not install is indistinguishable from
+  // a specifier that does not exist — so covsel would move on to the next
+  // specifier and install a differently-named package for a reason that had
+  // nothing to do with the name.
+  if (candidates.length > 0) {
+    let outcome: InstallOutcome = { status: 1, aborted: false };
+    for (const specifier of candidates) {
+      outcome = attempt([specifier]);
+      // Only a package manager that ran and refused says anything about this
+      // specifier. One that was killed says nothing, and trying the next name
+      // would turn an interrupted install into an install of something else.
+      if (outcome.status === 0 || outcome.aborted) break;
+    }
+    if (outcome.status !== 0)
+      return { status: outcome.status, attempted, failed: 'adapter' };
+  }
+
+  if (plan.missingSupport.length === 0)
+    return { status: 0, attempted, failed: undefined };
+  const outcome = attempt(plan.missingSupport);
+  return {
+    status: outcome.status,
+    attempted,
+    failed: outcome.status === 0 ? undefined : 'support',
+  };
+}
+
+/**
+ * Say what a failed install leaves behind, which — since the install runs first
+ * — is nothing covsel wrote. The package manager has already printed why it
+ * failed; this adds what covsel asked it for, and what that does and does not
+ * prove about the name.
+ */
+function reportInstallFailure(
+  plan: InitPlan,
+  candidates: string[],
+  attempted: string[],
+  failed: 'adapter' | 'support' | undefined,
+  ignored: boolean,
+): void {
+  const named =
+    failed === 'adapter' && candidates.length > 1 && plan.adapter !== undefined
+      ? ` covsel asked for each package '${plan.adapter}' can name:`
+      : '';
+  err(`\ncovsel init: the install failed.${named}\n`);
+  for (const command of attempted) err(`  ${command}\n`);
+
+  // A typo of a real adapter is the likeliest reason an install of one comes
+  // back empty-handed. Offered only after the fact: an adapter covsel has never
+  // heard of is as acceptable a name as one it ships an adapter for.
+  const suggestion =
+    plan.adapter === undefined || failed !== 'adapter'
+      ? undefined
+      : suggestAdapter(plan.adapter);
+  if (suggestion !== undefined && suggestion !== plan.adapter) {
+    err(`\nDid you mean:\n  covsel init --adapter ${suggestion}\n`);
+  }
+
+  // An install that fails proves only that this install failed -- a private
+  // registry, an offline machine and a name with nothing behind it all look the
+  // same from here -- so this says what happened and stops. A project that was
+  // already configured keeps what it had, and saying nothing was written would
+  // read as covsel having taken that away.
+  const blame =
+    failed === 'adapter'
+      ? 'an adapter that could not be installed'
+      : 'a runner whose recording needs a package that could not be installed';
+  err(
+    plan.needsConfig
+      ? `\nNo config was written, so the project is not left configured for ${blame}.\n`
+      : `\n${plan.configPath} is unchanged — it already names ` +
+          `${plan.adapter ?? 'no adapter'}. Recording still needs that install.\n`,
+  );
+  // The map directory is ignored either way. Whether covsel can record has no
+  // bearing on whether its output belongs in version control, and the user
+  // agreed to that line of the plan.
+  if (ignored) err(`The map directory is ignored in ${plan.gitignorePath} regardless.\n`);
 }
 
 async function cmdInit(argv: string[]): Promise<number> {
@@ -292,16 +417,28 @@ async function cmdInit(argv: string[]): Promise<number> {
     ...(adapter !== undefined ? { adapter } : {}),
   });
 
+  // The package specifiers the adapter name can mean, in order, or none when the
+  // project already has it. Alternatives, not a list to install: whichever one
+  // the adapter was published under is the one that takes.
+  const candidates =
+    plan.adapter !== undefined && plan.adapterInstalled === false
+      ? adapterSpecifiers(plan.adapter)
+      : [];
+
   // covsel ships no adapters, so the package is as much a part of being set up
   // as the config is: a config naming an adapter nobody installed reads as done
-  // and fails at the first record.
+  // and fails at the first record. The adapter is shown as the alternatives it
+  // really is, since which one exists is not knowable until the install runs and
+  // a plan naming one while the run installs another is a plan that lied.
+  const adapterEntry =
+    candidates.length > 1
+      ? `${candidates[0]} (or ${candidates.slice(1).join(', ')})`
+      : candidates[0];
   const needed = [
-    ...(plan.adapter !== undefined && plan.adapterInstalled === false
-      ? [adapterSpecifiers(plan.adapter)[0] ?? plan.adapter]
-      : []),
+    ...(adapterEntry === undefined ? [] : [adapterEntry]),
     ...plan.missingSupport,
   ];
-  const toInstall = noInstall ? [] : needed;
+  const installing = !noInstall && needed.length > 0;
   // Measured against what the project is missing, not against what this run
   // would install: `--no-install` must not turn "your adapter is absent" into
   // "already set up", which is the exact reading that fails at the first record.
@@ -353,7 +490,7 @@ async function cmdInit(argv: string[]): Promise<number> {
   // `--no-install` can leave a plan that changes nothing: the packages were the
   // only thing outstanding and we were told not to install them. Reporting them
   // is the whole job, and there is nothing to consent to.
-  if (!plan.needsConfig && !plan.needsGitignore && toInstall.length === 0) return 0;
+  if (!plan.needsConfig && !plan.needsGitignore && !installing) return 0;
 
   // init writes files and installs packages, so it does nothing without an
   // answer. With no terminal to ask, silence is not one: a run in CI or under an
@@ -374,6 +511,31 @@ async function cmdInit(argv: string[]): Promise<number> {
     }
   }
 
+  // Install first, write second. An adapter is an ordinary package and covsel
+  // keeps no list of the ones that exist, so the install is what finds out
+  // whether this name is one -- and running it first is what keeps a name
+  // nothing provides from leaving behind a config every later command fails on.
+  //
+  // --no-install is the exception, and deliberately so rather than by oversight.
+  // It says the project brings its own packages, which leaves no install to find
+  // out whether the adapter name has anything behind it, so the config is
+  // written on the caller's word. That is the way in for an adapter arriving
+  // from a private registry, a lockfile, or a workspace link.
+  if (installing) {
+    const { status, attempted, failed } = installMissing(cwd, plan, candidates);
+    if (status !== 0) {
+      // The config is withheld — that is the whole point of installing first —
+      // but ignoring the map directory never depended on the install, and the
+      // user agreed to it. Doing it anyway keeps `.covsel/` uncommittable even
+      // when setup could not finish.
+      const ignored =
+        plan.needsGitignore &&
+        (await applyInit(cwd, { ...plan, needsConfig: false })).gitignoreUpdated;
+      reportInstallFailure(plan, candidates, attempted, failed, ignored);
+      return status;
+    }
+  }
+
   const applied = await applyInit(cwd, plan);
   if (applied.configWritten) {
     out(`covsel init: wrote ${plan.configPath} (adapter: ${plan.adapter})\n`);
@@ -382,26 +544,23 @@ async function cmdInit(argv: string[]): Promise<number> {
     out(`covsel init: added the map directory to ${plan.gitignorePath}\n`);
   }
 
-  if (toInstall.length > 0) {
-    const status = installPackages(cwd, plan.packageManager, toInstall);
-    if (status !== 0) {
-      // The config is written and correct; only the install failed, so say what
-      // is left rather than leaving a half-finished setup looking complete.
-      err(
-        `\ncovsel init: the install failed. covsel is configured, but recording ` +
-          `needs:\n  ${installCommand(plan.packageManager, toInstall).join(' ')}\n`,
-      );
-      return status;
-    }
-  }
-
   // Said once in the plan and again here: between the two, the install ran for
   // everything else, so this is the one thing still standing between the project
   // and a working `record`.
   if (noInstall && needed.length > 0) {
+    // Every specifier, not just the first: the adapter may be published under
+    // the community prefix, and handing over a command that 404s is worse than
+    // handing over two.
+    const commands =
+      candidates.length > 0
+        ? candidates.map((c) =>
+            installCommand(plan.packageManager, [c, ...plan.missingSupport]).join(' '),
+          )
+        : [installCommand(plan.packageManager, plan.missingSupport).join(' ')];
     out(
-      `\ncovsel init: not installed (--no-install). Recording needs:\n` +
-        `  ${installCommand(plan.packageManager, needed).join(' ')}\n`,
+      `\ncovsel init: not installed (--no-install). Recording needs${
+        commands.length > 1 ? ' whichever of these the adapter was published under' : ''
+      }:\n${commands.map((c) => `  ${c}\n`).join('')}`,
     );
   }
 
