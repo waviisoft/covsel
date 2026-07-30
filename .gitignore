@@ -5,6 +5,10 @@ coverage/
 *.tsbuildinfo
 .DS_Store
 
+# Throwaway checkouts an agent works in; scoped so the team-scoped documents
+# under .claude/ stay tracked.
+.claude/worktrees/
+
 # VitePress
 docs/.vitepress/cache/
 docs/.vitepress/dist/
