@@ -106,6 +106,27 @@ promises work not done: both leave the next reader unable to trust the page.
 - Put runner fixtures under `packages/<pkg>/test/fixtures/`. Fixtures named
   `*.test.mjs` are not collected by Vitest (it only collects `*.test.ts`).
 
+### Predict the selection, then check the one CI made
+
+covsel selects covsel's own tests on every pull request: the `covsel map`
+workflow records the suite on `main` and publishes a map, and the `select` job
+in CI fetches it and runs the affected tests. That job is a live demonstration
+of the product on itself, so treat it as one.
+
+Before you push, work out from your own diff which tests the change could affect
+and therefore what covsel ought to select. Then read that job — `covsel status`
+prints what it is about to do and why — and compare its selection against your
+prediction. The job going green is not the check; the check is whether it chose
+the tests you expected.
+
+A selection **narrower** than your prediction is a fail-open bug and outranks
+whatever you were working on: something is deciding not to run a test whose
+covered code changed. Investigate it before the pull request merges rather than
+filing it for later. A selection **wider** than expected is safe, but understand
+why — usually a stale or absent map falling open, occasionally a mapping that is
+attributing coverage too broadly. Either way, say in the pull request what you
+expected and what CI actually selected.
+
 ## Releases
 
 Semver per package, automated with Changesets. Add a changeset (`pnpm
@@ -143,6 +164,45 @@ the rationale.
 - We squash-merge; the PR summary becomes the commit message.
 - Never put secrets, tokens, or personal data in code, tests, fixtures, commit
   messages, or PR text.
+
+### Open the PR when the change is done, then stay with it
+
+Finishing the code is not finishing the work. When you judge a change complete,
+open the pull request rather than stopping to report back, and then watch it
+until it merges or closes: CI failures, merge conflicts with `main`, and review
+comments from humans and agents alike. Every one of those is yours to act on —
+fix it, or say in the thread why you are not going to. Leaving a red check or an
+unanswered review comment sitting is not an outcome.
+
+### Review your own change before anyone else does
+
+Review the change independently before you ask for review — the `code-reviewer`
+agent exists for exactly this, and its passes are the ones to use rather than
+improvising your own. Fold what it finds back into the branch, and include in
+the pull request a summary of what the review covered and what changed as a
+result. A reader should be able to see that the change has already been through
+a pass instead of taking it on trust. In this repo that review always includes
+the fail-open guarantee: nothing in the change can cause a needed test to be
+skipped.
+
+### The description is the living summary
+
+Keep the pull request description current as the branch evolves — it describes
+what the change does now, not what it did when you opened it. Anything that
+comes out of a review, human or agent, and alters the code alters the
+description too. A description that has drifted from its diff is the same defect
+as a doc page that has drifted from the code: the next reader cannot trust it.
+As with issues, the description carries the present state and the comments carry
+the rationale for how it got there.
+
+### Don't hard-wrap the description
+
+Write pull request descriptions and comments as unwrapped paragraphs — one line
+per paragraph, no hand-wrapping at 80 columns or any other width. The summary
+does become the squash-and-merge commit message, but Git formats it for the
+terminal on its own; pre-wrapping buys nothing there and renders as ragged text
+on GitHub in the meantime. Fixed-width wrapping is a convention for files in
+this repo, not for text typed into GitHub.
 
 ## Identity
 
