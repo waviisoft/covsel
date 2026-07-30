@@ -43,14 +43,23 @@ adapter to the config so later commands need no `--adapter`, and keeps the map
 out of version control. Detection is worth a glance before you say yes: a wrong
 adapter is a config that looks settled and records nothing useful.
 
+Decline and nothing happens at all — no config, no install. That is what "no"
+means; `--no-install` is how you ask to be configured without an install.
+
 | Flag               | What it does                                 |
 | ------------------ | -------------------------------------------- |
-| `-y`, `--yes`      | Apply the plan without asking                |
-| `--no-install`     | Write the config, install nothing            |
+| `--auto-approve`   | Carry the plan out without asking            |
+| `--no-install`     | Plan to configure without installing         |
 | `--adapter <name>` | Use this adapter instead of the detected one |
 
-Without a terminal to ask — CI, a script, a coding agent — `init` proceeds, since
-running it is itself the intent.
+`--no-install` changes the plan rather than skipping the question: the packages
+it will not install are listed under `skip`, with the command you will need, and
+you still confirm before anything is written.
+
+**`init` is interactive.** It writes files and installs packages, so it does
+nothing without an answer. With no terminal to ask — CI, a script, a coding
+agent — it prints the plan, changes nothing, and exits non-zero; pass
+`--auto-approve` to authorise an unattended run.
 
 `init` does not guess. A runner it has no signature for is reported, along with
 a link for requesting an adapter and the environment such a request needs, and

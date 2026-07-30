@@ -13,6 +13,16 @@ import { afterAll, afterEach, describe, expect, it, vi } from 'vitest';
 import { MAP_SCHEMA_VERSION } from '@covsel/core';
 import { VERSION, main } from '../src/index.js';
 
+/** What the stubbed prompt answers; set by `answering`. */
+let readlineAnswer = '';
+
+vi.mock('node:readline/promises', () => ({
+  createInterface: () => ({
+    question: () => Promise.resolve(readlineAnswer),
+    close: () => {},
+  }),
+}));
+
 const dirs: string[] = [];
 
 /** Run `fn` with the process cwd pointed at a throwaway project. */
@@ -210,7 +220,9 @@ describe('covsel init', () => {
     const result = await inProject(
       { 'package.json': pkg({ devDependencies: { vitest: '^3.0.0' } }) },
       async (cwd) => {
-        const captured = await capture(() => main(['init', '--no-install']));
+        const captured = await capture(() =>
+          main(['init', '--no-install', '--auto-approve']),
+        );
         return { ...captured, config: readFileSync(join(cwd, 'covsel.json'), 'utf8') };
       },
     );
@@ -235,7 +247,7 @@ describe('covsel init', () => {
       async (cwd) => {
         const log = stubPackageManager(cwd, 'pnpm');
         const captured = await capture(() =>
-          main(['init', '--adapter', 'not-a-real-runner', '-y']),
+          main(['init', '--adapter', 'not-a-real-runner', '--auto-approve']),
         );
         return { ...captured, installed: readFileSync(log, 'utf8').trim() };
       },
@@ -250,7 +262,9 @@ describe('covsel init', () => {
       { 'package.json': pkg({ devDependencies: { vitest: '^3.0.0' } }) },
       async (cwd) => {
         stubPackageManager(cwd, 'npm', 1);
-        return capture(() => main(['init', '--adapter', 'not-a-real-runner', '-y']));
+        return capture(() =>
+          main(['init', '--adapter', 'not-a-real-runner', '--auto-approve']),
+        );
       },
     );
 
@@ -264,7 +278,7 @@ describe('covsel init', () => {
       { 'package.json': pkg({ devDependencies: { vitest: '^3.0.0' } }) },
       async (cwd) => {
         const log = stubPackageManager(cwd, 'npm');
-        await capture(() => main(['init', '-y']));
+        await capture(() => main(['init', '--auto-approve']));
         return { installed: readFileSync(log, 'utf8').trim() };
       },
     );
@@ -274,15 +288,17 @@ describe('covsel init', () => {
     expect(installed).toContain('@vitest/coverage-v8');
   });
 
-  it('installs nothing under --no-install', async () => {
+  it('plans no install under --no-install', async () => {
     const { code, out } = await inProject(
       { 'package.json': pkg({ devDependencies: { vitest: '^3.0.0' } }) },
-      () => capture(() => main(['init', '--no-install'])),
+      () => capture(() => main(['init', '--no-install', '--auto-approve'])),
     );
 
+    // No install line in the plan — but the packages are still named, under
+    // `skip`, because agreeing to this plan means agreeing to install them.
     expect(code).toBe(0);
     expect(out).not.toContain('  install  ');
-    expect(out).not.toContain('@vitest/coverage-v8');
+    expect(out).toContain('  skip     installing');
   });
 
   it('reports a project that is already set up without redoing it', async () => {
@@ -292,7 +308,10 @@ describe('covsel init', () => {
         'covsel.json': `${JSON.stringify({ adapter: 'jest' })}\n`,
         '.gitignore': '.covsel/\n',
       },
-      () => capture(() => main(['init'])),
+      async (cwd) => {
+        stubPackageManager(cwd, 'npm');
+        return capture(() => main(['init']));
+      },
     );
 
     expect(code).toBe(0);
@@ -368,6 +387,214 @@ function stubRefusingAdapter(cwd: string, message: string): void {
       '};\n',
   );
 }
+
+describe('covsel init — consent', () => {
+  it('changes nothing with no terminal and no --auto-approve', async () => {
+    const { code, err, files } = await inProject(
+      { 'package.json': pkg({ devDependencies: { vitest: '^3.0.0' } }) },
+      async (cwd) => {
+        const log = stubPackageManager(cwd, 'npm');
+        const captured = await capture(() => main(['init']));
+        return {
+          ...captured,
+          files: {
+            config: existsSync(join(cwd, 'covsel.json')),
+            gitignore: existsSync(join(cwd, '.gitignore')),
+            installed: existsSync(log),
+          },
+        };
+      },
+    );
+
+    // The test process has no TTY, which is exactly the CI/agent case.
+    expect(code).toBe(1);
+    expect(files).toEqual({ config: false, gitignore: false, installed: false });
+    expect(err).toContain('nothing changed');
+    expect(err).toContain('--auto-approve');
+  });
+
+  it('still shows the plan it did not carry out', async () => {
+    const { code, out } = await inProject(
+      { 'package.json': pkg({ devDependencies: { vitest: '^3.0.0' } }) },
+      async (cwd) => {
+        // Stubbed so a regression in the guard fails the test rather than
+        // silently reaching the network for a real install.
+        stubPackageManager(cwd, 'npm');
+        return capture(() => main(['init']));
+      },
+    );
+
+    expect(code).toBe(1);
+    expect(out).toContain('detected vitest');
+    expect(out).toContain('Plan:');
+  });
+
+  it('carries the plan out when told to', async () => {
+    const { code, installed } = await inProject(
+      { 'package.json': pkg({ devDependencies: { vitest: '^3.0.0' } }) },
+      async (cwd) => {
+        const log = stubPackageManager(cwd, 'npm');
+        const captured = await capture(() => main(['init', '--auto-approve']));
+        return { ...captured, installed: readFileSync(log, 'utf8').trim() };
+      },
+    );
+
+    // The workspace adapters all resolve in-process here, so what is left to
+    // install is the coverage provider — enough to prove the install ran.
+    expect(code).toBe(0);
+    expect(installed).toContain('@vitest/coverage-v8');
+  });
+});
+
+/**
+ * Drive the prompt. A vitest worker has no TTY, so reaching `confirm` at all
+ * means saying it has one — and the answer has to come from somewhere, hence the
+ * readline stub. Without this the headline behaviour of the command, what
+ * happens when you answer, has no coverage at all.
+ */
+async function answering<T>(answer: string, fn: () => Promise<T>): Promise<T> {
+  const stdin = process.stdin as { isTTY?: boolean };
+  const had = Object.prototype.hasOwnProperty.call(stdin, 'isTTY');
+  const previous = stdin.isTTY;
+  Object.defineProperty(stdin, 'isTTY', { value: true, configurable: true });
+  readlineAnswer = answer;
+  try {
+    return await fn();
+  } finally {
+    if (had)
+      Object.defineProperty(stdin, 'isTTY', { value: previous, configurable: true });
+    else delete stdin.isTTY;
+  }
+}
+
+describe('covsel init — what "already set up" means', () => {
+  const configured = {
+    'package.json': pkg({ devDependencies: { vitest: '^3.0.0' } }),
+    'covsel.json': `${JSON.stringify({ adapter: 'vitest' })}\n`,
+    '.gitignore': '.covsel/\n',
+  };
+
+  it('is not claimed while a package recording needs is missing', async () => {
+    // --no-install must not turn "your coverage provider is absent" into
+    // "already set up": that reads as done and fails at the first record.
+    const { out } = await inProject(configured, () =>
+      capture(() => main(['init', '--no-install'])),
+    );
+
+    expect(out).not.toContain('already set up');
+    expect(out).toContain('skip     installing');
+    expect(out).toContain('@vitest/coverage-v8');
+  });
+
+  it('reports a project with nothing left to do, and asks nothing', async () => {
+    const { code, out } = await inProject(
+      {
+        ...configured,
+        'package.json': pkg({
+          devDependencies: { vitest: '^3.0.0', '@vitest/coverage-v8': '^3.0.0' },
+        }),
+      },
+      () => capture(() => main(['init', '--no-install'])),
+    );
+
+    expect(code).toBe(0);
+    expect(out).toContain('already set up');
+  });
+
+  it('exits 0 without prompting when --no-install leaves nothing to apply', async () => {
+    // The packages were the only outstanding thing and we were told not to
+    // install them, so there is nothing to consent to — not even with no TTY.
+    const { code, err } = await inProject(configured, () =>
+      capture(() => main(['init', '--no-install'])),
+    );
+
+    expect(code).toBe(0);
+    expect(err).not.toContain('--auto-approve');
+  });
+});
+
+describe('covsel init — answering the prompt', () => {
+  it('writes nothing when the answer is no', async () => {
+    const { code, out, files } = await inProject(
+      { 'package.json': pkg({ devDependencies: { vitest: '^3.0.0' } }) },
+      async (cwd) => {
+        const log = stubPackageManager(cwd, 'npm');
+        const captured = await answering('n', () => capture(() => main(['init'])));
+        return {
+          ...captured,
+          files: {
+            config: existsSync(join(cwd, 'covsel.json')),
+            gitignore: existsSync(join(cwd, '.gitignore')),
+            installed: existsSync(log),
+          },
+        };
+      },
+    );
+
+    // Declining the plan declines all of it — that is what "no" has to mean, or
+    // there is no way to say it.
+    expect(code).toBe(0);
+    expect(files).toEqual({ config: false, gitignore: false, installed: false });
+    expect(out).toContain('nothing changed');
+  });
+
+  it.each(['', 'y', 'YES'])('carries the plan out for %o', async (answer) => {
+    const { code, config, installed } = await inProject(
+      { 'package.json': pkg({ devDependencies: { vitest: '^3.0.0' } }) },
+      async (cwd) => {
+        const log = stubPackageManager(cwd, 'npm');
+        const captured = await answering(answer, () => capture(() => main(['init'])));
+        return {
+          ...captured,
+          config: existsSync(join(cwd, 'covsel.json')),
+          installed: existsSync(log) ? readFileSync(log, 'utf8').trim() : '',
+        };
+      },
+    );
+
+    expect(code).toBe(0);
+    expect(config).toBe(true);
+    expect(installed).toContain('@vitest/coverage-v8');
+  });
+});
+
+describe('covsel init — --no-install', () => {
+  it('puts the skipped install in the plan, with the command it needs', async () => {
+    const { out } = await inProject(
+      { 'package.json': pkg({ devDependencies: { vitest: '^3.0.0' } }) },
+      () => capture(() => main(['init', '--no-install'])),
+    );
+
+    // Agreeing to a --no-install plan means agreeing to finish the install, so
+    // the plan has to say which packages and how.
+    expect(out).toContain('skip     installing');
+    expect(out).toContain('@vitest/coverage-v8');
+    expect(out).toContain('npm install --save-dev');
+  });
+
+  it('configures without invoking a package manager, and says what is left', async () => {
+    const { code, out, config, installed } = await inProject(
+      { 'package.json': pkg({ devDependencies: { vitest: '^3.0.0' } }) },
+      async (cwd) => {
+        const log = stubPackageManager(cwd, 'npm');
+        const captured = await capture(() =>
+          main(['init', '--no-install', '--auto-approve']),
+        );
+        return {
+          ...captured,
+          config: existsSync(join(cwd, 'covsel.json')),
+          installed: existsSync(log),
+        };
+      },
+    );
+
+    expect(code).toBe(0);
+    expect(config).toBe(true);
+    expect(installed).toBe(false);
+    expect(out).toContain('not installed (--no-install)');
+    expect(out).toContain('npm install --save-dev');
+  });
+});
 
 describe('an adapter that cannot record', () => {
   it('record reports the refusal instead of crashing', async () => {

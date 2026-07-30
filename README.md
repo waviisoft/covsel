@@ -32,6 +32,7 @@ install the one for your runner:
 ```bash
 npm install --save-dev covsel
 npx covsel init          # detects the runner, shows the plan, installs the adapter
+                         # (asks first; --auto-approve for an unattended run)
 ```
 
 Or pick it yourself:

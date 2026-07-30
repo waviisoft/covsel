@@ -41,7 +41,7 @@ import {
 const HELP = `covsel -- runtime-coverage test impact analysis for any JS/TS runner
 
 Usage:
-  covsel init [--adapter <name>] [-y] [--no-install]
+  covsel init [--adapter <name>] [--auto-approve] [--no-install]
                                                    Set covsel up for this project
   covsel record [--adapter <name>] -- <command>   Run the suite and build the map
   covsel affected [--since <ref>] [--format files] Print tests the diff can affect
@@ -57,18 +57,20 @@ Options:
                      (default: the config's adapter, else '${DEFAULT_ADAPTER}';
                      adapters install separately)
   --since <ref>      Diff against <ref> instead of the commit the map records
-  -y, --yes          init: apply the plan without asking
-  --no-install       init: write the config but install nothing
+  --auto-approve     init: carry the plan out without asking (required with no
+                     terminal, since init changes the project)
+  --no-install       init: plan to configure without installing, and print the
+                     install command you will need
   --debounce <ms>    watch: quiet period after a change before running (default 200)
   --record           watch: re-record the map after a run that passes
   --no-initial-run   watch: wait for the first change instead of running at startup
 
-init detects the runner, installs its adapter, and writes the adapter to the
-config so later commands need no --adapter. record wraps a runner and observes
-each test file in its own process to learn which sources it executes. affected
-prints those test files a diff can affect, so \`<runner> $(covsel affected)\` runs
-only what is needed. watch drives the same selection continuously, running the
-affected tests on every save.
+init detects the runner, shows what it would change, and on your say-so installs
+its adapter and writes that adapter to the config, so later commands need no
+--adapter. record wraps a runner and observes each test file in its own process
+to learn which sources it executes. affected prints those test files a diff can
+affect, so \`<runner> $(covsel affected)\` runs only what is needed. watch drives
+the same selection continuously, running the affected tests on every save.
 
 covsel never skips a test whose behavior your change could alter -- and when it
 can't be sure, it runs it (fail-open). Map schema v${MAP_SCHEMA_VERSION}.
@@ -201,14 +203,11 @@ async function adapterIsInstalled(name: string, cwd: string): Promise<boolean> {
   }
 }
 
-/**
- * Ask before changing the project. A non-interactive run — CI, an agent, a pipe
- * — has no one to ask, and running `covsel init` is itself the intent, so it
- * proceeds; `--yes` says so explicitly for a run that does have a terminal.
- */
+/** Ask the terminal. Only reached when there is one. */
 async function confirm(question: string): Promise<boolean> {
-  if (!process.stdin.isTTY) return true;
-  const rl = createInterface({ input: process.stdin, output: process.stdout });
+  // The prompt goes to stderr so `covsel init > plan.txt` from a terminal still
+  // shows the question rather than looking like a hang.
+  const rl = createInterface({ input: process.stdin, output: process.stderr });
   try {
     const answer = (await rl.question(`\n${question} [Y/n] `)).trim().toLowerCase();
     return answer === '' || answer === 'y' || answer === 'yes';
@@ -232,8 +231,13 @@ function printIntro(): void {
   );
 }
 
-/** Show the plan before carrying it out — this is what there is to confirm. */
-function describePlan(plan: InitPlan, packages: string[]): void {
+/**
+ * Show the plan before carrying it out — this is what there is to confirm, so
+ * everything the run would do, and everything it deliberately would not, has to
+ * be visible here. `--no-install` in particular is a different plan rather than
+ * a quieter one: agreeing to it means agreeing to finish the install yourself.
+ */
+function describePlan(plan: InitPlan, needed: string[], install: boolean): void {
   for (const runner of plan.detected) {
     const how =
       runner.adapter === undefined ? 'no adapter yet' : `adapter ${runner.adapter}`;
@@ -243,11 +247,23 @@ function describePlan(plan: InitPlan, packages: string[]): void {
     out(`covsel init: using the adapter you named — ${plan.adapter}\n`);
   }
   out('\nPlan:\n');
-  if (packages.length > 0) {
-    out(`  install  ${packages.join(', ')} (${plan.packageManager})\n`);
+  // One list, and whether it is being installed — so the packages can never be
+  // described by one variable and acted on by another.
+  if (needed.length > 0) {
+    out(
+      install
+        ? `  install  ${needed.join(', ')} (${plan.packageManager})\n`
+        : `  skip     installing ${needed.join(', ')} (--no-install)\n`,
+    );
   }
   if (plan.needsConfig) out(`  write    ${plan.configPath} (adapter: ${plan.adapter})\n`);
   if (plan.needsGitignore) out(`  ignore   the map directory in ${plan.gitignorePath}\n`);
+  if (!install && needed.length > 0) {
+    out(
+      `\nRecording needs those packages, so you will have to run:\n` +
+        `  ${installCommand(plan.packageManager, needed).join(' ')}\n`,
+    );
+  }
 }
 
 /** Hand the install to the project's own package manager, output and all. */
@@ -266,7 +282,7 @@ function installPackages(cwd: string, manager: string, packages: string[]): numb
 async function cmdInit(argv: string[]): Promise<number> {
   const cwd = process.cwd();
   const adapter = flag(argv, 'adapter');
-  const assumeYes = hasFlag(argv, 'yes') || argv.includes('-y');
+  const autoApprove = hasFlag(argv, 'auto-approve');
   const noInstall = hasFlag(argv, 'no-install');
 
   const plan = await planInit({
@@ -279,15 +295,17 @@ async function cmdInit(argv: string[]): Promise<number> {
   // covsel ships no adapters, so the package is as much a part of being set up
   // as the config is: a config naming an adapter nobody installed reads as done
   // and fails at the first record.
-  const packages = noInstall
-    ? []
-    : [
-        ...(plan.adapter !== undefined && plan.adapterInstalled === false
-          ? [adapterSpecifiers(plan.adapter)[0] ?? plan.adapter]
-          : []),
-        ...plan.missingSupport,
-      ];
-  const alreadySetUp = !plan.needsConfig && !plan.needsGitignore && packages.length === 0;
+  const needed = [
+    ...(plan.adapter !== undefined && plan.adapterInstalled === false
+      ? [adapterSpecifiers(plan.adapter)[0] ?? plan.adapter]
+      : []),
+    ...plan.missingSupport,
+  ];
+  const toInstall = noInstall ? [] : needed;
+  // Measured against what the project is missing, not against what this run
+  // would install: `--no-install` must not turn "your adapter is absent" into
+  // "already set up", which is the exact reading that fails at the first record.
+  const alreadySetUp = !plan.needsConfig && !plan.needsGitignore && needed.length === 0;
 
   // Everything below either changes the project or explains why it cannot, so
   // the reader deserves to know what covsel is first. The already-set-up run is
@@ -330,13 +348,30 @@ async function cmdInit(argv: string[]): Promise<number> {
     return 0;
   }
 
-  describePlan(plan, packages);
-  if (!assumeYes && !(await confirm('Set covsel up this way?'))) {
-    out('covsel init: nothing changed.\n');
-    if (plan.detected.length > 0) {
-      out('Name the right adapter yourself with: covsel init --adapter <name>\n');
+  describePlan(plan, needed, !noInstall);
+
+  // `--no-install` can leave a plan that changes nothing: the packages were the
+  // only thing outstanding and we were told not to install them. Reporting them
+  // is the whole job, and there is nothing to consent to.
+  if (!plan.needsConfig && !plan.needsGitignore && toInstall.length === 0) return 0;
+
+  // init writes files and installs packages, so it does nothing without an
+  // answer. With no terminal to ask, silence is not one: a run in CI or under an
+  // agent has to say so with --auto-approve, which is why the flag is not named
+  // for answering a prompt.
+  if (!autoApprove) {
+    if (!process.stdin.isTTY) {
+      err('\ncovsel init: nothing changed — no terminal to confirm with.\n');
+      err('Run covsel init --auto-approve to carry this plan out unattended.\n');
+      return 1;
     }
-    return 0;
+    if (!(await confirm('Set covsel up this way?'))) {
+      out('covsel init: nothing changed.\n');
+      if (plan.detected.length > 0) {
+        out('Name the right adapter yourself with: covsel init --adapter <name>\n');
+      }
+      return 0;
+    }
   }
 
   const applied = await applyInit(cwd, plan);
@@ -347,17 +382,27 @@ async function cmdInit(argv: string[]): Promise<number> {
     out(`covsel init: added the map directory to ${plan.gitignorePath}\n`);
   }
 
-  if (packages.length > 0) {
-    const status = installPackages(cwd, plan.packageManager, packages);
+  if (toInstall.length > 0) {
+    const status = installPackages(cwd, plan.packageManager, toInstall);
     if (status !== 0) {
       // The config is written and correct; only the install failed, so say what
       // is left rather than leaving a half-finished setup looking complete.
       err(
         `\ncovsel init: the install failed. covsel is configured, but recording ` +
-          `needs:\n  ${installCommand(plan.packageManager, packages).join(' ')}\n`,
+          `needs:\n  ${installCommand(plan.packageManager, toInstall).join(' ')}\n`,
       );
       return status;
     }
+  }
+
+  // Said once in the plan and again here: between the two, the install ran for
+  // everything else, so this is the one thing still standing between the project
+  // and a working `record`.
+  if (noInstall && needed.length > 0) {
+    out(
+      `\ncovsel init: not installed (--no-install). Recording needs:\n` +
+        `  ${installCommand(plan.packageManager, needed).join(' ')}\n`,
+    );
   }
 
   if (plan.commands) printNextSteps(plan.commands);
