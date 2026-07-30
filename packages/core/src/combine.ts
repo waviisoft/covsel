@@ -153,7 +153,7 @@ export function combineObservations(
   return {
     test,
     files: [...files.values()].sort((a, b) => byPath(a.file, b.file)),
-    ...(packages ? { packages } : {}),
+    ...(packages !== undefined ? { packages } : {}),
     blocks: [...blocks.values()].sort(
       (a, b) => byPath(a.file, b.file) || byPath(a.blockHash, b.blockHash),
     ),

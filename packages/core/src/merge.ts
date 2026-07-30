@@ -96,7 +96,7 @@ export function mergeMaps(maps: CoverageMap[]): CoverageMap {
           test: entry.test,
           files: [...entry.files],
           ...(entry.blocks ? { blocks: [...entry.blocks] } : {}),
-          ...(entry.packages ? { packages: [...entry.packages] } : {}),
+          ...(entry.packages !== undefined ? { packages: [...entry.packages] } : {}),
         });
         continue;
       }
@@ -156,7 +156,10 @@ export function mergeMaps(maps: CoverageMap[]): CoverageMap {
   // ran: one that does not would be read as a test running no vendored code,
   // and every dependency it really uses would go unselected on a bump. Keeping
   // the two in step is what lets selection rely on the pairing.
-  const everyEntryHasPackages = entries.every((e) => e.packages !== undefined);
+  // `every` on an empty list is vacuously true, and an inventory beside no
+  // entries would say every package was installed and ran nowhere.
+  const everyEntryHasPackages =
+    entries.length > 0 && entries.every((e) => e.packages !== undefined);
   const dependencies = everyEntryHasPackages ? agreedDependencies(usable) : undefined;
 
   return {

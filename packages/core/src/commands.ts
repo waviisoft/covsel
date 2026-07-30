@@ -68,7 +68,12 @@ export function createGenericRecorder(init: GenericRecorderInit): Recorder {
       const files = await mapper.toFiles(raw);
       const blocks = wantBlocks ? await mapper.toBlocks(raw) : [];
       return [
-        { test: { file: testFile }, files, blocks, packages: mapper.toPackages(raw) },
+        {
+          test: { file: testFile },
+          files,
+          blocks,
+          packages: await mapper.toPackages(raw),
+        },
       ];
     },
     unmappableAllowed: () => mapper.takeAllowedUnmappable(),
@@ -213,15 +218,19 @@ function overclaimedGlobs(
 /**
  * Why a unit's package list contradicts its recorder's declaration, if it does.
  *
- * The two have to agree exactly, in both directions, because absence is what
- * carries the meaning. A declaring recorder that produces a unit without
- * packages would have that entry read as a test running no vendored code, and
- * every dependency in it would go unselected on a bump. A non-declaring one
- * that produces packages anyway is claiming a recall it has not stood behind,
- * and the entry would be trusted for exactly the packages its blind spots hid.
+ * Only one direction is fatal, and it is the one where absence would be read as
+ * a measurement: a recorder declaring `observesPackages` whose unit says nothing
+ * about packages. Written as it stands, that entry reads as a test running no
+ * vendored code, and every dependency it really uses goes unselected on a bump.
+ * There is no safe way to guess what it ran, so the recording fails and says so.
  *
- * Refusing both keeps a single invariant worth relying on downstream: packages
- * are present on every entry of a map, or on none of them.
+ * The opposite -- a unit reporting packages its recorder has not claimed to
+ * watch -- is a claim nobody stood behind, but it costs nothing to decline. The
+ * packages are dropped and the map keeps none, which is exactly today's
+ * behaviour. Failing there would break every recorder that wraps another and
+ * forwards its units while declaring its own narrower scope, which is the
+ * ordinary way to build one, and would leave the project with no map at all
+ * over a field nothing selects on yet.
  */
 function packageClaimMismatch(
   unit: RecordedUnit,
@@ -229,9 +238,6 @@ function packageClaimMismatch(
 ): string | undefined {
   if (observesPackages && unit.packages === undefined) {
     return 'recorded no package list, though the recorder declares it observes packages';
-  }
-  if (!observesPackages && unit.packages !== undefined) {
-    return 'recorded a package list, though the recorder does not declare it observes packages';
   }
   return undefined;
 }
@@ -295,7 +301,13 @@ export async function recordMap(init: RecordInit): Promise<RecordResult> {
           test: unit.test,
           files: unit.files,
           ...(wantBlocks && unit.blocks.length > 0 ? { blocks: unit.blocks } : {}),
-          ...(unit.packages ? { packages: unit.packages } : {}),
+          // Kept only when the recorder stands behind it: a list from one that
+          // does not is declined rather than trusted. `!== undefined` rather
+          // than truthiness, because `[]` is the measurement "ran no vendored
+          // code" and turning that into silence is what skips tests.
+          ...(observesPackages && unit.packages !== undefined
+            ? { packages: unit.packages }
+            : {}),
         });
         // A unit combined from several observation windows knows the scope those
         // windows add up to, which is what its entry was really watched for; a

@@ -180,9 +180,9 @@ export class V8FileMapper implements Mapper {
    *   source. Recorded when it passes the source filter, and deliberately
    *   skipped when it does not — a test file, or a path the project put outside
    *   `sourceGlobs`.
-   * - **Vendored code** under `node_modules` has no source of its own to record,
-   *   but the package it belongs to is worth knowing: a dependency change can
-   *   then be resolved to the tests that ran that package's code.
+   * - **Vendored code** under `node_modules` has no source of its own to
+   *   record. The package it belongs to is recorded separately, by
+   *   `toPackages`; a dependency change is caught by the lockfile sentinel.
    * - **Foreign and runtime scripts** — a file outside the repository, a `node:`
    *   builtin, `eval` — are not this project's code.
    *
@@ -333,29 +333,44 @@ export class V8FileMapper implements Mapper {
    *
    * Vendored code has no source of its own to record, but which package it
    * belongs to is exactly what a dependency change needs to be resolved
-   * against. A separate pass from `toFiles` because it is a separate axis:
-   * these are package names, not repo paths, and synthesising `node_modules/`
-   * paths into the file list would make every change to one look like a change
-   * to a source the recorder was never watching.
+   * against. A separate axis from `toFiles`: these are package names, not repo
+   * paths, and synthesising `node_modules/` paths into the file list would make
+   * every change to one look like a change to a source the recorder was never
+   * watching.
    *
-   * Path segments only. This runs once per executed script — hundreds of
-   * thousands of times over a suite — so the manifest is never read here; all
-   * of that happens once per recording, in the inventory pass.
+   * A package reaches a test two ways, and both have to be counted. It executes
+   * as its own script under `node_modules`, which is a path question; or a
+   * bundler inlined it into built output, and then nothing under
+   * `node_modules` ever runs — the package is named only by the built script's
+   * source map. Reading the first and not the second would leave the package in
+   * the inventory with no entry crediting it, which is read as "installed and
+   * never ran" and skips every test that leans on it through the bundle.
    *
-   * A vendored script with no derivable package name contributes nothing, and
-   * cannot leave a gap: the inventory is keyed by the same function over the
-   * same directories, so a package that has an inventory entry necessarily has
-   * a name here too.
+   * The resolver caches by script URL and `toFiles` has already asked it about
+   * these same scripts, so the second pass costs a map lookup per script rather
+   * than a second resolution.
    */
-  toPackages(raw: RawCoverage): string[] {
+  async toPackages(raw: RawCoverage): Promise<string[]> {
     const names = new Set<string>();
+    const add = (rel: string): void => {
+      if (!isVendoredRelPath(rel)) return;
+      const name = packageNameFromRelPath(rel);
+      if (name !== undefined) names.add(name);
+    };
     for (const script of raw.scripts as ScriptCoverage[]) {
       const executed = script.functions.some((fn) => fn.ranges.some((r) => r.count > 0));
       if (!executed) continue;
       const rel = this.repoRelative(script.url);
-      if (rel === undefined || !isVendoredRelPath(rel)) continue;
-      const name = packageNameFromRelPath(rel);
-      if (name !== undefined) names.add(name);
+      if (rel !== undefined && isVendoredRelPath(rel)) {
+        add(rel);
+        continue; // vendored code is its own source; it has no map to consult
+      }
+      // Anything else may be built output with a package fused into it. A
+      // script the resolver cannot map contributes nothing here: whether that
+      // is a hole in the recording is `toFiles`'s question, and it fails the
+      // recording outright rather than letting a gap through.
+      const mapped = await this.resolver.resolve({ url: script.url });
+      if (mapped.kind === 'mapped') for (const source of mapped.sources) add(source);
     }
     return [...names].sort();
   }

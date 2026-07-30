@@ -1,4 +1,4 @@
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { afterAll, describe, expect, it } from 'vitest';
@@ -34,6 +34,19 @@ function project(files: Record<string, string>): string {
     writeFileSync(abs, contents);
   }
   return dir;
+}
+
+/** Create a repo-relative directory, returning its absolute path. */
+function mkdirp(cwd: string, rel: string): string {
+  const abs = join(cwd, rel);
+  mkdirSync(abs, { recursive: true });
+  return abs;
+}
+
+/** Symlink a repo-relative path at `target`, which may itself be relative. */
+function link(cwd: string, rel: string, target: string): void {
+  mkdirSync(dirname(join(cwd, rel)), { recursive: true });
+  symlinkSync(target, join(cwd, rel));
 }
 
 /** A manifest for an ordinary JS package. */
@@ -184,10 +197,8 @@ describe('readInstalledInventory', () => {
     });
 
     it('names a package by where it sits, not by what it calls itself', () => {
-      // An aliased install -- `npm i real@npm:other` -- puts one package under
-      // another's directory name. Coverage attribution reads the path, so the
-      // inventory has to read the path too, or the two sides describe different
-      // packages and a bump to the alias would never match an entry.
+      // A directory whose manifest disagrees with it. Coverage attribution reads
+      // the path, so the inventory reads the path too.
       const cwd = pnpmProject({
         'node_modules/aliased/package.json': manifest('the-real-name', '1.0.0'),
       });
@@ -198,11 +209,110 @@ describe('readInstalledInventory', () => {
     it('ignores the package managers own bookkeeping', () => {
       const cwd = pnpmProject({
         'node_modules/.bin/vitest': '#!/bin/sh\n',
-        'node_modules/.cache/thing/package.json': manifest('thing', '1.0.0'),
+        // A build cache with its own installed tree, which webpack and npm both
+        // produce. Only refusing to descend into dot directories keeps it out:
+        // the package below sits at a path that reads as an ordinary package,
+        // so nothing downstream would reject it.
+        'node_modules/.cache/node_modules/buried/package.json': manifest(
+          'buried',
+          '1.0.0',
+        ),
       });
 
       expect(readInstalledInventory(cwd)?.inventory).toEqual({});
     });
+  });
+
+  /**
+   * The inventory and coverage attribution have to describe the same packages.
+   * They see different things -- the walk sees `node_modules/<name>`, V8 reports
+   * the realpath of what executed -- and where they disagree no entry can ever
+   * credit the package, which reads as "installed and never ran".
+   */
+  describe('packages whose identity does not survive resolution', () => {
+    it('keeps an ordinary pnpm package, linked into the store', () => {
+      const cwd = pnpmProject({
+        'node_modules/.pnpm/left-pad@1.3.0/node_modules/left-pad/package.json': manifest(
+          'left-pad',
+          '1.3.0',
+        ),
+      });
+      link(cwd, 'node_modules/left-pad', '.pnpm/left-pad@1.3.0/node_modules/left-pad');
+
+      // The store path still reads as `left-pad`, so both sides agree.
+      expect(readInstalledInventory(cwd)?.inventory).toEqual({ 'left-pad': ['1.3.0'] });
+    });
+
+    it('drops a linked workspace package', () => {
+      // What every monorepo has. Coverage for it arrives as first-party source
+      // under `packages/core/`, never as vendored code, so no entry could name
+      // it -- and covsel's own repository is shaped exactly this way.
+      const cwd = pnpmProject({
+        'packages/core/package.json': manifest('@scope/core', '1.0.0'),
+        'packages/cli/package.json': '{"name":"@scope/cli"}',
+      });
+      mkdirSync(join(cwd, 'packages/cli/node_modules/@scope'), { recursive: true });
+      link(cwd, 'packages/cli/node_modules/@scope/core', '../../../core');
+
+      expect(readInstalledInventory(cwd)?.inventory).toEqual({});
+    });
+
+    it('drops a package linked from outside the repository', () => {
+      // `npm link`, `file:../shared`, yarn `portal:`. The realpath is not in the
+      // repo at all, so nothing covsel records can ever mention it.
+      const outside = mkdtempSync(join(tmpdir(), 'covsel-ext-'));
+      dirs.push(outside);
+      writeFileSync(join(outside, 'package.json'), manifest('ext', '9.9.9'));
+      const cwd = pnpmProject({});
+      link(cwd, 'node_modules/ext', outside);
+
+      expect(readInstalledInventory(cwd)?.inventory).toEqual({});
+    });
+
+    it('drops a pnpm aliased install', () => {
+      // `aliased: npm:real@1.0.0`. pnpm links the alias straight at the store
+      // entry for `real`, so attribution can only ever produce `real` -- and a
+      // diff naming `aliased` would find it "installed and never run".
+      const cwd = pnpmProject({
+        'node_modules/.pnpm/real@1.0.0/node_modules/real/package.json': manifest(
+          'real',
+          '1.0.0',
+        ),
+      });
+      link(cwd, 'node_modules/aliased', '.pnpm/real@1.0.0/node_modules/real');
+
+      expect(readInstalledInventory(cwd)?.inventory).toEqual({ real: ['1.0.0'] });
+    });
+
+    it('terminates on a cycle of linked workspace packages', () => {
+      // Workspace packages depending on each other, which pnpm permits and
+      // monorepos with devDependency cycles produce routinely. Symlinks make
+      // the walk a graph rather than a tree, and a cycle with any branching is
+      // exponential rather than merely deep.
+      //
+      // Read this as a regression test for the answer, not for the hang: the
+      // walk is synchronous, so a lost cycle guard blocks the worker and no
+      // per-test timeout can turn that into a failure. It would stall the suite
+      // rather than fail it, which is worth knowing before trusting the timeout
+      // below to catch anything.
+      const cwd = pnpmProject({});
+      for (const name of ['a', 'b', 'c']) {
+        writeFileSync(
+          join(mkdirp(cwd, `packages/${name}`), 'package.json'),
+          manifest(name, '1.0.0'),
+        );
+        mkdirp(cwd, `packages/${name}/node_modules`);
+      }
+      for (const from of ['a', 'b', 'c']) {
+        for (const to of ['a', 'b', 'c']) {
+          if (from !== to) {
+            link(cwd, `packages/${from}/node_modules/${to}`, `../../${to}`);
+          }
+        }
+      }
+
+      expect(readInstalledInventory(cwd)?.inventory).toEqual({});
+    }, 20_000);
   });
 
   describe('packages no recorder could observe', () => {
@@ -284,6 +394,27 @@ describe('readInstalledInventory', () => {
       });
 
       expect(readInstalledInventory(cwd)?.inventory).toEqual({ implicit: ['1.0.0'] });
+    });
+
+    it('leaves out a types package, which declares an entry that runs nothing', () => {
+      // `"main": ""` is how DefinitelyTyped says there is nothing to run. Read
+      // as an entry point it admits every `@types/*` package in a project --
+      // this repository has 27 -- none of which ships a line of JavaScript.
+      const cwd = pnpmProject({
+        'node_modules/@types/node/package.json': `${JSON.stringify({
+          name: '@types/node',
+          version: '22.20.1',
+          main: '',
+          types: 'index.d.ts',
+        })}\n`,
+        'node_modules/typesonly/package.json': `${JSON.stringify({
+          name: 'typesonly',
+          version: '1.0.0',
+          exports: { '.': { types: './index.d.ts' } },
+        })}\n`,
+      });
+
+      expect(readInstalledInventory(cwd)?.inventory).toEqual({});
     });
 
     it('leaves out a package with no readable version', () => {

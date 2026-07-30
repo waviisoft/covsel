@@ -136,13 +136,23 @@ had a test executed any package's code anywhere, you would have seen it —
 including code that ran while the module graph was being evaluated.
 
 ```ts
+// `toPackages` is on `V8FileMapper`, not on the `Mapper` interface: it reads
+// raw V8 script URLs and their source maps, which is not something every
+// mapper has to be able to do.
+const mapper = new V8FileMapper({ cwd, config: toMapperConfig(config) });
+
 return {
   observes: OBSERVES_EVERYTHING,
   observesPackages: true,
   async record(testFile) {
     const raw = await observer.endTest({ file: testFile });
     return [
-      { test: { file: testFile }, files, blocks, packages: mapper.toPackages(raw) },
+      {
+        test: { file: testFile },
+        files,
+        blocks,
+        packages: await mapper.toPackages(raw),
+      },
     ];
   },
 };
@@ -159,9 +169,14 @@ Most recorders should leave it off, and two shapes must:
 
 Declaring it commits you to setting `packages` on every unit — an empty array
 included, since `[]` is the measurement "this test ran no vendored code" and
-absence is "nobody was watching". Recording refuses either half without the
-other, in both directions, rather than writing a silence it cannot justify. A
-recorder combining several windows declares it only when every window can see
+absence is "nobody was watching". Recording **fails** a declaring recorder whose
+unit omits them, because there is no safe way to guess what it ran. The reverse
+is only declined: a unit reporting packages its recorder has not claimed to
+watch has them dropped, and the map keeps none. That matters if you wrap another
+recorder and forward its units under your own narrower declaration — you lose
+the feature, not the recording.
+
+A recorder combining several windows declares it only when every window can see
 packages; the windows union, and one blind window would under-credit the unit.
 
 ## When one window is not the whole test

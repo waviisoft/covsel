@@ -200,10 +200,61 @@ describe('a recorder is held to its package declaration', () => {
   it('refuses a non-declaring recorder that reports packages anyway', async () => {
     // A recall nobody stood behind. The entry would be trusted for exactly the
     // packages the recorder's blind spots hid from it.
+    // Declining costs nothing: the packages are dropped, the map keeps none,
+    // and that is exactly today's behaviour. Failing instead would break every
+    // recorder that wraps another and forwards its units under its own narrower
+    // declaration, which is the ordinary way to build one.
     const result = await recordWith(false, unit(['left-pad']));
 
-    expect(result.ok).toBe(false);
-    expect(result.failures[0]?.reason).toContain('does not declare');
+    expect(result.ok).toBe(true);
+    expect(result.map?.entries[0]?.packages).toBeUndefined();
+    expect(result.map?.dependencies).toBeUndefined();
+  }, 120_000);
+});
+
+describe('a package a bundler fused into built output', () => {
+  it('is credited to the test that ran the bundle', async () => {
+    // Nothing under node_modules executes here: left-pad's code is inside
+    // dist/bundle.js, and only the bundle's source map says it is there.
+    // Reading the script path alone would leave the package in the inventory
+    // with no entry crediting it, which is read as "installed and never ran" --
+    // so every test that uses it through the bundle would be skipped on a bump.
+    //
+    // Written by hand rather than built, so the shape under test is stated
+    // rather than inherited from whichever bundler happens to be installed.
+    const cwd = fixture();
+    write(
+      cwd,
+      'dist/bundle.js',
+      'const pad = (s) => ` ${s}`;\n' +
+        "export const a = () => pad('a');\n" +
+        '//# sourceMappingURL=bundle.js.map\n',
+    );
+    write(
+      cwd,
+      'dist/bundle.js.map',
+      `${JSON.stringify({
+        version: 3,
+        file: 'bundle.js',
+        sources: ['../src/a.mjs', '../node_modules/left-pad/index.js'],
+        mappings: '',
+      })}\n`,
+    );
+    write(
+      cwd,
+      'test/bundled.test.mjs',
+      "import assert from 'node:assert/strict';\nimport { test } from 'node:test';\nimport { a } from '../dist/bundle.js';\ntest('bundled', () => assert.equal(a(), ' a'));\n",
+    );
+    commitAll(cwd, 'bundle');
+
+    const map = await record(cwd);
+
+    expect(packagesOf(map, 'test/bundled.test.mjs')).toContain('left-pad');
+    // The first-party source behind the bundle is still credited as a file, so
+    // this adds an axis rather than replacing one.
+    expect(
+      map.entries.find((e) => e.test.file === 'test/bundled.test.mjs')?.files,
+    ).toEqual([expect.objectContaining({ file: 'src/a.mjs' })]);
   }, 120_000);
 });
 
@@ -306,6 +357,18 @@ describe('merging shard maps', () => {
     ]);
 
     expect(merged.dependencies).toBeUndefined();
+  });
+
+  it('drops the inventory when there are no entries to pair it with', () => {
+    // "Every entry has packages" is vacuously true of no entries at all, and an
+    // inventory beside none would say every package was installed and ran
+    // nowhere. A map with no entries already forces a full run elsewhere, so
+    // this cannot bite today — but the pairing is what selection will rely on,
+    // and it should hold as written rather than by luck.
+    const deps = dependencies('sha256:same', { 'left-pad': ['1.3.0'] });
+    const empty: CoverageMap = { ...shard('a.mjs', [], deps), entries: [] };
+
+    expect(mergeMaps([empty]).dependencies).toBeUndefined();
   });
 
   it('drops the inventory when any entry says nothing about packages', () => {

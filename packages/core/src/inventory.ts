@@ -1,8 +1,8 @@
-import { existsSync, readdirSync, readFileSync } from 'node:fs';
+import { existsSync, readdirSync, readFileSync, realpathSync } from 'node:fs';
 import { join } from 'node:path';
 
 import { packageNameFromRelPath } from './packages.js';
-import { DEFAULT_EXCLUDES, hashString } from './paths.js';
+import { DEFAULT_EXCLUDES, hashString, toRepoRelative } from './paths.js';
 
 /**
  * What was installed when a map was recorded.
@@ -53,13 +53,26 @@ const MARKERS: readonly { manager: string; marker: string }[] = [
 /** Extensions an entry point can carry that no V8 coverage will ever report. */
 const OPAQUE_ENTRY = /\.(node|wasm|json)$/;
 
-/** What a package could load first, as its manifest declares it. */
+/**
+ * What a package could load first, as its manifest declares it.
+ *
+ * The `types` condition is skipped: it names a declaration file, which the
+ * compiler reads and no runtime ever executes. A package whose `exports` offer
+ * nothing else ships no JavaScript however many entries it lists.
+ */
 function entryCandidates(manifest: Record<string, unknown>): string[] {
   const out: string[] = [];
   const collect = (value: unknown, depth: number): void => {
-    if (typeof value === 'string') out.push(value);
-    else if (depth < 8 && typeof value === 'object' && value !== null) {
-      for (const nested of Object.values(value as Record<string, unknown>)) {
+    // `"main": ""` is how DefinitelyTyped says "there is nothing to run here".
+    // Counted as an entry point it would admit every `@types/*` package, none
+    // of which ships a line of JavaScript.
+    if (typeof value === 'string') {
+      if (value !== '') out.push(value);
+    } else if (depth < 8 && typeof value === 'object' && value !== null) {
+      for (const [condition, nested] of Object.entries(
+        value as Record<string, unknown>,
+      )) {
+        if (condition === 'types') continue;
         collect(nested, depth + 1);
       }
     }
@@ -113,14 +126,33 @@ function subdirectories(dir: string): string[] {
  * two levels deep in the shapes that matter and tens of thousands of files deep
  * overall, and only the package roots are of any interest.
  */
-function packageDirs(cwd: string, nodeModulesRel: string, out: string[]): void {
+function packageDirs(
+  cwd: string,
+  nodeModulesRel: string,
+  out: string[],
+  visited: Set<string>,
+): void {
+  // Symlinks are followed, so the graph being walked is not a tree: a monorepo
+  // whose workspace packages depend on each other links them into
+  // `node_modules` in both directions, and a cycle with any branching is
+  // exponential rather than merely infinite. Depth alone bounds nothing --
+  // without this the walk runs until a path grows past PATH_MAX, or forever.
+  let real: string;
+  try {
+    real = realpathSync(join(cwd, nodeModulesRel));
+  } catch {
+    return;
+  }
+  if (visited.has(real)) return;
+  visited.add(real);
+
   for (const name of subdirectories(join(cwd, nodeModulesRel))) {
     const rel = `${nodeModulesRel}/${name}`;
     if (name === '.pnpm') {
       // pnpm's virtual store: one directory per resolved package, each holding
       // a real `node_modules` with the package inside it.
       for (const entry of subdirectories(join(cwd, rel))) {
-        packageDirs(cwd, `${rel}/${entry}/node_modules`, out);
+        packageDirs(cwd, `${rel}/${entry}/node_modules`, out, visited);
       }
       continue;
     }
@@ -128,12 +160,12 @@ function packageDirs(cwd: string, nodeModulesRel: string, out: string[]): void {
     if (name.startsWith('@')) {
       for (const scoped of subdirectories(join(cwd, rel))) {
         out.push(`${rel}/${scoped}`);
-        packageDirs(cwd, `${rel}/${scoped}/node_modules`, out);
+        packageDirs(cwd, `${rel}/${scoped}/node_modules`, out, visited);
       }
       continue;
     }
     out.push(rel);
-    packageDirs(cwd, `${rel}/node_modules`, out);
+    packageDirs(cwd, `${rel}/node_modules`, out, visited);
   }
 }
 
@@ -154,6 +186,40 @@ function nodeModulesRoots(cwd: string): string[] {
   };
   visit('');
   return roots;
+}
+
+/**
+ * Whether a package still names the same package once the links are followed.
+ *
+ * The inventory and coverage attribution have to describe the same packages,
+ * and they see different things: the walk sees `node_modules/<name>`, while V8
+ * reports the realpath of whatever actually executed. Where the two disagree,
+ * no entry can ever credit the package, and a package in the inventory that no
+ * entry credits reads as "installed and never ran" -- the one inference that
+ * skips tests.
+ *
+ * Three shapes disagree, and all three are ordinary:
+ *
+ * - **A linked workspace package.** `packages/cli/node_modules/@covsel/core`
+ *   resolves to `packages/core`, and its coverage arrives as first-party source
+ *   under `packages/core/src`, never as vendored code.
+ * - **A linked external package** -- `npm link`, `file:../shared`, yarn
+ *   `portal:` -- resolves outside the repository entirely.
+ * - **An aliased install.** pnpm links `node_modules/aliased` at the store entry
+ *   for `real`, so attribution can only ever produce `real`.
+ *
+ * Each is dropped, and each then falls open. The ordinary pnpm case is
+ * unaffected: `node_modules/left-pad` resolves into the store at
+ * `.pnpm/left-pad@1.3.0/node_modules/left-pad`, which still reads as `left-pad`.
+ */
+function survivesResolution(cwd: string, dir: string, name: string): boolean {
+  let resolved: string | undefined;
+  try {
+    resolved = toRepoRelative(cwd, realpathSync(join(cwd, dir)));
+  } catch {
+    return false;
+  }
+  return resolved !== undefined && packageNameFromRelPath(resolved) === name;
 }
 
 /**
@@ -179,12 +245,14 @@ export function readInstalledInventory(cwd: string): InstalledInventory | undefi
   }
 
   const dirs: string[] = [];
-  for (const root of nodeModulesRoots(cwd)) packageDirs(cwd, root, dirs);
+  const visited = new Set<string>();
+  for (const root of nodeModulesRoots(cwd)) packageDirs(cwd, root, dirs, visited);
 
   const inventory: Record<string, string[]> = {};
   for (const dir of dirs) {
     const name = packageNameFromRelPath(dir);
     if (name === undefined) continue;
+    if (!survivesResolution(cwd, dir, name)) continue;
     let manifest: Record<string, unknown>;
     try {
       const parsed: unknown = JSON.parse(
@@ -201,7 +269,12 @@ export function readInstalledInventory(cwd: string): InstalledInventory | undefi
     const versions = (inventory[name] ??= []);
     if (!versions.includes(version)) versions.push(version);
   }
-  for (const versions of Object.values(inventory)) versions.sort();
+  // Insertion order is `readdirSync` order, which differs between filesystems.
+  // The map is compared byte for byte across shards and across runs, so the
+  // ordering has to come from the names rather than from the host.
+  const sorted: Record<string, string[]> = {};
+  for (const name of Object.keys(inventory).sort())
+    sorted[name] = inventory[name]!.sort();
 
-  return { manager: found.manager, marker: found.marker, markerHash, inventory };
+  return { manager: found.manager, marker: found.marker, markerHash, inventory: sorted };
 }
