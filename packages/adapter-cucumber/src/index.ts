@@ -17,13 +17,14 @@ import { fileURLToPath } from 'node:url';
 import {
   type Adapter,
   type CoveredFile,
-  type CovselConfig,
+  type MapperConfig,
   OBSERVES_EVERYTHING,
   type Recorder,
   type RecordedUnit,
   type RecorderInit,
   type SelectionRunInit,
   type TestId,
+  toMapperConfig,
 } from '@covsel/core';
 
 const shimPath = fileURLToPath(new URL('./shim.js', import.meta.url));
@@ -55,7 +56,7 @@ export interface CucumberRecorderInit {
   /** Base command, e.g. `['cucumber-js']`. */
   command: string[];
   cwd: string;
-  config: Pick<CovselConfig, 'sourceGlobs' | 'testGlobs'>;
+  config: MapperConfig;
   env?: NodeJS.ProcessEnv;
 }
 
@@ -63,6 +64,12 @@ interface ShimUnit {
   file: string;
   name: string;
   files: CoveredFile[];
+}
+
+/** What the shim writes: the units it observed, and what it let through unmapped. */
+interface ShimOutput {
+  units: ShimUnit[];
+  allowedUnmappable: string[];
 }
 
 /**
@@ -84,6 +91,10 @@ function supportGlobFor(featureFile: string): string {
  */
 export function createCucumberRecorder(init: CucumberRecorderInit): Recorder {
   const [bin, ...rest] = init.command;
+  // Filled by each `record`, drained by `unmappableAllowed` the way the generic
+  // recorder drains its mapper: what one feature file let through says nothing
+  // about the next.
+  let allowedUnmappable: string[] = [];
   return {
     // The shim drives the inspector observer inside the cucumber process, which
     // reports every script that process loads, wherever it lives in the repo.
@@ -109,10 +120,10 @@ export function createCucumberRecorder(init: CucumberRecorderInit): Recorder {
               ...process.env,
               ...init.env,
               COVSEL_OUT: outPath,
-              COVSEL_CONFIG: JSON.stringify({
-                sourceGlobs: init.config.sourceGlobs,
-                testGlobs: init.config.testGlobs,
-              }),
+              // Everything the shim's mapper reads, carried whole: a subset
+              // picked by hand is how a project's `sourceMaps` settings stop
+              // applying to the adapter that spawns its runner.
+              COVSEL_CONFIG: JSON.stringify(toMapperConfig(init.config)),
             },
             encoding: 'utf8',
             maxBuffer: 64 * 1024 * 1024,
@@ -125,13 +136,14 @@ export function createCucumberRecorder(init: CucumberRecorderInit): Recorder {
             `cucumber-js exited with ${res.status ?? 'signal'} while recording ${featureFile}\n${output}`,
           );
         }
-        let units: ShimUnit[];
+        let out: ShimOutput;
         try {
-          units = JSON.parse(readFileSync(outPath, 'utf8')) as ShimUnit[];
+          out = JSON.parse(readFileSync(outPath, 'utf8')) as ShimOutput;
         } catch {
           throw new Error(`no per-scenario coverage produced for ${featureFile}`);
         }
-        return units.map((u) => ({
+        allowedUnmappable = out.allowedUnmappable ?? [];
+        return out.units.map((u) => ({
           test: { file: featureFile, name: u.name },
           files: u.files,
           blocks: [],
@@ -139,6 +151,9 @@ export function createCucumberRecorder(init: CucumberRecorderInit): Recorder {
       } finally {
         rmSync(dir, { recursive: true, force: true });
       }
+    },
+    unmappableAllowed(): string[] {
+      return allowedUnmappable.splice(0);
     },
   };
 }
