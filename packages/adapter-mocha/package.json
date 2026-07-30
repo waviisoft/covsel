@@ -1,0 +1,50 @@
+{
+  "name": "@covsel/adapter-mocha",
+  "version": "0.0.0",
+  "description": "Mocha adapter for covsel: per-test selection via the inspector snapshot-diff observer",
+  "license": "MIT",
+  "author": "WAVIISoft, LLC",
+  "type": "module",
+  "main": "./dist/index.cjs",
+  "module": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js",
+      "require": "./dist/index.cjs"
+    },
+    "./shim": "./dist/shim.mjs"
+  },
+  "files": [
+    "dist"
+  ],
+  "scripts": {
+    "build": "tsup src/index.ts --format esm,cjs --dts --sourcemap --shims --clean && cp src/shim.mjs dist/shim.mjs",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@covsel/core": "workspace:*"
+  },
+  "peerDependencies": {
+    "mocha": ">=10"
+  },
+  "engines": {
+    "node": ">=22"
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/waviisoft/covsel.git",
+    "directory": "packages/adapter-mocha"
+  },
+  "keywords": [
+    "test-impact-analysis",
+    "coverage",
+    "adapter",
+    "mocha"
+  ],
+  "devDependencies": {
+    "@types/node": "^22.20.1",
+    "@covsel/conformance": "workspace:*"
+  }
+}

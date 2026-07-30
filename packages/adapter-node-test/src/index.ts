@@ -24,6 +24,7 @@ import {
   type RecorderInit,
   type SelectionRunInit,
   type TestId,
+  testNamePattern,
   toMapperConfig,
 } from '@covsel/core';
 
@@ -136,11 +137,6 @@ export function createNodeTestRecorder(init: NodeTestRecorderInit): Recorder {
   };
 }
 
-function namePattern(names: string[]): string {
-  const escaped = names.map((n) => n.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'));
-  return `^(?:${escaped.join('|')})$`;
-}
-
 /** Exactly what the adapter contract hands a runner, named for direct callers. */
 export type RunNodeTestInit = SelectionRunInit;
 
@@ -175,7 +171,7 @@ export function runNodeTestSelection(init: RunNodeTestInit): number {
   // node:test only honors --test-name-pattern when it precedes the file args.
   if (wholeFiles.size > 0) invoke([...wholeFiles]);
   if (namedFiles.size > 0) {
-    invoke([`--test-name-pattern=${namePattern([...names])}`, ...namedFiles]);
+    invoke([`--test-name-pattern=${testNamePattern([...names])}`, ...namedFiles]);
   }
   return code;
 }

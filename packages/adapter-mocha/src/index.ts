@@ -1,12 +1,15 @@
 /**
- * @covsel/adapter-cucumber -- scenario-level selection for cucumber-js.
+ * @covsel/adapter-mocha -- per-test selection for Mocha.
  *
- * cucumber-js has no built-in test selection, so this is the case covsel exists
- * for: record what each *scenario* executes, then run only the scenarios a diff
- * can affect. Recording preloads a support-code shim through cucumber's own
- * `--import`; selection runs the affected feature files filtered by `--name`.
- * A name pattern only ever matches more scenarios than intended (duplicate names,
- * scenario outlines), so selection stays fail-open.
+ * Mocha already records and selects at file level through the generic
+ * NODE_V8_COVERAGE wrap, which needs nothing Mocha-specific: it executes source
+ * directly, so the dump names real `file://` paths. This package exists for the
+ * one thing the wrap cannot do -- narrowing a run below the file. Recording
+ * loads a root hook plugin through Mocha's own `--require` to drive the per-test
+ * InspectorObserver, and selection runs the affected spec files under a `--grep`
+ * matching the affected tests' full titles. A title pattern only ever matches
+ * more tests than intended (two files can hold the same title), so selection
+ * stays fail-open.
  */
 import { spawnSync } from 'node:child_process';
 import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
@@ -28,22 +31,37 @@ import {
   toMapperConfig,
 } from '@covsel/core';
 
-const shimPath = fileURLToPath(new URL('./shim.js', import.meta.url));
+const shimPath = fileURLToPath(new URL('./shim.mjs', import.meta.url));
 
-/** Feature files are the unit every cucumber project has; scenarios live inside them. */
-export const CUCUMBER_TEST_GLOBS = ['**/*.feature'];
+/**
+ * Where Mocha's specs live, when the project has not said otherwise.
+ *
+ * Mocha's own default is the `test` directory with the `js`, `cjs`, and `mjs`
+ * extensions, which covsel's `*.test.*` default does not match -- a Mocha
+ * project would discover no tests at all zero-config. This is deliberately a
+ * superset of what Mocha would run: it descends into subdirectories, which
+ * Mocha only does under `--recursive`, and it also matches the `*.test.*` /
+ * `*.spec.*` convention wherever those files live. Discovering a file Mocha
+ * would not run costs a redundant entry; failing to discover one Mocha would
+ * run means that spec sits out every narrowed run, which is the failure covsel
+ * exists to prevent.
+ */
+export const MOCHA_TEST_GLOBS = [
+  'test/**/*.{js,cjs,mjs}',
+  '**/*.{test,spec}.{js,cjs,mjs}',
+];
 
-export const cucumberAdapter: Adapter = {
-  name: 'cucumber',
+export const mochaAdapter: Adapter = {
+  name: 'mocha',
   formatSelection(tests: TestId[]): string[] {
     return [...new Set(tests.map((t) => t.file))];
   },
   createRecorder(init: RecorderInit): Recorder {
-    return createCucumberRecorder(init);
+    return createMochaRecorder(init);
   },
-  defaultTestGlobs: CUCUMBER_TEST_GLOBS,
+  defaultTestGlobs: MOCHA_TEST_GLOBS,
   runSelection(init: SelectionRunInit): number {
-    return runCucumberSelection(init);
+    return runMochaSelection(init);
   },
 };
 
@@ -51,10 +69,10 @@ export const cucumberAdapter: Adapter = {
  * The export the dynamic resolver reads, so this package is selectable by its
  * specifier exactly as a third-party adapter is.
  */
-export const adapter = cucumberAdapter;
+export const adapter = mochaAdapter;
 
-export interface CucumberRecorderInit {
-  /** Base command, e.g. `['cucumber-js']`. */
+export interface MochaRecorderInit {
+  /** Base command, e.g. `['mocha']`. */
   command: string[];
   cwd: string;
   config: MapperConfig;
@@ -62,7 +80,6 @@ export interface CucumberRecorderInit {
 }
 
 interface ShimUnit {
-  file: string;
   name: string;
   files: CoveredFile[];
 }
@@ -74,52 +91,42 @@ interface ShimOutput {
 }
 
 /**
- * Cucumber's `--import` replaces its default support-code discovery, so the
- * shim alone would leave the project's step definitions unloaded. Re-supplying
- * the conventional glob for the feature's own directory restores that default;
- * importing the same file twice is harmless, and a project that declares
- * `import` in its cucumber config keeps working because the CLI flag and the
- * config are merged.
+ * A recorder that runs `mocha --require <shim> <file>` per spec file and reads
+ * the per-test coverage the shim wrote, yielding one recorded unit per test.
+ *
+ * `--no-parallel` is not a preference. Mocha's parallel mode runs the specs --
+ * and the root hooks with them -- inside worker processes, while the run's own
+ * process is the one that writes the result, so a recording left in parallel
+ * mode comes back empty: a map crediting nothing, produced by a run that
+ * reported success. Recording one spec file at a time gains nothing from
+ * workers anyway, and the flag overrides both a `--parallel` in the project's
+ * command and a `parallel` in its Mocha config, so there is no arrangement in
+ * which that empty map can be recorded.
  */
-function supportGlobFor(featureFile: string): string {
-  const dir = featureFile.split('/')[0] ?? 'features';
-  return `${dir}/**/*.{js,cjs,mjs}`;
-}
-
-/**
- * A recorder that runs the suite one feature file at a time with the shim
- * loaded, yielding one recorded unit per scenario.
- */
-export function createCucumberRecorder(init: CucumberRecorderInit): Recorder {
+export function createMochaRecorder(init: MochaRecorderInit): Recorder {
   const [bin, ...rest] = init.command;
   // Filled by each `record`, drained by `unmappableAllowed` the way the generic
-  // recorder drains its mapper: what one feature file let through says nothing
+  // recorder drains its mapper: what one spec file let through says nothing
   // about the next.
   let allowedUnmappable: string[] = [];
   return {
-    // The shim drives the inspector observer inside the cucumber process, which
+    // The shim drives the inspector observer inside the Mocha process, which
     // reports every script that process loads, wherever it lives in the repo.
     observes: OBSERVES_EVERYTHING,
-    async record(featureFile: string): Promise<RecordedUnit[]> {
+    async record(testFile: string): Promise<RecordedUnit[]> {
       if (bin === undefined) throw new Error('empty command');
-      const dir = mkdtempSync(join(tmpdir(), 'covsel-cucumber-'));
+      const dir = mkdtempSync(join(tmpdir(), 'covsel-mocha-'));
       const outPath = join(dir, 'out.json');
       try {
         const res = spawnSync(
           bin,
-          [
-            ...rest,
-            featureFile,
-            '--import',
-            supportGlobFor(featureFile),
-            '--import',
-            shimPath,
-          ],
+          [...rest, '--no-parallel', '--require', shimPath, testFile],
           {
             cwd: init.cwd,
             env: {
               ...process.env,
               ...init.env,
+              COVSEL_TEST_FILE: testFile,
               COVSEL_OUT: outPath,
               // Everything the shim's mapper reads, carried whole: a subset
               // picked by hand is how a project's `sourceMaps` settings stop
@@ -134,7 +141,7 @@ export function createCucumberRecorder(init: CucumberRecorderInit): Recorder {
         if (res.status !== 0) {
           const output = `${res.stdout ?? ''}${res.stderr ?? ''}`.trim();
           throw new Error(
-            `cucumber-js exited with ${res.status ?? 'signal'} while recording ${featureFile}\n${output}`,
+            `mocha exited with ${res.status ?? 'signal'} while recording ${testFile}\n${output}`,
           );
         }
         let out: ShimOutput;
@@ -145,11 +152,11 @@ export function createCucumberRecorder(init: CucumberRecorderInit): Recorder {
           // one rather than a TypeError from the mapping below.
           if (!Array.isArray(out.units)) throw new Error('no units');
         } catch {
-          throw new Error(`no per-scenario coverage produced for ${featureFile}`);
+          throw new Error(`no per-test coverage produced for ${testFile}`);
         }
         allowedUnmappable = out.allowedUnmappable ?? [];
         return out.units.map((u) => ({
-          test: { file: featureFile, name: u.name },
+          test: { file: testFile, name: u.name },
           files: u.files,
           blocks: [],
         }));
@@ -164,14 +171,14 @@ export function createCucumberRecorder(init: CucumberRecorderInit): Recorder {
 }
 
 /** Exactly what the adapter contract hands a runner, named for direct callers. */
-export type RunCucumberInit = SelectionRunInit;
+export type RunMochaInit = SelectionRunInit;
 
 /**
- * Run only the affected scenarios. Feature files that must run in full are
- * invoked plainly; files selected at scenario level are invoked with a `--name`
- * pattern built from the affected scenario names. Returns the worst exit code.
+ * Run only the affected Mocha tests. Spec files that must run in full are
+ * invoked plainly; files selected at test level are invoked with a `--grep`
+ * built from the affected tests' full titles. Returns the worst exit code seen.
  */
-export function runCucumberSelection(init: RunCucumberInit): number {
+export function runMochaSelection(init: RunMochaInit): number {
   const [bin, ...rest] = init.command;
   if (bin === undefined) throw new Error('empty command');
 
@@ -185,6 +192,8 @@ export function runCucumberSelection(init: RunCucumberInit): number {
       names.add(unit.name);
     }
   }
+  // A file already running in full has no use for a name filter, and leaving it
+  // in the filtered invocation would run its tests twice.
   for (const file of wholeFiles) namedFiles.delete(file);
 
   const stdio = init.stdio ?? 'inherit';
@@ -197,7 +206,7 @@ export function runCucumberSelection(init: RunCucumberInit): number {
 
   if (wholeFiles.size > 0) invoke([...wholeFiles]);
   if (namedFiles.size > 0) {
-    invoke([...namedFiles, '--name', testNamePattern([...names])]);
+    invoke(['--grep', testNamePattern([...names]), ...namedFiles]);
   }
   return code;
 }

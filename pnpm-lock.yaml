@@ -162,6 +162,22 @@ importers:
         specifier: ^22.20.1
         version: 22.20.1
 
+  packages/adapter-mocha:
+    dependencies:
+      '@covsel/core':
+        specifier: workspace:*
+        version: link:../core
+      mocha:
+        specifier: '>=10'
+        version: 11.7.6
+    devDependencies:
+      '@covsel/conformance':
+        specifier: workspace:*
+        version: link:../conformance
+      '@types/node':
+        specifier: ^22.20.1
+        version: 22.20.1
+
   packages/adapter-node-test:
     dependencies:
       '@covsel/core':

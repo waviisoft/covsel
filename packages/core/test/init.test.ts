@@ -67,7 +67,7 @@ describe('covsel init — naming the adapter', () => {
     ['jest', { devDependencies: { jest: '^29.0.0' } }, 'jest'],
     ['cucumber', { devDependencies: { '@cucumber/cucumber': '^11.0.0' } }, 'cucumber-js'],
     ['node-test', { scripts: { test: 'node --test' } }, 'node --test'],
-    ['generic', { devDependencies: { mocha: '^10.0.0' } }, 'mocha'],
+    ['mocha', { devDependencies: { mocha: '^10.0.0' } }, 'mocha'],
   ])('names %s and writes it to the config', async (adapter, fields, command) => {
     const cwd = project({ 'package.json': pkg(fields) });
 
@@ -373,9 +373,18 @@ describe('covsel init — the adapter a typo meant', () => {
 
   it('knows the adapters in its own runner table', () => {
     // Sourced from the runner table so a new adapter joins the suggestions
-    // without a second list to remember.
+    // without a second list to remember. `generic` is the exception: it belongs
+    // to no single runner, and a name to measure a typo against is exactly what
+    // the default adapter needs most.
     expect(knownAdapters()).toEqual(
-      expect.arrayContaining(['vitest', 'jest', 'cucumber', 'node-test', 'generic']),
+      expect.arrayContaining([
+        'vitest',
+        'jest',
+        'cucumber',
+        'node-test',
+        'mocha',
+        'generic',
+      ]),
     );
   });
 });

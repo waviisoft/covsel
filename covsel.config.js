@@ -79,7 +79,7 @@ export default {
     'yarn.lock',
     'vitest.config.ts',
     'covsel.config.js',
-    'packages/*/src/shim.js',
+    'packages/*/src/shim.{js,mjs}',
     'packages/cli/src/bin.ts',
   ],
 
