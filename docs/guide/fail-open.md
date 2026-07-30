@@ -124,10 +124,9 @@ importing it reach your code only through that build.
 Scripts that will genuinely never be mappable — a third-party widget on the page
 under test — can be accepted with `sourceMaps.allowUnmappable`. Each entry is a
 gap in the recording that you have chosen to accept, so `covsel record` names
-the scripts it let through every time it lets one through. The generic wrap
-honors that setting; the per-test shims (node:test, cucumber-js) are not handed
-it yet, so an unmappable script under those adapters fails the recording with no
-way to accept it.
+the scripts it let through every time it lets one through. Every recorder that
+maps V8 coverage honors it, including the per-test shims that do their mapping
+inside the runner they spawned.
 
 ## A map recorded from a dirty tree
 

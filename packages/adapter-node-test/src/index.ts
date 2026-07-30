@@ -17,13 +17,14 @@ import {
   type Adapter,
   type CoveredBlock,
   type CoveredFile,
-  type CovselConfig,
+  type MapperConfig,
   OBSERVES_EVERYTHING,
   type Recorder,
   type RecordedUnit,
   type RecorderInit,
   type SelectionRunInit,
   type TestId,
+  toMapperConfig,
 } from '@covsel/core';
 
 const shimUrl = pathToFileURL(fileURLToPath(new URL('./shim.js', import.meta.url))).href;
@@ -51,7 +52,7 @@ export interface NodeTestRecorderInit {
   /** Base command, e.g. `['node', '--test']`. */
   command: string[];
   cwd: string;
-  config: Pick<CovselConfig, 'sourceGlobs' | 'testGlobs' | 'granularity'>;
+  config: MapperConfig;
   env?: NodeJS.ProcessEnv;
 }
 
@@ -61,6 +62,12 @@ interface ShimUnit {
   blocks?: CoveredBlock[];
 }
 
+/** What the shim writes: the units it observed, and what it let through unmapped. */
+interface ShimOutput {
+  units: ShimUnit[];
+  allowedUnmappable: string[];
+}
+
 /**
  * A recorder that runs `node --import <shim> --test <file>` per test file and
  * reads the per-test coverage the shim wrote, yielding one recorded unit per
@@ -68,6 +75,10 @@ interface ShimUnit {
  */
 export function createNodeTestRecorder(init: NodeTestRecorderInit): Recorder {
   const [bin, ...rest] = init.command;
+  // Filled by each `record`, drained by `unmappableAllowed` the way the generic
+  // recorder drains its mapper: what one file let through says nothing about
+  // the next.
+  let allowedUnmappable: string[] = [];
   return {
     // The inspector observer watches the isolate the tests run in and reports
     // every script it loads, so any repo path a test executes is visible.
@@ -84,11 +95,10 @@ export function createNodeTestRecorder(init: NodeTestRecorderInit): Recorder {
             ...init.env,
             COVSEL_TEST_FILE: testFile,
             COVSEL_OUT: outPath,
-            COVSEL_CONFIG: JSON.stringify({
-              sourceGlobs: init.config.sourceGlobs,
-              testGlobs: init.config.testGlobs,
-              granularity: init.config.granularity,
-            }),
+            // Everything the shim's mapper reads, carried whole: a subset
+            // picked by hand is how a project's `sourceMaps` settings stop
+            // applying to the adapter that spawns its runner.
+            COVSEL_CONFIG: JSON.stringify(toMapperConfig(init.config)),
           },
           encoding: 'utf8',
           maxBuffer: 64 * 1024 * 1024,
@@ -100,13 +110,18 @@ export function createNodeTestRecorder(init: NodeTestRecorderInit): Recorder {
             `node --test exited with ${res.status ?? 'signal'} while recording ${testFile}\n${output}`,
           );
         }
-        let units: ShimUnit[];
+        let out: ShimOutput;
         try {
-          units = JSON.parse(readFileSync(outPath, 'utf8')) as ShimUnit[];
+          out = JSON.parse(readFileSync(outPath, 'utf8')) as ShimOutput;
+          // Unreadable and readable-but-not-what-the-shim-writes are the same
+          // problem to whoever is looking at the message, so they get the same
+          // one rather than a TypeError from the mapping below.
+          if (!Array.isArray(out.units)) throw new Error('no units');
         } catch {
           throw new Error(`no per-test coverage produced for ${testFile}`);
         }
-        return units.map((u) => ({
+        allowedUnmappable = out.allowedUnmappable ?? [];
+        return out.units.map((u) => ({
           test: { file: testFile, name: u.name },
           files: u.files,
           blocks: u.blocks ?? [],
@@ -114,6 +129,9 @@ export function createNodeTestRecorder(init: NodeTestRecorderInit): Recorder {
       } finally {
         rmSync(dir, { recursive: true, force: true });
       }
+    },
+    unmappableAllowed(): string[] {
+      return allowedUnmappable.splice(0);
     },
   };
 }

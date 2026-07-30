@@ -18,10 +18,52 @@ import {
 import type { CoveredBlock, CoveredFile } from './schema.js';
 import { SourceMapResolver } from './source-map.js';
 
+/**
+ * Everything the mapper reads out of a project's configuration.
+ *
+ * Named because it crosses a process boundary: an adapter whose recorder runs
+ * its mapper in a spawned runner has to carry this to it, and a hand-picked
+ * subset of the fields is how a mapping decision the project configured gets
+ * silently dropped. Widen this and every carrier stops compiling.
+ */
+export type MapperConfig = Pick<CovselConfig, 'sourceGlobs' | 'testGlobs'> &
+  Partial<Pick<CovselConfig, 'sourceMaps'>>;
+
 export interface V8FileMapperInit {
   cwd: string;
-  config: Pick<CovselConfig, 'sourceGlobs' | 'testGlobs'> &
-    Partial<Pick<CovselConfig, 'sourceMaps'>>;
+  config: MapperConfig;
+}
+
+/**
+ * Narrow a project's configuration to exactly what a mapper reads, for a
+ * recorder that has to hand it to a mapper running in another process.
+ *
+ * The point is that the narrowing happens in one place: a recorder that builds
+ * the payload itself is choosing, every time, which of the project's settings
+ * survive — and the ones it forgets fail silently, since a mapper given no
+ * `sourceMaps` behaves exactly like one whose project configured none.
+ */
+export function toMapperConfig(config: MapperConfig): MapperConfig {
+  // Every key is named, under a type that requires all of them -- including the
+  // optional ones, which is the whole point. Returning a `MapperConfig` built
+  // from a subset would type-check happily, because a field left out is just an
+  // optional field absent, and that is exactly how `sourceMaps` came to be
+  // dropped by both per-test recorders. Adding a key to the mapper's surface
+  // stops this compiling instead.
+  const {
+    sourceGlobs,
+    testGlobs,
+    sourceMaps,
+  }: { [K in keyof Required<MapperConfig>]: MapperConfig[K] } = {
+    sourceGlobs: config.sourceGlobs,
+    testGlobs: config.testGlobs,
+    sourceMaps: config.sourceMaps,
+  };
+  return {
+    sourceGlobs,
+    testGlobs,
+    ...(sourceMaps !== undefined ? { sourceMaps } : {}),
+  };
 }
 
 const byFileThenHash = (

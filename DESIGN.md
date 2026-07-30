@@ -123,8 +123,9 @@ HTTP, and in a build directory served URLs map onto), and a source fetched
 without a disk-relative anchor is confirmed against `sourcesContent` before it is
 credited. Scripts that genuinely never will be mappable are allowed by listing
 them in `sourceMaps.allowUnmappable`, and named on every recording that lets one
-through -- a hatch the generic wrap honors, and the per-test shims do not yet
-receive.
+through. What the mapper reads is carried to it whole, so a recorder that maps
+inside a runner it spawned applies the same configuration as one mapping in
+process.
 
 Fanning coverage back out is done from the mapping segments themselves rather
 than through an off-the-shelf istanbul conversion, which was measured to lose the

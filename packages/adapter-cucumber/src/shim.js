@@ -27,9 +27,14 @@ const { After, AfterAll, Before, BeforeAll } = await import(
 );
 
 const observer = new InspectorObserver();
+// COVSEL_CONFIG is the mapper's own configuration, carried whole. Defaults here
+// cover only a missing variable: a project's `sourceMaps` settings arrive as
+// given, because a mapper that quietly lost them would fail every recording
+// against a build the project had already accepted.
 const mapper = new V8FileMapper({
   cwd,
   config: {
+    ...config,
     sourceGlobs: config.sourceGlobs ?? ['**/*'],
     testGlobs: config.testGlobs ?? [],
   },
@@ -55,5 +60,13 @@ After(async function (sc) {
 });
 
 AfterAll(() => {
-  if (outPath) writeFileSync(outPath, JSON.stringify(units));
+  // The scripts the mapper let through unmapped travel back with the units:
+  // each is coverage this recording is missing, and the recorder is what tells
+  // the user so.
+  if (outPath) {
+    writeFileSync(
+      outPath,
+      JSON.stringify({ units, allowedUnmappable: mapper.takeAllowedUnmappable() }),
+    );
+  }
 });

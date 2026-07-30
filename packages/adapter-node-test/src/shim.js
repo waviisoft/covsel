@@ -19,9 +19,14 @@ const outPath = process.env.COVSEL_OUT ?? '';
 const config = JSON.parse(process.env.COVSEL_CONFIG ?? '{}');
 
 const observer = new InspectorObserver();
+// COVSEL_CONFIG is the mapper's own configuration, carried whole. Defaults here
+// cover only a missing variable: a project's `sourceMaps` settings arrive as
+// given, because a mapper that quietly lost them would fail every recording
+// against a build the project had already accepted.
 const mapper = new V8FileMapper({
   cwd: process.cwd(),
   config: {
+    ...config,
     sourceGlobs: config.sourceGlobs ?? ['**/*'],
     testGlobs: config.testGlobs ?? [],
   },
@@ -42,5 +47,13 @@ afterEach(async (t) => {
 });
 
 process.on('exit', () => {
-  if (outPath) writeFileSync(outPath, JSON.stringify(units));
+  // The scripts the mapper let through unmapped travel back with the units:
+  // each is coverage this recording is missing, and the recorder is what tells
+  // the user so.
+  if (outPath) {
+    writeFileSync(
+      outPath,
+      JSON.stringify({ units, allowedUnmappable: mapper.takeAllowedUnmappable() }),
+    );
+  }
 });
