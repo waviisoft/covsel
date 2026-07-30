@@ -268,6 +268,205 @@ describe('projecting V8 ranges through a source map', () => {
   });
 });
 
+describe('refusing to guess', () => {
+  it('drops a source whose text is shorter than the map expects', () => {
+    // The file on disk is read now; the map was written at build time. A source
+    // shortened since then maps past its own end, and a bare line lookup would
+    // answer with an offset near the top — putting a zero-count region over the
+    // whole file and dropping every block in it.
+    const shrunk = ['export const only = 1;', ''].join('\n');
+    const map: RawSourceMap = {
+      version: 3,
+      sources: ['src/a.ts'],
+      mappings: mappings([
+        [
+          [0, 0, 0, 0],
+          [13, 0, 40, 2], // line 41 of a two-line file
+        ],
+      ]),
+    };
+
+    const { regions, unprojected } = projectRanges({
+      map,
+      generated: FUSED,
+      ranges: [{ start: 0, end: 39, count: 0 }],
+      sourceText: () => shrunk,
+    });
+
+    expect(regions.size).toBe(0);
+    expect(unprojected).toHaveLength(1);
+    expect(selectExecutedBlocks(A_SOURCE, 'src/a.ts', []).map((b) => b.name)).toContain(
+      'fromA',
+    );
+  });
+
+  it('does not let a missing source text disarm the multi-source guard', () => {
+    // The zero-count range straddles both sources. Losing b.ts's text must not
+    // make the range look unambiguous — that would be missing information
+    // turning a guard off exactly when it is needed.
+    const bothKnown = project([{ start: 0, end: FUSED.length, count: 0 }]);
+    expect(bothKnown.regions.size).toBe(0);
+
+    const onlyA = projectRanges({
+      map: FUSED_MAP,
+      generated: FUSED,
+      ranges: [{ start: 0, end: FUSED.length, count: 0 }],
+      sourceText: (s) => (s === 'src/a.ts' ? A_SOURCE : undefined),
+    });
+    expect(onlyA.regions.size).toBe(0);
+    expect(onlyA.unprojected).toHaveLength(1);
+  });
+
+  it('refuses a zero-count hull that swallows another range’s code', () => {
+    // `helper` is inlined into both callers, so it has no range of its own. A
+    // zero hull over the never-called caller would cover it, and nothing would
+    // rescue the block.
+    // `unused` comes first, so the hull for its range runs from its own
+    // declaration down to the inlined helper body — swallowing `helper`'s probe
+    // on the way. The hull is contiguous, so non-contiguity does not catch this
+    // one: what does is that the helper body is mapped from a second generated
+    // offset, inside the caller that did run.
+    const source = [
+      'export function unused() {',
+      '  return helper();',
+      '}',
+      'export function helper() {',
+      '  return 1;',
+      '}',
+      'export function used() {',
+      '  return helper();',
+      '}',
+      '',
+    ].join('\n');
+    const generated = 'function unused(){return 1}function used(){return 1}';
+    const map: RawSourceMap = {
+      version: 3,
+      sources: ['src/inlined.ts'],
+      mappings: mappings([
+        [
+          [0, 0, 0, 0], // `function unused(){`  -> unused()
+          [18, 0, 4, 2], // inlined helper body  -> helper()
+          [27, 0, 6, 0], // `function used(){`   -> used()
+          [43, 0, 4, 2], // inlined helper body  -> helper() again
+        ],
+      ]),
+    };
+
+    const { regions } = projectRanges({
+      map,
+      generated,
+      ranges: [
+        { start: 0, end: generated.length, count: 1 },
+        { start: 0, end: 27, count: 0 }, // unused() never ran
+        { start: 27, end: 52, count: 1 },
+      ],
+      sourceText: () => source,
+    });
+
+    const kept = selectExecutedBlocks(
+      source,
+      'src/inlined.ts',
+      regions.get('src/inlined.ts') ?? [],
+    );
+    // helper ran, through used(), and must survive.
+    expect(kept.map((b) => b.name)).toContain('helper');
+  });
+
+  it('refuses a zero-count hull spanning code that belongs to another range', () => {
+    // The build hoisted the two never-called functions together, leaving the one
+    // that ran between them in the original. Nothing is inlined here — the hull
+    // is simply not contiguous, and stretching it across `beta` would call a
+    // function idle on the strength of a range that never mentioned it.
+    const source = [
+      'export function alpha() {',
+      '  return 1;',
+      '}',
+      'export function beta() {',
+      '  return 2;',
+      '}',
+      'export function gamma() {',
+      '  return 3;',
+      '}',
+      '',
+    ].join('\n');
+    const generated = 'function beta(){return 2}function dead(){return 1;return 3}';
+    const map: RawSourceMap = {
+      version: 3,
+      sources: ['src/hoisted.ts'],
+      mappings: mappings([
+        [
+          // Only beta's body is mapped, not its declaration — so the range that
+          // ran produces a region starting after beta's probe, and cannot rescue
+          // it from a hull stretched across it.
+          [16, 0, 4, 2], // beta's body        -> beta()
+          [41, 0, 1, 2], // hoisted alpha body -> alpha()
+          [50, 0, 7, 2], // hoisted gamma body -> gamma()
+        ],
+      ]),
+    };
+
+    const { regions } = projectRanges({
+      map,
+      generated,
+      ranges: [
+        { start: 0, end: 25, count: 1 }, // beta ran
+        { start: 25, end: 59, count: 0 }, // the hoisted pair did not
+      ],
+      sourceText: () => source,
+    });
+
+    const kept = selectExecutedBlocks(
+      source,
+      'src/hoisted.ts',
+      regions.get('src/hoisted.ts') ?? [],
+    );
+    expect(kept.map((b) => b.name)).toContain('beta');
+  });
+
+  it('ends a region where the next mapped construct begins, not at the file end', () => {
+    const source = [
+      'export function first() {',
+      '  return 1;',
+      '}',
+      'export function second() {',
+      '  return 2;',
+      '}',
+      '',
+    ].join('\n');
+    const generated = 'function first(){return 1}function second(){return 2}';
+    const map: RawSourceMap = {
+      version: 3,
+      sources: ['src/two.ts'],
+      mappings: mappings([
+        [
+          [0, 0, 0, 0],
+          [17, 0, 1, 2],
+          [26, 0, 3, 0],
+          [44, 0, 4, 2],
+        ],
+      ]),
+    };
+
+    const { regions } = projectRanges({
+      map,
+      generated,
+      ranges: [{ start: 0, end: 26, count: 0 }],
+      sourceText: () => source,
+    });
+
+    const [region] = regions.get('src/two.ts') ?? [];
+    // The zero region covers `first` and stops at `second`'s declaration —
+    // literal offsets, so a change to the extent rule is visible here.
+    expect(region).toEqual({
+      start: 0,
+      end: source.indexOf('export function second'),
+      count: 0,
+    });
+    const secondProbe = source.indexOf('return 2');
+    expect(region!.end).toBeLessThanOrEqual(secondProbe);
+  });
+});
+
 describe('decodeMappings', () => {
   it('carries source, line, and column deltas across generated lines', () => {
     const decoded = decodeMappings(mappings([[[0, 0, 0, 0]], [[4, 1, 2, 6]]]));
@@ -284,5 +483,7 @@ describe('decodeMappings', () => {
 
   it('rejects a malformed field rather than returning a partial map', () => {
     expect(decodeMappings('AA*A')).toBeUndefined();
+    expect(decodeMappings('AAAA,,AACA')).toBeUndefined();
+    expect(decodeMappings('ggggggggggE')).toBeUndefined();
   });
 });

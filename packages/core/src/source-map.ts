@@ -24,9 +24,10 @@ import { stripUrlQuery, toRepoRelative } from './paths.js';
  * the caller to fail on, because a source silently missing from an entry is the
  * hole this whole mechanism exists to close.
  *
- * Only the `sources` list is read. Projecting the executed ranges through the
- * mappings is separate work; until it lands a mapped script credits every source
- * it was built from, which over-selects rather than under-selects.
+ * Only the `sources` list is read here. Projecting the executed ranges through
+ * the mappings lives in `project.ts`; the recorder does not yet call it, so a
+ * mapped script still credits every source it was built from, which
+ * over-selects rather than under-selects.
  */
 
 /** The parts of a source map covsel reads. */
