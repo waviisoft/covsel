@@ -174,6 +174,20 @@ comments from humans and agents alike. Every one of those is yours to act on —
 fix it, or say in the thread why you are not going to. Leaving a red check or an
 unanswered review comment sitting is not an outcome.
 
+### Merging is never yours to decide
+
+Watching a pull request through to green is not permission to merge it. Only an
+explicit instruction to merge — in those words, about that pull request — is.
+Nothing else substitutes: not a green bar, not an approving review, not an
+earlier merge you were told to do, and not the absence of an objection. Never
+enable auto-merge for the same reason; it converts a passing check into a merge
+no one asked for.
+
+You may ask whether to merge, once the change is genuinely ready. Treat anything
+short of a clear yes as a no. A dismissed prompt, an ignored question, a change
+of subject, or an answer about something else leaves the pull request open —
+ask again later if it matters, but do not read silence as agreement.
+
 ### Review your own change before anyone else does
 
 Review the change independently before you ask for review — the `code-reviewer`
