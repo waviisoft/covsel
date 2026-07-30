@@ -151,6 +151,21 @@ export function sourceMapSources(map: RawSourceMap): string[] {
   return namedSources(map).map((s) => s.path);
 }
 
+/**
+ * A map's own sources, positionally, with `sourceRoot` applied. Unlike
+ * `namedSources` this keeps the array's shape: entry `i` is what a mapping
+ * segment's source index `i` refers to, and an entry a map left null or empty is
+ * `undefined` rather than dropped. Sections are not followed, since their
+ * segments index their own section's sources rather than this array.
+ */
+export function indexedSources(map: RawSourceMap): (string | undefined)[] {
+  return (map.sources ?? []).map((source) =>
+    typeof source === 'string' && source !== ''
+      ? prefixWith(map.sourceRoot, source)
+      : undefined,
+  );
+}
+
 /** Every source a map names, paired with its published content. */
 export function namedSources(map: RawSourceMap): NamedSource[] {
   const out: NamedSource[] = [];
