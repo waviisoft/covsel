@@ -20,7 +20,11 @@
  * So the checks here are the ones that hold whatever the granularity, and that a
  * selector bug cannot satisfy by accident:
  *
- *   - Every selected file is a discovered test file.
+ *   - Every selected file is a discovered test file. This one fails today when a
+ *     pull request deletes a test file and changes a source that test covered:
+ *     the map entry outlives the file and the selection still names it. That is
+ *     covsel/covsel#72, a defect in the selector rather than in this check --
+ *     worth knowing before debugging the harness.
  *   - Every changed test file is selected, whatever the map says about it.
  *   - Every `alwaysRun` test file is selected.
  *   - A test the map credits with a changed file but records **no blocks** for
@@ -46,6 +50,10 @@ import {
 } from '../packages/core/dist/index.js';
 
 const cwd = process.cwd();
+// The project's config as written, without an adapter resolved over it. Equal to
+// what `covsel run` uses here because this repository sets `testGlobs`; a project
+// leaning on an adapter's `defaultTestGlobs` would need `resolveConfigFor`, or
+// this would measure a different suite than the selector it is checking.
 const config = await loadConfig(cwd);
 
 const map = await new LocalStore({ cwd, dir: config.store.dir }).read();
@@ -58,9 +66,25 @@ console.log(
 console.log(`suite:     ${discovered.length} test files`);
 
 if (result.fullRun) {
-  // Not a failure and not a selection: there is nothing here to be wrong about.
+  // Not a failure and not a selection: a full run cannot skip a test, so there
+  // is no choice here to be wrong about. Sentinels move often -- a dependency
+  // bump is enough -- so this branch is where the check spends much of its life,
+  // and exiting on it silently would mean saying nothing at all on those runs.
+  // So it asserts the one thing left: that a run calling itself full really is.
+  // `selectAffected` builds a full run from the same discovery this script does,
+  // which makes it hold by construction today; it is here to notice if that ever
+  // stops being true, since a "full run" quietly short of the suite is the one
+  // failure this branch would otherwise hide.
   console.log(`\nvalidate-selection: full run — ${result.reason ?? 'no reason given'}`);
-  console.log('Nothing to check: a full run cannot skip a test.');
+  const missing = discovered.filter((t) => !result.tests.includes(t));
+  if (missing.length > 0) {
+    console.error('\nvalidate-selection: FAILED');
+    console.error(
+      `  - a full run left out ${missing.length} discovered test files:\n    ${missing.join('\n    ')}`,
+    );
+    process.exit(1);
+  }
+  console.log(`All ${discovered.length} discovered test files will run.`);
   process.exit(0);
 }
 
@@ -75,9 +99,8 @@ if (unknown.length > 0) {
   problems.push(`selected files that are not discovered tests: ${unknown.join(', ')}`);
 }
 
-const changed = new Set(
-  diffChanges(cwd, map?.commit, { exact: true }).map((c) => c.file),
-);
+// `map` is non-null from here: an absent map forces a full run, which exited above.
+const changed = new Set(diffChanges(cwd, map.commit, { exact: true }).map((c) => c.file));
 
 // A changed test file runs whatever the map says, so this needs no map at all.
 const changedTests = discovered.filter((t) => changed.has(t) && !selected.has(t));
@@ -95,7 +118,7 @@ if (alwaysRun.length > 0) {
 // The file-level safety net: no blocks recorded for a changed file means nothing
 // to narrow by, so the entry has to run.
 const unnarrowable = new Set();
-for (const entry of map?.entries ?? []) {
+for (const entry of map.entries) {
   for (const covered of entry.files) {
     if (!changed.has(covered.file)) continue;
     const blocks = (entry.blocks ?? []).filter((b) => b.file === covered.file);
@@ -110,9 +133,8 @@ if (unnarrowable.size > 0) {
   );
 }
 
-console.log(
-  `\nchanged:   ${changed.size} files since ${(map?.commit ?? 'unknown').slice(0, 12)}`,
-);
+const base = (map.commit ?? 'unknown').slice(0, 12);
+console.log(`\nchanged:   ${changed.size} files since ${base}`);
 
 if (problems.length > 0) {
   console.error('\nvalidate-selection: FAILED');
@@ -129,11 +151,16 @@ console.log(
 
 // Leave a summary for the job log, when running under GitHub Actions.
 if (process.env.GITHUB_STEP_SUMMARY) {
-  const rows = result.tests.map((t) => `| \`${t}\` |`).join('\n');
+  // A table with no rows renders as stray pipes, so an empty selection -- legal,
+  // if nothing changed and the project sets no `alwaysRun` -- says so in prose.
+  const table =
+    result.tests.length === 0
+      ? '_Nothing selected: no test covers what changed._\n'
+      : `| Selected |\n| --- |\n${result.tests.map((t) => `| \`${t}\` |`).join('\n')}\n`;
   appendFileSync(
     process.env.GITHUB_STEP_SUMMARY,
     `## covsel selected ${result.tests.length} of ${discovered.length} test files\n\n` +
-      `Skipped ${saved} (${pct}%). Changed files since \`${(map?.commit ?? 'unknown').slice(0, 12)}\`: ${changed.size}.\n\n` +
-      `| Selected |\n| --- |\n${rows}\n`,
+      `Skipped ${saved} (${pct}%). Changed files since \`${base}\`: ${changed.size}.\n\n` +
+      table,
   );
 }
