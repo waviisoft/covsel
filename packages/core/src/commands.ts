@@ -340,7 +340,14 @@ export interface AffectedResult {
   fullRun: boolean;
   /** Present when `fullRun` is true: why every test was selected. */
   reason?: string;
-  /** Selected test files, repo-relative, sorted, deduplicated. */
+  /**
+   * Selected test files, repo-relative, sorted, deduplicated.
+   *
+   * Empty alongside `fullRun: true` when discovery itself found nothing — there
+   * is no list to give, and the runner is handed its own command unfiltered so
+   * its own discovery applies. `fullRun` is the field to branch on; an empty
+   * `tests` never means "run nothing".
+   */
   tests: string[];
   /**
    * The selected test units, sorted by file and then by name. A unit with a
@@ -660,13 +667,22 @@ export async function computeStatus(init: StatusInit): Promise<StatusResult> {
 
   // Discovery is what `affected` would select from, so a status that did not
   // report it could describe a healthy map beside a run that executes nothing.
+  //
+  // A discovery that *failed* is not a discovery that found nothing, and saying
+  // "no test files matched your globs" to someone whose problem is an unreadable
+  // directory sends them to fix the one thing that is not wrong. `status` exists
+  // to answer "why is covsel about to do this", so it may not guess here.
   let discovered: string[];
+  let discoveryFailed: string | undefined;
   try {
     discovered = discoverTestFiles(cwd, config);
-  } catch {
+  } catch (e) {
     discovered = [];
+    discoveryFailed = `test discovery failed: ${e instanceof Error ? e.message : String(e)}`;
   }
-  const noTests = discovered.length === 0 ? noTestFilesFound(cwd, config) : undefined;
+  const noTests =
+    discoveryFailed ??
+    (discovered.length === 0 ? noTestFilesFound(cwd, config) : undefined);
 
   if (!map) {
     return {

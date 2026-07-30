@@ -8,8 +8,10 @@ import {
   computeStatus,
   type CoverageMap,
   createGenericRecorder,
+  MAP_SCHEMA_VERSION,
   recordMap,
   resolveConfig,
+  runAffected,
   selectAffected,
 } from '../src/index.js';
 
@@ -85,7 +87,7 @@ describe('recording a project whose tests the globs do not match', () => {
       config,
       recorder: createGenericRecorder({ command: ['node', '--test'], cwd, config }),
     });
-    expect(result.error).toContain(config.testGlobs[0] ?? '');
+    expect(result.error).toContain('**/*.{test,spec}.?(c|m)[jt]s?(x)');
     expect(result.error).toContain(cwd);
     expect(result.error).toMatch(/testGlobs/);
   }, 60_000);
@@ -129,13 +131,41 @@ describe('selecting when discovery finds no test files', () => {
     expect(status.nextIsFullRun).toBe(true);
     expect(status.nextFullRunReason).toMatch(/no test files matched/);
   });
+
+  it('hands the runner its own command, so the runner finds what the globs missed', async () => {
+    // The whole point of the fix: `covsel run` used to execute nothing and exit
+    // 0. A full run passes the command through unfiltered, so `node --test`
+    // discovers `test/math.js` by its own rules and actually runs it.
+    const script = join(cwd, 'ran.txt');
+    const code = await runAffected({
+      cwd,
+      config,
+      adapter: {
+        name: 'stub',
+        formatSelection: (tests) => tests.map((t) => t.file),
+        createRecorder: () => {
+          throw new Error('not used');
+        },
+      },
+      // Writes its own argv, so the test can assert the command was passed
+      // through with no file arguments appended.
+      command: [
+        process.execPath,
+        '-e',
+        `require('fs').writeFileSync(${JSON.stringify(script)}, JSON.stringify(process.argv.slice(1)))`,
+      ],
+    });
+
+    expect(code).toBe(0);
+    expect(JSON.parse(readFileSync(script, 'utf8'))).toEqual([]);
+  }, 60_000);
 });
 
 describe('a map that exists but holds no entries', () => {
   /** Write a structurally valid map with no entries, as a bad merge would. */
   function writeEmptyMap(): void {
     const map: CoverageMap = {
-      schemaVersion: 2,
+      schemaVersion: MAP_SCHEMA_VERSION,
       granularity: 'file',
       commit: git(['rev-parse', 'HEAD']),
       recordedAt: new Date().toISOString(),
