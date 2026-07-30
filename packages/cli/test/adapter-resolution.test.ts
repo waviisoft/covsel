@@ -12,11 +12,13 @@ import { adapterSpecifiers, loadAdapter } from '../src/adapters.js';
  *
  * One question this environment cannot answer, and no test here may ask:
  * whether a `@covsel/*` package is installed in a given directory. Vitest
- * aliases every workspace package to its source for these tests, so those
- * specifiers resolve from anywhere -- a fixture would be answering about the
- * workspace rather than about the project. Questions of that shape go to a real
- * `node` process instead, in `built-artifact.test.ts`; fixtures here use names
- * the workspace does not define.
+ * aliases every workspace package to its source for these tests, and pnpm
+ * hoists every workspace package onto the `NODE_PATH` its bin shims export, so
+ * those specifiers resolve from anywhere -- a fixture would be answering about
+ * the workspace rather than about the project. Questions of that shape go to a
+ * real `node` process instead, in `built-artifact.test.ts`; fixtures here use
+ * names the workspace does not define, which is a list that grows every time an
+ * adapter ships.
  */
 
 const projects: string[] = [];
@@ -72,13 +74,13 @@ describe('adapter resolution', () => {
 
   it('reports an adapter the project has not installed', async () => {
     const cwd = project({});
-    await expect(loadAdapter('mocha', cwd)).rejects.toThrow(/is not installed/);
+    await expect(loadAdapter('ava', cwd)).rejects.toThrow(/is not installed/);
   });
 
   it('resolves an installed package from the official scope', async () => {
-    const cwd = project({ '@covsel/adapter-mocha': adapterModule('mocha', 'adapter') });
-    const resolved = await loadAdapter('mocha', cwd);
-    expect(resolved.name).toBe('mocha');
+    const cwd = project({ '@covsel/adapter-ava': adapterModule('ava', 'adapter') });
+    const resolved = await loadAdapter('ava', cwd);
+    expect(resolved.name).toBe('ava');
     expect(resolved.formatSelection([{ file: 'a' }, { file: 'a', name: 'x' }])).toEqual([
       'a',
     ]);
