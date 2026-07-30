@@ -205,6 +205,11 @@ even when several tests import the same file; a top-level edit, or anything
 covsel can't parse into blocks, falls back to selecting every test on that file.
 Set `"granularity": "file"` to record and select at whole-file granularity only.
 
+`block` and `file` are the only values. Any other one fails at config load naming
+those two, rather than quietly recording at a granularity you did not ask for.
+There is no line-level granularity: line numbers do not survive reformatting,
+which is the reason blocks are fingerprinted by content in the first place.
+
 ## Working on covsel
 
 ```bash
