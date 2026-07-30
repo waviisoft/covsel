@@ -70,7 +70,14 @@ async function recordFixture(observes: readonly string[]): Promise<{
 
   const config = resolveConfig({ sourceGlobs: ['src/**'] });
   const base = createGenericRecorder({ command: ['node', '--test'], cwd, config });
-  const recorder: Recorder = { observes, record: (f) => base.record(f) };
+  // Only `observes` varies. The units come from the generic recorder unchanged,
+  // packages included, so its package declaration has to come along with them —
+  // recording refuses a recorder whose units and declaration disagree.
+  const recorder: Recorder = {
+    observes,
+    observesPackages: base.observesPackages === true,
+    record: (f) => base.record(f),
+  };
   const result = await recordMap({ cwd, config, recorder });
   expect(result.ok).toBe(true);
   return { cwd, config };

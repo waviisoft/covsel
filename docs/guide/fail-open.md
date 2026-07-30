@@ -114,9 +114,9 @@ should be in your repository but is not where the map says, fails the recording
 along with a map that has none at all.
 
 Not everything that fails to map is a hole. Your own files are their own
-sources; vendored code under `node_modules` is covered by the lockfile sentinel
-rather than by coverage; and the runtime's own scripts are not your project's
-code. What fails is code built from this repository and handed back to the
+sources; vendored code under `node_modules` has no source of its own to record,
+and a dependency change is covered by the lockfile sentinel; and the runtime's
+own scripts are not your project's code. What fails is code built from this repository and handed back to the
 runner with no way to trace it home. In a workspace that means a sibling
 package consumed as `packages/*/dist/*.js` needs source maps too — the tests
 importing it reach your code only through that build.

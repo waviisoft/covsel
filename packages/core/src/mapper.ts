@@ -7,7 +7,7 @@ import { makeSourceFilter } from './discover.js';
 import type { Mapper, RawCoverage } from './interfaces.js';
 import { makeStrictMatcher } from './match.js';
 import type { ScriptCoverage } from './observer.js';
-import { isVendoredRelPath } from './packages.js';
+import { isVendoredRelPath, packageNameFromRelPath } from './packages.js';
 import {
   DEFAULT_EXCLUDES,
   hashFileContents,
@@ -180,8 +180,9 @@ export class V8FileMapper implements Mapper {
    *   source. Recorded when it passes the source filter, and deliberately
    *   skipped when it does not — a test file, or a path the project put outside
    *   `sourceGlobs`.
-   * - **Vendored code** under `node_modules` is outside what a recording maps by
-   *   design; a dependency change is caught by the lockfile sentinel instead.
+   * - **Vendored code** under `node_modules` has no source of its own to
+   *   record. The package it belongs to is recorded separately, by
+   *   `toPackages`; a dependency change is caught by the lockfile sentinel.
    * - **Foreign and runtime scripts** — a file outside the repository, a `node:`
    *   builtin, `eval` — are not this project's code.
    *
@@ -325,6 +326,53 @@ export class V8FileMapper implements Mapper {
     return [...covered]
       .map(([file, fileHash]) => ({ file, fileHash }))
       .sort((a, b) => (a.file < b.file ? -1 : a.file > b.file ? 1 : 0));
+  }
+
+  /**
+   * The installed packages this coverage executed code in, sorted.
+   *
+   * Vendored code has no source of its own to record, but which package it
+   * belongs to is exactly what a dependency change needs to be resolved
+   * against. A separate axis from `toFiles`: these are package names, not repo
+   * paths, and synthesising `node_modules/` paths into the file list would make
+   * every change to one look like a change to a source the recorder was never
+   * watching.
+   *
+   * A package reaches a test two ways, and both have to be counted. It executes
+   * as its own script under `node_modules`, which is a path question; or a
+   * bundler inlined it into built output, and then nothing under
+   * `node_modules` ever runs — the package is named only by the built script's
+   * source map. Reading the first and not the second would leave the package in
+   * the inventory with no entry crediting it, which is read as "installed and
+   * never ran" and skips every test that leans on it through the bundle.
+   *
+   * The resolver caches by script URL and `toFiles` has already asked it about
+   * these same scripts, so the second pass costs a map lookup per script rather
+   * than a second resolution.
+   */
+  async toPackages(raw: RawCoverage): Promise<string[]> {
+    const names = new Set<string>();
+    const add = (rel: string): void => {
+      if (!isVendoredRelPath(rel)) return;
+      const name = packageNameFromRelPath(rel);
+      if (name !== undefined) names.add(name);
+    };
+    for (const script of raw.scripts as ScriptCoverage[]) {
+      const executed = script.functions.some((fn) => fn.ranges.some((r) => r.count > 0));
+      if (!executed) continue;
+      const rel = this.repoRelative(script.url);
+      if (rel !== undefined && isVendoredRelPath(rel)) {
+        add(rel);
+        continue; // vendored code is its own source; it has no map to consult
+      }
+      // Anything else may be built output with a package fused into it. A
+      // script the resolver cannot map contributes nothing here: whether that
+      // is a hole in the recording is `toFiles`'s question, and it fails the
+      // recording outright rather than letting a gap through.
+      const mapped = await this.resolver.resolve({ url: script.url });
+      if (mapped.kind === 'mapped') for (const source of mapped.sources) add(source);
+    }
+    return [...names].sort();
   }
 
   /**
