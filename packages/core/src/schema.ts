@@ -14,7 +14,7 @@ import type { RecordedConfig } from './config.js';
  * blocks that no longer exist. Rejecting such a map is what turns that into a
  * full run instead of a selection made against hashes nothing can match.
  */
-export const MAP_SCHEMA_VERSION = 4;
+export const MAP_SCHEMA_VERSION = 5;
 
 /**
  * Identifies a test at the finest granularity we know about.
@@ -109,13 +109,21 @@ export interface MapDependencies {
   markerHash: string;
   /**
    * Every installed package the recorder could have observed executing, and the
-   * versions it was installed at.
+   * resolution edges that put it there.
    *
    * The distinction this exists for: a changed package *in* here that no entry
    * mentions was watched and never ran, so nothing need be selected for it,
    * while a changed package *absent* from here is one the map never had an
    * opinion about, and falls open. Without it the two are indistinguishable and
    * everything falls open.
+   *
+   * An edge is `<who resolved it>:<what they got>` — the importer or store
+   * entry that holds the link, and the identity it points at. Edges rather than
+   * versions, because a version is too coarse to answer the question twice
+   * over. `pnpm patch` rewrites a package's source while its version stands
+   * still, and in a workspace one importer can move between two versions that
+   * both remain installed for others; in each case the version set is
+   * unchanged while the code a test runs is not. An edge moves in both.
    */
   inventory: Record<string, string[]>;
 }

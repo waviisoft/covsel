@@ -54,6 +54,47 @@ function manifest(name: string, version: string, extra: object = {}): string {
   return `${JSON.stringify({ name, version, main: 'index.js', ...extra })}\n`;
 }
 
+/**
+ * The package names an inventory holds. Most cases here are about which
+ * packages are in it at all; the edges each one resolved through are the
+ * subject of their own describe block below.
+ */
+function names(cwd: string): string[] {
+  return Object.keys(readInstalledInventory(cwd)?.inventory ?? {}).sort();
+}
+
+/** The edges recorded for one package name. */
+function edgesOf(cwd: string, name: string): string[] {
+  return readInstalledInventory(cwd)?.inventory[name] ?? [];
+}
+
+/** The identity half of an edge -- what was resolved, dropping who resolved it. */
+function storeEntry(edge: string): string {
+  return edge.slice(edge.indexOf(':') + 1);
+}
+
+/**
+ * A workspace where each package depends on its own version of `is-odd`, with
+ * every version present in the store. Built by hand rather than installed, so
+ * the shape under test is stated rather than inherited from a registry.
+ */
+function workspaceOn(importers: Record<string, string>): string {
+  const files: Record<string, string> = {};
+  for (const version of new Set(Object.values(importers))) {
+    files[`node_modules/.pnpm/is-odd@${version}/node_modules/is-odd/package.json`] =
+      manifest('is-odd', version);
+  }
+  const cwd = pnpmProject(files);
+  for (const [name, version] of Object.entries(importers)) {
+    link(
+      cwd,
+      `packages/${name}/node_modules/is-odd`,
+      `../../../node_modules/.pnpm/is-odd@${version}/node_modules/is-odd`,
+    );
+  }
+  return cwd;
+}
+
 /** A pnpm project: the store marker plus whatever else the case needs. */
 function pnpmProject(files: Record<string, string>): string {
   return project({ 'node_modules/.pnpm/lock.yaml': 'lockfileVersion: 9.0\n', ...files });
@@ -129,7 +170,7 @@ describe('readInstalledInventory', () => {
         'node_modules/left-pad/package.json': manifest('left-pad', '1.3.0'),
       });
 
-      expect(readInstalledInventory(cwd)?.inventory).toEqual({ 'left-pad': ['1.3.0'] });
+      expect(names(cwd)).toEqual(['left-pad']);
     });
 
     it('keeps a scope with the name', () => {
@@ -137,7 +178,7 @@ describe('readInstalledInventory', () => {
         'node_modules/@scope/pkg/package.json': manifest('@scope/pkg', '2.0.0'),
       });
 
-      expect(readInstalledInventory(cwd)?.inventory).toEqual({ '@scope/pkg': ['2.0.0'] });
+      expect(names(cwd)).toEqual(['@scope/pkg']);
     });
 
     it('reads through pnpm virtual store', () => {
@@ -152,7 +193,7 @@ describe('readInstalledInventory', () => {
       });
       link(cwd, 'node_modules/left-pad', '.pnpm/left-pad@1.3.0/node_modules/left-pad');
 
-      expect(readInstalledInventory(cwd)?.inventory).toEqual({ 'left-pad': ['1.3.0'] });
+      expect(names(cwd)).toEqual(['left-pad']);
     });
 
     it('follows a store entry to the dependencies it holds as siblings', () => {
@@ -174,10 +215,7 @@ describe('readInstalledInventory', () => {
         '../../is-number@6.0.0/node_modules/is-number',
       );
 
-      expect(readInstalledInventory(cwd)?.inventory).toEqual({
-        'is-odd': ['3.0.1'],
-        'is-number': ['6.0.0'],
-      });
+      expect(names(cwd)).toEqual(['is-number', 'is-odd']);
     });
 
     it('leaves out a store entry nothing depends on any more', () => {
@@ -196,7 +234,7 @@ describe('readInstalledInventory', () => {
       });
       link(cwd, 'node_modules/kept', '.pnpm/kept@1.0.0/node_modules/kept');
 
-      expect(readInstalledInventory(cwd)?.inventory).toEqual({ kept: ['1.0.0'] });
+      expect(names(cwd)).toEqual(['kept']);
     });
 
     it('collects every version a name is installed at', () => {
@@ -227,10 +265,7 @@ describe('readInstalledInventory', () => {
         '../../left-pad@1.1.0/node_modules/left-pad',
       );
 
-      expect(readInstalledInventory(cwd)?.inventory).toEqual({
-        'left-pad': ['1.1.0', '1.3.0'],
-        'old-consumer': ['1.0.0'],
-      });
+      expect(names(cwd)).toEqual(['left-pad', 'old-consumer']);
     });
 
     it('finds a dependency bundled inside another', () => {
@@ -239,10 +274,7 @@ describe('readInstalledInventory', () => {
         'node_modules/outer/node_modules/inner/package.json': manifest('inner', '0.1.0'),
       });
 
-      expect(readInstalledInventory(cwd)?.inventory).toEqual({
-        outer: ['1.0.0'],
-        inner: ['0.1.0'],
-      });
+      expect(names(cwd)).toEqual(['inner', 'outer']);
     });
 
     it('finds a workspace package own node_modules', () => {
@@ -254,9 +286,7 @@ describe('readInstalledInventory', () => {
         ),
       });
 
-      expect(readInstalledInventory(cwd)?.inventory).toEqual({
-        'local-only': ['3.0.0'],
-      });
+      expect(names(cwd)).toEqual(['local-only']);
     });
 
     it('names a package by where it sits, not by what it calls itself', () => {
@@ -266,7 +296,7 @@ describe('readInstalledInventory', () => {
         'node_modules/aliased/package.json': manifest('the-real-name', '1.0.0'),
       });
 
-      expect(readInstalledInventory(cwd)?.inventory).toEqual({ aliased: ['1.0.0'] });
+      expect(names(cwd)).toEqual(['aliased']);
     });
 
     it('ignores the package managers own bookkeeping', () => {
@@ -282,7 +312,83 @@ describe('readInstalledInventory', () => {
         ),
       });
 
-      expect(readInstalledInventory(cwd)?.inventory).toEqual({});
+      expect(names(cwd)).toEqual([]);
+    });
+  });
+
+  /**
+   * What the inventory records per package, and why it is an edge rather than a
+   * version.
+   *
+   * A version set answers "which versions are installed somewhere in this
+   * repository". That is not the question. The question is whether the code a
+   * given test runs has moved, and two ordinary situations move it while
+   * leaving every version in place.
+   */
+  describe('resolution edges', () => {
+    it('records who resolved a package and which copy they got', () => {
+      const cwd = pnpmProject({
+        'node_modules/.pnpm/left-pad@1.3.0/node_modules/left-pad/package.json': manifest(
+          'left-pad',
+          '1.3.0',
+        ),
+      });
+      link(cwd, 'node_modules/left-pad', '.pnpm/left-pad@1.3.0/node_modules/left-pad');
+
+      // The store entry name is pnpm's own resolution identity, so covsel does
+      // not have to invent one.
+      expect(readInstalledInventory(cwd)?.inventory['left-pad']).toContain(
+        '.:left-pad@1.3.0',
+      );
+    });
+
+    it('moves when one importer swaps between versions others still hold', () => {
+      // The case a version set cannot see: `a` moves from 3.0.1 to 2.0.0 while
+      // `c` keeps 3.0.1, so the repo-wide set is {2.0.0, 3.0.1} before and
+      // after. `a`'s tests now execute different code.
+      const before = workspaceOn({ a: '3.0.1', b: '2.0.0', c: '3.0.1' });
+      const after = workspaceOn({ a: '2.0.0', b: '2.0.0', c: '3.0.1' });
+
+      // The identities on offer are the same set on both sides -- which is
+      // precisely why a version comparison sees nothing here.
+      const identities = (cwd: string): string[] =>
+        [...new Set(edgesOf(cwd, 'is-odd').map(storeEntry))].sort();
+      expect(identities(after)).toEqual(identities(before));
+
+      expect(edgesOf(before, 'is-odd')).toContain('packages/a:is-odd@3.0.1');
+      expect(edgesOf(after, 'is-odd')).toContain('packages/a:is-odd@2.0.0');
+    });
+
+    it('moves when a package is patched without its version changing', () => {
+      // `pnpm patch` writes the patch hash into the store entry name and leaves
+      // the manifest version alone, so the identity moves and the version does
+      // not.
+      const cwd = pnpmProject({
+        'node_modules/.pnpm/is-odd@3.0.1_patch_hash=abc123/node_modules/is-odd/package.json':
+          manifest('is-odd', '3.0.1'),
+      });
+      link(
+        cwd,
+        'node_modules/is-odd',
+        '.pnpm/is-odd@3.0.1_patch_hash=abc123/node_modules/is-odd',
+      );
+
+      // The store entry also links to its own package, so the root importer's
+      // edge is one of two rather than the only one.
+      expect(edgesOf(cwd, 'is-odd')).toContain('.:is-odd@3.0.1_patch_hash=abc123');
+      expect(edgesOf(cwd, 'is-odd').every((e) => e.includes('patch_hash=abc123'))).toBe(
+        true,
+      );
+    });
+
+    it('identifies a package outside any store by where it sits and what it says', () => {
+      // A hoisted tree, or a bundled dependency. The path alone does not say
+      // which code is there, so the version comes along.
+      const cwd = pnpmProject({
+        'node_modules/flat/package.json': manifest('flat', '2.1.0'),
+      });
+
+      expect(edgesOf(cwd, 'flat')).toEqual(['.:node_modules/flat@2.1.0']);
     });
   });
 
@@ -303,7 +409,7 @@ describe('readInstalledInventory', () => {
       link(cwd, 'node_modules/left-pad', '.pnpm/left-pad@1.3.0/node_modules/left-pad');
 
       // The store path still reads as `left-pad`, so both sides agree.
-      expect(readInstalledInventory(cwd)?.inventory).toEqual({ 'left-pad': ['1.3.0'] });
+      expect(names(cwd)).toEqual(['left-pad']);
     });
 
     it('drops a linked workspace package', () => {
@@ -317,7 +423,7 @@ describe('readInstalledInventory', () => {
       mkdirSync(join(cwd, 'packages/cli/node_modules/@scope'), { recursive: true });
       link(cwd, 'packages/cli/node_modules/@scope/core', '../../../core');
 
-      expect(readInstalledInventory(cwd)?.inventory).toEqual({});
+      expect(names(cwd)).toEqual([]);
     });
 
     it('drops a package linked from outside the repository', () => {
@@ -329,7 +435,7 @@ describe('readInstalledInventory', () => {
       const cwd = pnpmProject({});
       link(cwd, 'node_modules/ext', outside);
 
-      expect(readInstalledInventory(cwd)?.inventory).toEqual({});
+      expect(names(cwd)).toEqual([]);
     });
 
     it('drops a pnpm aliased install', () => {
@@ -344,7 +450,7 @@ describe('readInstalledInventory', () => {
       });
       link(cwd, 'node_modules/aliased', '.pnpm/real@1.0.0/node_modules/real');
 
-      expect(readInstalledInventory(cwd)?.inventory).toEqual({ real: ['1.0.0'] });
+      expect(names(cwd)).toEqual(['real']);
     });
 
     it('terminates on a cycle of linked workspace packages', () => {
@@ -374,7 +480,7 @@ describe('readInstalledInventory', () => {
         }
       }
 
-      expect(readInstalledInventory(cwd)?.inventory).toEqual({});
+      expect(names(cwd)).toEqual([]);
     }, 20_000);
   });
 
@@ -395,7 +501,7 @@ describe('readInstalledInventory', () => {
         'node_modules/@plat/linux-x64/bin/tool': '#!/bin/sh\n',
       });
 
-      expect(readInstalledInventory(cwd)?.inventory).toEqual({});
+      expect(names(cwd)).toEqual([]);
     });
 
     it('leaves out a package whose only entry point is a native addon', () => {
@@ -407,7 +513,7 @@ describe('readInstalledInventory', () => {
         })}\n`,
       });
 
-      expect(readInstalledInventory(cwd)?.inventory).toEqual({});
+      expect(names(cwd)).toEqual([]);
     });
 
     it('keeps a JS wrapper around a native addon', () => {
@@ -418,7 +524,7 @@ describe('readInstalledInventory', () => {
         'node_modules/wrapper/index.js': 'process.dlopen();\n',
       });
 
-      expect(readInstalledInventory(cwd)?.inventory).toEqual({ wrapper: ['1.0.0'] });
+      expect(names(cwd)).toEqual(['wrapper']);
     });
 
     it('keeps a package whose entry point is written without an extension', () => {
@@ -430,9 +536,7 @@ describe('readInstalledInventory', () => {
         })}\n`,
       });
 
-      expect(readInstalledInventory(cwd)?.inventory).toEqual({
-        extensionless: ['1.0.0'],
-      });
+      expect(names(cwd)).toEqual(['extensionless']);
     });
 
     it('keeps a package that declares only an exports map', () => {
@@ -444,7 +548,7 @@ describe('readInstalledInventory', () => {
         })}\n`,
       });
 
-      expect(readInstalledInventory(cwd)?.inventory).toEqual({ modern: ['1.0.0'] });
+      expect(names(cwd)).toEqual(['modern']);
     });
 
     it('keeps a package that declares nothing but ships an index', () => {
@@ -456,7 +560,7 @@ describe('readInstalledInventory', () => {
         'node_modules/implicit/index.js': 'module.exports = 1;\n',
       });
 
-      expect(readInstalledInventory(cwd)?.inventory).toEqual({ implicit: ['1.0.0'] });
+      expect(names(cwd)).toEqual(['implicit']);
     });
 
     it('leaves out a types package, which declares an entry that runs nothing', () => {
@@ -477,7 +581,7 @@ describe('readInstalledInventory', () => {
         })}\n`,
       });
 
-      expect(readInstalledInventory(cwd)?.inventory).toEqual({});
+      expect(names(cwd)).toEqual([]);
     });
 
     it('leaves out a package with no readable version', () => {
@@ -487,7 +591,7 @@ describe('readInstalledInventory', () => {
         'node_modules/broken/package.json': 'not json at all',
       });
 
-      expect(readInstalledInventory(cwd)?.inventory).toEqual({});
+      expect(names(cwd)).toEqual([]);
     });
   });
 });

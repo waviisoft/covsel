@@ -64,22 +64,19 @@ export function treeIsProvablyCurrent(cwd: string, deps: MapDependencies): Fresh
 }
 
 /**
- * Package names installed at a different set of versions than before, sorted.
+ * Package names resolved differently than before, sorted.
  *
  * A name is changed when it appears on one side and not the other, or when the
- * versions it is installed at differ — a package removed breaks every import of
- * it, and a second copy arriving at another version is a change to that name
- * even though the first copy stayed put. Versions compare as sets, since the
- * order a walk found them in carries no meaning.
+ * resolution edges recorded for it differ — a package removed breaks every
+ * import of it, a second copy arriving is a change to that name even though the
+ * first copy stayed put, and an importer moving between copies is a change even
+ * though both remain installed. Edges compare as sets, since the order a walk
+ * found them in carries no meaning.
  *
- * **This is weaker than "the code changed", and the difference matters.** An
- * inventory records one version set per name for the whole repository, so two
- * genuinely different trees can compare equal: `pnpm patch` rewrites a
- * package's source while its version stands still, and in a workspace one
- * importer can swap between two versions that both remain installed for other
- * importers. A caller may not read an empty result as "no test is affected"
- * without establishing separately that the change was one an inventory can
- * model.
+ * This is only as good as what the inventory records, which is why that records
+ * edges rather than versions: a version set is unchanged by `pnpm patch` and by
+ * an importer swapping between two versions others still hold, and in both
+ * cases the code a test runs moved.
  */
 export function changedPackages(
   before: Record<string, string[]>,

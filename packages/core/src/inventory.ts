@@ -20,7 +20,7 @@ export interface InstalledInventory {
   markerHash: string;
   /**
    * Every installed package covsel could have observed executing, and the
-   * versions it was installed at, sorted.
+   * resolution edges that put it there, sorted.
    *
    * Keyed the way coverage attribution names a package — by the directory it
    * sits in, not by what its manifest calls itself. An aliased install puts one
@@ -147,6 +147,51 @@ function storeSiblings(cwd: string, packageRealAbs: string): string | undefined 
 }
 
 /**
+ * The pnpm store entry a realpath sits in, if it sits in one.
+ *
+ * The store entry name is the resolution identity pnpm already computed:
+ * `is-odd@3.0.1`, `is-odd@3.0.1_patch_hash=00bb…` once patched,
+ * `vite@8.0.0_@types+node@22.0.0` once peers are resolved. Everything a version
+ * cannot say about which code this is, that name says.
+ */
+function storeEntryOf(rel: string): string | undefined {
+  const segments = rel.split('/');
+  const vendor = segments.lastIndexOf(VENDOR_DIR);
+  return vendor >= 2 && segments[vendor - 2] === '.pnpm'
+    ? segments[vendor - 1]
+    : undefined;
+}
+
+/**
+ * What a package resolved to, as something two recordings can compare.
+ *
+ * A store entry names itself. Anything else — a hoisted npm or yarn tree, a
+ * bundled dependency — is identified by where it really sits plus the version
+ * it declares, because for those layouts the path alone does not say which code
+ * is there.
+ */
+function identityOf(resolved: string, version: string): string {
+  return storeEntryOf(resolved) ?? `${resolved}@${version}`;
+}
+
+/**
+ * Who owns the links inside one `node_modules`: a store entry by its own
+ * identity, or an importer by its directory.
+ */
+function resolverOf(nodeModulesRel: string): string {
+  const store = storeEntryOf(`${nodeModulesRel}/x`);
+  if (store !== undefined) return store;
+  const importer = nodeModulesRel.replace(/\/?node_modules$/, '');
+  return importer === '' ? '.' : importer;
+}
+
+/** A package directory the walk found, and the `node_modules` it was found in. */
+interface FoundPackage {
+  dir: string;
+  resolver: string;
+}
+
+/**
  * Every package directory reachable from one `node_modules`, as repo-relative
  * paths.
  *
@@ -164,7 +209,7 @@ function storeSiblings(cwd: string, packageRealAbs: string): string | undefined 
 function packageDirs(
   cwd: string,
   nodeModulesRel: string,
-  out: string[],
+  out: FoundPackage[],
   visited: Set<string>,
 ): void {
   // Symlinks are followed, so the graph being walked is not a tree: a monorepo
@@ -181,6 +226,7 @@ function packageDirs(
   if (visited.has(real)) return;
   visited.add(real);
 
+  const resolver = resolverOf(nodeModulesRel);
   for (const name of subdirectories(join(cwd, nodeModulesRel))) {
     const rel = `${nodeModulesRel}/${name}`;
     // `.pnpm`, `.bin`, `.cache`, and the markers. The store is reached through
@@ -188,11 +234,11 @@ function packageDirs(
     if (name.startsWith('.')) continue;
     if (name.startsWith('@')) {
       for (const scoped of subdirectories(join(cwd, rel))) {
-        recordPackage(cwd, `${rel}/${scoped}`, out, visited);
+        recordPackage(cwd, `${rel}/${scoped}`, resolver, out, visited);
       }
       continue;
     }
-    recordPackage(cwd, rel, out, visited);
+    recordPackage(cwd, rel, resolver, out, visited);
   }
 }
 
@@ -200,10 +246,11 @@ function packageDirs(
 function recordPackage(
   cwd: string,
   dir: string,
-  out: string[],
+  resolver: string,
+  out: FoundPackage[],
   visited: Set<string>,
 ): void {
-  out.push(dir);
+  out.push({ dir, resolver });
   // A dependency bundled inside this package, the npm and yarn shape.
   packageDirs(cwd, `${dir}/node_modules`, out, visited);
   // Its dependencies as pnpm arranges them, which are siblings rather than
@@ -261,15 +308,20 @@ function nodeModulesRoots(cwd: string): string[] {
  * Each is dropped, and each then falls open. The ordinary pnpm case is
  * unaffected: `node_modules/left-pad` resolves into the store at
  * `.pnpm/left-pad@1.3.0/node_modules/left-pad`, which still reads as `left-pad`.
+ *
+ * Returns the resolved path when it agrees, because that is also what names the
+ * copy this package resolved to and re-reading it costs a syscall per package.
  */
-function survivesResolution(cwd: string, dir: string, name: string): boolean {
+function survivesResolution(cwd: string, dir: string, name: string): string | undefined {
   let resolved: string | undefined;
   try {
     resolved = toRepoRelative(cwd, realpathSync(join(cwd, dir)));
   } catch {
-    return false;
+    return undefined;
   }
-  return resolved !== undefined && packageNameFromRelPath(resolved) === name;
+  return resolved !== undefined && packageNameFromRelPath(resolved) === name
+    ? resolved
+    : undefined;
 }
 
 /**
@@ -294,15 +346,16 @@ export function readInstalledInventory(cwd: string): InstalledInventory | undefi
     return undefined;
   }
 
-  const dirs: string[] = [];
+  const dirs: FoundPackage[] = [];
   const visited = new Set<string>();
   for (const root of nodeModulesRoots(cwd)) packageDirs(cwd, root, dirs, visited);
 
   const inventory: Record<string, string[]> = {};
-  for (const dir of dirs) {
+  for (const { dir, resolver } of dirs) {
     const name = packageNameFromRelPath(dir);
     if (name === undefined) continue;
-    if (!survivesResolution(cwd, dir, name)) continue;
+    const resolved = survivesResolution(cwd, dir, name);
+    if (resolved === undefined) continue;
     let manifest: Record<string, unknown>;
     try {
       const parsed: unknown = JSON.parse(
@@ -316,8 +369,12 @@ export function readInstalledInventory(cwd: string): InstalledInventory | undefi
     const version = manifest['version'];
     if (typeof version !== 'string' || version === '') continue;
     if (!shipsObservableJs(join(cwd, dir), manifest)) continue;
-    const versions = (inventory[name] ??= []);
-    if (!versions.includes(version)) versions.push(version);
+    // The edge, not the version: which resolver got which copy. A version set
+    // is unchanged by a patch and by an importer moving between two versions
+    // that both stay installed, and in each case the code a test runs moved.
+    const edge = `${resolver}:${identityOf(resolved, version)}`;
+    const edges = (inventory[name] ??= []);
+    if (!edges.includes(edge)) edges.push(edge);
   }
   // Insertion order is `readdirSync` order, which differs between filesystems.
   // The map is compared byte for byte across shards and across runs, so the
