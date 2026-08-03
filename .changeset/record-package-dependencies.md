@@ -43,10 +43,11 @@ walks a cycle rather than a tree.
 
 `Recorder` gains `observesPackages`, a claim `observes` cannot express — `**`
 already matches every `node_modules` path, so no scope distinguishes a recorder
-that watches vendored code from one that never sees it. Only the generic
-`NODE_V8_COVERAGE` recorder declares it: a runner's own coverage provider drops
-`node_modules` before covsel sees anything, and a per-test window opened in a
-`beforeEach` misses whatever ran while the module graph was evaluating.
+that watches vendored code from one that never sees it. Only a recorder reading
+a raw `NODE_V8_COVERAGE` dump is in a position to declare it: a runner's own
+coverage provider drops `node_modules` before covsel sees anything, and a
+per-test window opened in a `beforeEach` misses whatever ran while the module
+graph was evaluating.
 
 Recording **fails** a declaring recorder whose unit omits `packages`, since
 there is no safe way to guess what it ran. The reverse is only declined: a unit

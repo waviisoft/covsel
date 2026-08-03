@@ -58,6 +58,11 @@ universal.
   maps: a script covsel cannot map back to a source fails the recording rather
   than crediting nothing. See
   [a script that cannot be mapped](/guide/fail-open#a-script-that-cannot-be-mapped).
+- A generic recording records **no package information**. Whether a run executes
+  all of its code in the process tree covsel spawns is a fact about your command,
+  and an adapter that wraps whatever you hand it cannot know one — so it does not
+  claim to have watched your dependencies, and every dependency change falls open
+  to a full run.
 - Discovery, source globs, and sentinels are controlled by
   [configuration](/guide/getting-started#configuration); zero-config works out
   of the box.

@@ -163,7 +163,7 @@ return {
 };
 ```
 
-Most recorders should leave it off, and two shapes must:
+Most recorders should leave it off, and three shapes must:
 
 - **A runner's own coverage provider.** `@vitest/coverage-v8` and Jest both drop
   `node_modules` before covsel is handed anything, so an adapter reading their
@@ -171,6 +171,15 @@ Most recorders should leave it off, and two shapes must:
 - **A per-test window opened in a hook.** `beforeEach` runs after the test
   file's imports have evaluated, so a dependency imported for its side effects,
   or imported but never called inside the window, is invisible.
+- **A recorder that wraps a command it was handed.** The dump above holds every
+  script the process tree loaded — but only that tree. A command that drives a
+  browser, shells out to another runtime, or runs its tests in a container
+  arrives as the same opaque argv as `node --test`, and nothing about it can be
+  read off the command name or off the dump: vendored code appearing in the dump
+  is equally consistent with having missed every package that ran elsewhere. The
+  example above is sound because the adapter writing it knows its runner. This
+  is why `createGenericRecorder` takes the assertion as an input
+  (`runsInNodeProcessTree`) and the generic adapter never makes it.
 
 Declaring it commits you to setting `packages` on every unit — an empty array
 included, since `[]` is the measurement "this test ran no vendored code" and

@@ -47,6 +47,24 @@ export interface GenericRecorderInit {
   cwd: string;
   config: MapperConfig & Pick<CovselConfig, 'granularity'>;
   env?: NodeJS.ProcessEnv;
+  /**
+   * The caller's assertion that this command executes everything under test
+   * inside the Node process tree covsel starts, so the coverage dump holds every
+   * script the run loaded.
+   *
+   * It is what makes `observesPackages` sound, and it is not something this
+   * recorder can establish. A command arrives here as an argv somebody typed,
+   * and one that drives a browser, shells out to another runtime, or runs its
+   * tests in a container looks exactly like one that does not. Set it only when
+   * you know the runner — a caller that wrote the command, or an adapter for a
+   * runner that executes its own sources directly. Left unset, entries carry no
+   * packages and the map no inventory, so every dependency change falls open.
+   *
+   * It does not widen `observes`, which is `**` either way: what an unvouched
+   * command hides is a process boundary, and a repo-path scope cannot describe
+   * one.
+   */
+  runsInNodeProcessTree?: boolean;
 }
 
 /** The whole-file recorder: ProcessObserver (NODE_V8_COVERAGE) piped into the V8 mapper. */
@@ -58,15 +76,27 @@ export function createGenericRecorder(init: GenericRecorderInit): Recorder {
   });
   const mapper = new V8FileMapper({ cwd: init.cwd, config: init.config });
   const wantBlocks = init.config.granularity !== 'file';
+  // Only the caller can answer whether the command runs everything under test in
+  // the tree covsel spawns, so only the caller's answer is used.
+  const observesPackages = init.runsInNodeProcessTree === true;
   return {
-    // NODE_V8_COVERAGE is inherited by child processes and dumps every script
-    // they load, so anything the run executes anywhere in the process tree is
-    // visible to this recorder wherever it lives in the repo.
+    // Bounded by that same process tree. NODE_V8_COVERAGE is inherited by child
+    // processes and dumps every script they load, so anything the run executes
+    // in the tree is visible to this recorder wherever it lives in the repo. A
+    // command that executes code outside it — a browser, another runtime — is
+    // not, and no scope can say so: globs name where in the repo a path is,
+    // never which process ran it.
     observes: OBSERVES_EVERYTHING,
     // The same dump is what makes packages visible: it holds every script the
     // process tree loaded, vendored code included, before any coverage provider
-    // has had the chance to filter `node_modules` out of it.
-    observesPackages: true,
+    // has had the chance to filter `node_modules` out of it. But only for what
+    // ran in that tree, and this recorder is handed a command rather than
+    // knowing one. Reading the claim off the command name would be a guess
+    // dressed as evidence, and reading it off the dump could only ever refute
+    // it — vendored code in the dump is equally consistent with having missed
+    // every package that ran somewhere else. So the claim belongs to whoever
+    // chose the command, and is absent until they make it.
+    ...(observesPackages ? { observesPackages: true } : {}),
     async record(testFile: string) {
       await observer.startTest({ file: testFile });
       const raw = await observer.endTest({ file: testFile });
@@ -77,7 +107,10 @@ export function createGenericRecorder(init: GenericRecorderInit): Recorder {
           test: { file: testFile },
           files,
           blocks,
-          packages: await mapper.toPackages(raw),
+          // Attributed exactly when it is claimed. A list nobody stands behind
+          // is dropped by recording anyway, and a unit carrying one while its
+          // recorder is silent contradicts what a unit's packages mean.
+          ...(observesPackages ? { packages: await mapper.toPackages(raw) } : {}),
         },
       ];
     },

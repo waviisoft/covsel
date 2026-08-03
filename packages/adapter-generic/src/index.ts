@@ -7,6 +7,13 @@
  * is involved, which is exactly what makes this adapter work with anything that
  * executes its sources directly. It is covsel's default, and the baseline every
  * other adapter is an improvement on.
+ *
+ * Knowing nothing about the runner is also the limit of what it may claim. It
+ * vouches for no command, so the recorder it builds declares no package
+ * observation: whether a run executes all of its code in the process tree covsel
+ * spawns is a fact about the command, and the adapter that wraps whatever it is
+ * handed is the one that cannot know it. A generic recording therefore carries
+ * no package information, and dependency changes fall open to a full run.
  */
 import {
   type Adapter,
