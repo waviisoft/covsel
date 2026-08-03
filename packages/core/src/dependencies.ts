@@ -64,28 +64,39 @@ export function treeIsProvablyCurrent(cwd: string, deps: MapDependencies): Fresh
 }
 
 /**
- * Package names whose resolution differs between two inventories, sorted.
+ * Package names installed at a different set of versions than before, sorted.
  *
  * A name is changed when it appears on one side and not the other, or when the
- * set of versions it is installed at differs — a package removed breaks every
- * import of it, and a second copy arriving at another version is a change to
- * that name even though the first copy stayed put.
+ * versions it is installed at differ — a package removed breaks every import of
+ * it, and a second copy arriving at another version is a change to that name
+ * even though the first copy stayed put. Versions compare as sets, since the
+ * order a walk found them in carries no meaning.
  *
- * Versions compare as sets, since the order a walk happened to find them in
- * carries no meaning.
+ * **This is weaker than "the code changed", and the difference matters.** An
+ * inventory records one version set per name for the whole repository, so two
+ * genuinely different trees can compare equal: `pnpm patch` rewrites a
+ * package's source while its version stands still, and in a workspace one
+ * importer can swap between two versions that both remain installed for other
+ * importers. A caller may not read an empty result as "no test is affected"
+ * without establishing separately that the change was one an inventory can
+ * model.
  */
 export function changedPackages(
   before: Record<string, string[]>,
   after: Record<string, string[]>,
 ): string[] {
-  // A name nobody installed is distinct from one installed at no versions at
-  // all. The second should never be written, but a map covsel did not produce
-  // could hold it, and reading the two as equal would hide a package appearing.
-  const key = (versions: string[] | undefined): string =>
-    versions === undefined ? '\0absent' : [...versions].sort().join('\0');
+  // Serialised rather than joined, and keyed on `undefined` outside the string
+  // domain: any sentinel encoded *into* the string is a value some version list
+  // can also produce, and the collision lands on exactly the foreign map the
+  // distinction exists for.
+  const key = (name: string, from: Record<string, string[]>): string =>
+    Object.hasOwn(from, name) ? JSON.stringify([...from[name]!].sort()) : 'absent';
   const changed: string[] = [];
+  // `Object.hasOwn`, because a package really can be called `constructor`, and
+  // reading it off the prototype yields something that is neither absent nor a
+  // list of versions.
   for (const name of new Set([...Object.keys(before), ...Object.keys(after)])) {
-    if (key(before[name]) !== key(after[name])) changed.push(name);
+    if (key(name, before) !== key(name, after)) changed.push(name);
   }
   return changed.sort();
 }
