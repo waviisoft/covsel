@@ -176,7 +176,13 @@ covsel merge shard-1/map.json shard-2/map.json --out .covsel/map.json
 ```
 
 Merging unions the entries, and unions the covered files and blocks of any test
-that appears in more than one shard. Four rules keep the result honest:
+that appears in more than one shard. Five rules keep the result honest:
+
+- A test one shard credits with **no source at all** stays crediting nothing,
+  rather than inheriting what the other shard saw. An empty entry is a shard
+  reporting that it could not see where the test ran, not one measuring the test
+  covering nothing, and unioning it away would leave a merged entry claiming
+  something neither shard claimed. It is selected on every run instead.
 
 - Granularity drops to `file` unless **every** shard recorded blocks, so a
   partly block-aware map never narrows selection by blocks.

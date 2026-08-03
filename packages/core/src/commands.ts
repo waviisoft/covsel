@@ -87,6 +87,24 @@ export function createGenericRecorder(init: GenericRecorderInit): Recorder {
 }
 
 /**
+ * True when an entry's recording measured nothing — it credits no source file.
+ *
+ * Read off `files` alone, because that is what selection matches a diff
+ * against: blocks only refine a file that already matched, so an entry with
+ * blocks and no files is just as unselectable as one with neither. The question
+ * this answers is not "did the test do anything" but "can any change to this
+ * repository ever select it", and for an entry crediting no file the answer is
+ * no, whatever else the entry carries.
+ *
+ * Takes anything holding a file list so that recording, status and selection
+ * ask the question in one place: a unit reported as measuring nothing is
+ * exactly the entry selection will later have to run unconditionally.
+ */
+export function measuredNothing(entry: Pick<MapEntry, 'files'>): boolean {
+  return entry.files.length === 0;
+}
+
+/**
  * What to say when discovery found no test files. Names both halves of the
  * question — the globs and where they were matched — because the answer is almost
  * always that the project's layout is not the one the globs describe, and
@@ -160,6 +178,12 @@ export interface RecordEvent {
   /** Number of test units recorded from this file (per-test recorders yield many). */
   tests?: number;
   sources?: number;
+  /**
+   * Units recorded from this file that credit no source at all. Present only
+   * when there were any: each is a test selection can say nothing about, so it
+   * will run on every selection until the recorder can see what it executes.
+   */
+  unmeasured?: number;
   reason?: string;
   /**
    * Scripts this file executed that could not be mapped back to any source and
@@ -183,6 +207,19 @@ export interface RecordResult {
    * rather than only when selection later declines to narrow.
    */
   unanchored?: boolean;
+  /**
+   * Units whose entry credits no source, across the whole recording. Present
+   * only when there were any.
+   *
+   * Recording them is not an error — a test that only asserts on constants
+   * legitimately covers nothing, and refusing the map would leave the project
+   * with none at all over something selection can handle safely. But a test
+   * covsel cannot narrow on is worth saying out loud at the moment it is
+   * recorded, because the usual cause is a recorder that could not watch where
+   * the test ran, and the fix for that is a different adapter or a different
+   * test, not a re-recording.
+   */
+  unmeasured?: TestId[];
   /**
    * Why recording failed as a whole, as opposed to per test file. Present only
    * for a failure that belongs to the run rather than to anything in it — today,
@@ -288,6 +325,7 @@ export async function recordMap(init: RecordInit): Promise<RecordResult> {
   const entries: MapEntry[] = [];
   const failures: { file: string; reason: string }[] = [];
   const scopes: (readonly string[])[] = [];
+  const unmeasured: TestId[] = [];
 
   const wantBlocks = config.granularity !== 'file';
   const observesPackages = recorder.observesPackages === true;
@@ -306,6 +344,7 @@ export async function recordMap(init: RecordInit): Promise<RecordResult> {
         if (mismatch !== undefined) throw new Error(mismatch);
       }
       let sources = 0;
+      let blind = 0;
       for (const unit of units) {
         entries.push({
           test: unit.test,
@@ -324,6 +363,10 @@ export async function recordMap(init: RecordInit): Promise<RecordResult> {
         // unit from a single window is covered by the recorder's declaration.
         scopes.push(unit.observes ?? recorder.observes);
         sources += unit.files.length;
+        if (measuredNothing(unit)) {
+          blind += 1;
+          unmeasured.push(unit.test);
+        }
       }
       const allowed = recorder.unmappableAllowed?.() ?? [];
       init.onEvent?.({
@@ -331,6 +374,7 @@ export async function recordMap(init: RecordInit): Promise<RecordResult> {
         file,
         tests: units.length,
         sources,
+        ...(blind > 0 ? { unmeasured: blind } : {}),
         ...(allowed.length > 0 ? { allowedUnmappable: allowed } : {}),
       });
     } catch (err) {
@@ -380,6 +424,7 @@ export async function recordMap(init: RecordInit): Promise<RecordResult> {
     mapPath: store.path(),
     testFiles,
     map,
+    ...(unmeasured.length > 0 ? { unmeasured } : {}),
     // Keyed on the dirty tree specifically, not on the absence of a commit. A
     // repository with no commits yet also has no commit to stamp, and telling
     // someone their uncommitted changes caused it would be a lie.
@@ -553,11 +598,31 @@ export async function selectAffected(init: SelectInit): Promise<AffectedResult> 
   const mapped = new Set(map!.entries.map((e) => e.test.file));
   const unmapped = testFiles.filter((f) => !mapped.has(f));
 
+  // An entry that credits nothing is the same claim in a different shape, and
+  // gets the same answer. It is not the rare test that genuinely executes no
+  // code: far more often the recorder could not see what the test executed,
+  // because the test drives its subject in a child process, a worker, or a
+  // browser its coverage mechanism does not reach. A recorder declares its blind
+  // spots in `observed`, but that is one scope for the whole run and cannot say
+  // "everything except what these particular tests do", so the empty entry falls
+  // straight through it and no changed path can ever match it.
+  //
+  // The whole file runs, not the unit that credits nothing: a recorder that
+  // could not see one unit of a file has not earned trust in what it recorded
+  // for the units beside it. A test that really covers nothing then runs when it
+  // need not, which is the cheap way to be wrong.
+  const unmeasured = new Set(
+    map!.entries.filter(measuredNothing).map((e) => e.test.file),
+  );
+
   // Files that must run in full supersede any per-test selection for that file.
   const wholeFile = new Set<string>([
     ...mandatory.map((t) => t.file),
     ...alwaysRun,
     ...unmapped,
+    // Drawn from discovery, like `unmapped`: an entry may outlive the test file
+    // it names, and there is nothing to run for a file that is no longer there.
+    ...testFiles.filter((f) => unmeasured.has(f)),
   ]);
   const selected: TestId[] = [...wholeFile].map((file) => ({ file }));
   const seen = new Set<string>();
@@ -725,6 +790,13 @@ export interface StatusResult {
   /** Globs the recording was able to observe execution within. */
   observed?: string[];
   entryCount?: number;
+  /**
+   * Entries crediting no source at all. They are part of `entryCount` and they
+   * measure nothing, so counting them separately is the only way a map that
+   * narrows for half its tests is told apart from one that narrows for all of
+   * them. Each such test is selected on every run.
+   */
+  unmeasuredEntryCount?: number;
   coveredFileCount?: number;
   coveredBlockCount?: number;
   changedSentinels: string[];
@@ -807,7 +879,9 @@ export async function computeStatus(init: StatusInit): Promise<StatusResult> {
 
   const coveredFiles = new Set<string>();
   const coveredBlocks = new Set<string>();
+  let unmeasuredEntries = 0;
   for (const entry of map.entries) {
+    if (measuredNothing(entry)) unmeasuredEntries += 1;
     for (const f of entry.files) coveredFiles.add(f.file);
     for (const b of entry.blocks ?? []) coveredBlocks.add(`${b.file}\0${b.blockHash}`);
   }
@@ -836,6 +910,7 @@ export async function computeStatus(init: StatusInit): Promise<StatusResult> {
     granularity: map.granularity,
     observed: [...map.observed],
     entryCount: map.entries.length,
+    unmeasuredEntryCount: unmeasuredEntries,
     coveredFileCount: coveredFiles.size,
     ...(coveredBlocks.size > 0 ? { coveredBlockCount: coveredBlocks.size } : {}),
     changedSentinels,
@@ -914,6 +989,15 @@ export interface TestExplanation {
    * unknown rather than empty, so selection always runs it.
    */
   unrecorded: boolean;
+  /**
+   * True when a unit recorded here credits no source. That entry claims nothing
+   * a diff can be matched against, which is unknown coverage wearing a
+   * recorded entry's clothes — so, like an unrecorded test, this file always
+   * runs. Reported separately because the two look nothing alike in the map and
+   * a reader chasing "why does this always run" has to be able to tell which
+   * one they have.
+   */
+  unmeasured: boolean;
 }
 
 /**
@@ -1240,6 +1324,20 @@ export async function explainPath(init: ExplainInit): Promise<ExplainResult> {
     nextIsFullRun: next.fullRun,
     ...(next.reason !== undefined ? { nextFullRunReason: next.reason } : {}),
     ...(source !== undefined ? { source } : {}),
-    ...(wantTest ? { test: { units, unrecorded: units.length === 0 } } : {}),
+    ...(wantTest
+      ? {
+          test: {
+            units,
+            unrecorded: units.length === 0,
+            // Asked of the entries through the same predicate selection uses,
+            // rather than re-derived from the sources listed above: explain
+            // exists to account for what the selector did, so it may not answer
+            // this from its own copy of the question.
+            unmeasured: map.entries.some(
+              (e) => e.test.file === rel && measuredNothing(e),
+            ),
+          },
+        }
+      : {}),
   };
 }
