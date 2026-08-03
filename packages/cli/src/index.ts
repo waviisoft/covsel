@@ -828,7 +828,18 @@ async function cmdStatus(): Promise<number> {
   const config = await loadConfig(cwd);
   const s = await computeStatus({ cwd, config });
   out(`map:        ${s.mapPath}\n`);
-  out(`exists:     ${s.exists ? 'yes' : 'no'}\n`);
+  // A file that is there and cannot be used is neither "yes" nor "no": reported
+  // as "no" it sends its reader looking for a map that is sitting at the path
+  // printed on the line above.
+  out(
+    `exists:     ${
+      s.mapState === 'usable'
+        ? 'yes'
+        : s.mapState === 'absent'
+          ? 'no'
+          : `yes, but not usable (${s.unusableReason ?? 'covsel cannot read it'})`
+    }\n`,
+  );
   if (s.discoveredTestCount !== undefined) {
     out(
       `discovered: ${s.discoveredTestCount} test file(s)${
@@ -836,7 +847,7 @@ async function cmdStatus(): Promise<number> {
       }\n`,
     );
   }
-  if (s.exists) {
+  if (s.mapState === 'usable') {
     const ageMin = s.ageMs !== undefined ? Math.round(s.ageMs / 60000) : undefined;
     out(
       `recorded:   ${s.recordedAt ?? 'unknown'}${ageMin !== undefined ? ` (${ageMin}m ago)` : ''}\n`,

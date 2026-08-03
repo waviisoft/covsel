@@ -935,6 +935,59 @@ describe('an adapter that cannot record', () => {
   });
 });
 
+describe('covsel status on a map it cannot use', () => {
+  /** Put `contents` at the path status prints, verbatim. */
+  function writeMapFile(cwd: string, contents: string): void {
+    mkdirSync(join(cwd, '.covsel'), { recursive: true });
+    writeFileSync(join(cwd, '.covsel', 'map.json'), contents);
+  }
+
+  it('does not print the path of a file and then say it is not there', async () => {
+    const { out } = await inProject({ 'package.json': pkg({}) }, async (cwd) => {
+      writeMapFile(
+        cwd,
+        JSON.stringify({
+          schemaVersion: MAP_SCHEMA_VERSION - 1,
+          granularity: 'file',
+          recordedAt: new Date().toISOString(),
+          sentinelHashes: {},
+          observed: ['**'],
+          entries: [],
+        }),
+      );
+      return captureStdout(() => main(['status']));
+    });
+
+    expect(out).toMatch(/exists: +yes, but not usable/);
+    expect(out).not.toMatch(/exists: +no/);
+    expect(out).toContain(`covsel reads v${MAP_SCHEMA_VERSION}`);
+    expect(out).toContain('re-record');
+  });
+
+  it('says no when there really is no map', async () => {
+    const { out } = await inProject({ 'package.json': pkg({}) }, () =>
+      captureStdout(() => main(['status'])),
+    );
+
+    expect(out).toMatch(/exists: +no/);
+  });
+
+  it('does not describe a map it could not read', async () => {
+    // The recorded-at, granularity, and entry counts below the header all come
+    // from a map that parsed; printing them for one that did not would be the
+    // same lie in the other direction.
+    const { out } = await inProject({ 'package.json': pkg({}) }, async (cwd) => {
+      writeMapFile(cwd, '{ "schemaVersion": ');
+      return captureStdout(() => main(['status']));
+    });
+
+    expect(out).toMatch(/exists: +yes, but not usable/);
+    expect(out).toContain('not valid JSON');
+    expect(out).not.toContain('granularity');
+    expect(out).not.toContain('entries:');
+  });
+});
+
 describe('the persisted adapter', () => {
   it('is what a command uses when no flag is given', async () => {
     const { code, err } = await inProject(

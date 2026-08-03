@@ -142,6 +142,19 @@ covsel status
 shows the store path, the map's age and size, whether any sentinel changed since
 record, and whether the next `affected` would be a full run.
 
+A map covsel cannot use is not a missing one, and `status` says which it is
+looking at:
+
+```
+map:        /repo/.covsel/map.json
+exists:     yes, but not usable (schema v2, covsel reads v3 -- re-record)
+next:       full run (recorded map is stale or has an incompatible schema)
+```
+
+The commonest cause is an upgrade: the map schema is versioned, and a covsel
+that reads a newer version rejects everything recorded under an older one.
+Re-record and the file is usable again.
+
 ### Ask about one file
 
 `status` describes the map as a whole and `affected` answers what a diff

@@ -40,7 +40,7 @@ import {
   type TestId,
 } from './schema.js';
 import { FileSelector } from './selector.js';
-import { LocalStore } from './store.js';
+import { LocalStore, type StoredMap } from './store.js';
 
 export interface GenericRecorderInit {
   command: string[];
@@ -707,7 +707,19 @@ export async function runAffected(
 
 export interface StatusResult {
   mapPath: string;
-  exists: boolean;
+  /**
+   * Whether the store holds a map covsel can use, one it cannot, or no file at
+   * all. The three are one decision to selection — anything but `usable` runs
+   * everything — and three different answers to someone asking why, which is
+   * the question this command exists to answer.
+   */
+  mapState: StoredMap['state'];
+  /**
+   * Why the stored map cannot be used, when `mapState` is `unusable`. Never the
+   * grounds for a decision, only the sentence that saves a reader from looking
+   * for a file that is right where covsel said it was.
+   */
+  unusableReason?: string;
   /**
    * Test files discovery found. Zero means covsel has nothing to select between,
    * whatever the map says, so it is reported alongside the map rather than
@@ -767,7 +779,11 @@ function nextSelection(
 export async function computeStatus(init: StatusInit): Promise<StatusResult> {
   const { cwd, config } = init;
   const store = new LocalStore({ cwd, dir: config.store.dir });
-  const map = await store.read();
+  // The diagnostic read, because this command reports rather than decides. What
+  // it decides is still the selection read's answer: nothing below narrows
+  // anything unless the map came back usable.
+  const stored = store.inspect();
+  const map = stored.state === 'usable' ? stored.map : undefined;
   const now = init.now ?? Date.now();
 
   // Discovery is what `affected` would select from, so a status that did not
@@ -792,11 +808,19 @@ export async function computeStatus(init: StatusInit): Promise<StatusResult> {
   if (!map) {
     return {
       mapPath: store.path(),
-      exists: false,
+      mapState: stored.state,
+      ...(stored.state === 'unusable' ? { unusableReason: stored.reason } : {}),
       discoveredTestCount: discovered.length,
       changedSentinels: [],
       nextIsFullRun: true,
-      ...(noTests !== undefined ? { nextFullRunReason: noTests } : {}),
+      // Always a reason now. Falling back to a generic "the map cannot be
+      // trusted" left the one user who most needs to know — the one whose map
+      // was rejected for a schema bump — with no hint that re-recording is the
+      // fix, and a reading in which the map was lost. The rejected map goes to
+      // the shared wording so status cannot answer this differently.
+      nextFullRunReason:
+        noTests ??
+        fullRunReason(config, stored.state === 'absent' ? undefined : stored.map, []),
     };
   }
 
@@ -824,7 +848,7 @@ export async function computeStatus(init: StatusInit): Promise<StatusResult> {
 
   return {
     mapPath: store.path(),
-    exists: true,
+    mapState: 'usable',
     discoveredTestCount: discovered.length,
     recordedAt: map.recordedAt,
     ageMs: now - Date.parse(map.recordedAt),

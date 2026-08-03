@@ -200,7 +200,7 @@ describe('a map that exists but holds no entries', () => {
   it('is reported by status as a full run rather than as select', async () => {
     writeEmptyMap();
     const status = await computeStatus({ cwd, config: matching });
-    expect(status.exists).toBe(true);
+    expect(status.mapState).toBe('usable');
     expect(status.entryCount).toBe(0);
     expect(status.nextIsFullRun).toBe(true);
     expect(status.nextFullRunReason).toMatch(/no entries/);
