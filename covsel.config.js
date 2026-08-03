@@ -30,8 +30,8 @@ export default {
   sourceGlobs: ['packages/*/src/**'],
 
   /*
-   * Tests whose coverage the recorder cannot see, and which therefore must run
-   * whatever the diff says.
+   * Tests whose coverage the recorder cannot see, named here as well as left to
+   * selection to work out.
    *
    * The Vitest adapter records what Vitest's own V8 coverage provider reports,
    * which is what ran *inside* the Vitest process. These three exercise covsel by
@@ -40,21 +40,13 @@ export default {
    * are really testing runs where that provider cannot see it, and each records
    * zero covered sources.
    *
-   * A zero-source entry reads to the selector as "this test covers nothing",
-   * which means it would never be selected: edit `observer.ts` and the test that
-   * exists to prove the observer works would sit the run out. Listing them here
-   * is the honest answer while the adapter's `observes` claim stays `**`.
-   *
-   * This list is the weak point of covsel's own adoption, and worth naming as
-   * such: nothing detects a *fourth* test becoming child-process-only. When that
-   * happens it silently stops being selected, and the guard it provides is lost
-   * from the selecting job until someone notices. Recomputing the list is
-   * mechanical — record, then look for entries whose `files` array is empty — but
-   * mechanical is not the same as automatic.
-   *
-   * covsel/covsel#55 tracks the general defect. Treating a zero-source entry as
-   * unknown coverage rather than measured absence, the way a test file with no
-   * entry at all is already treated, would make this list unnecessary.
+   * Selection now runs a test whose entry credits no source, because an entry
+   * that matches no possible change is unknown coverage rather than a
+   * measurement — so a fourth test becoming child-process-only is caught on its
+   * own, which is what this list could never do. Keeping the three is belt and
+   * braces, and cheap: it does not depend on their entries staying exactly
+   * empty, and an entry that picks up one incidental in-process source would
+   * stop qualifying while still missing everything it actually tests.
    */
   alwaysRun: [
     'packages/cli/test/built-artifact.test.ts',

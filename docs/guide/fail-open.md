@@ -5,6 +5,8 @@ have run_. So every design tension resolves toward **over-selection**:
 
 - New or changed test files **always run**, and so does any discovered test the
   map says nothing about — unknown coverage never reads as "covers nothing".
+  So does a test whose entry credits **no source at all**: the entry is there,
+  but nothing a diff can carry will ever match it.
 - Changes to **sentinel files** (`package.json`, tsconfig, lockfile, test setup)
   invalidate the map and trigger a **full run**.
 - Changes to **covsel's own config** trigger a **full run**, whatever your
@@ -22,8 +24,8 @@ have run_. So every design tension resolves toward **over-selection**:
   ran.
 - An executed script the recorder **cannot map back to any source** fails the
   recording, and no map is written. A bundle with no source map covers nothing
-  that can be named, and an entry that credits nothing is read as a test that
-  covers nothing.
+  that can be named, so every test behind it would credit nothing — a recording
+  that measured none of the suite it just ran, wearing a healthy map's clothes.
 - Non-JS dependencies coverage can't see (fixtures, snapshots, templates) are
   handled by user-declared `alwaysRun` globs.
 
@@ -80,6 +82,53 @@ it could not see fails the recording: that contradiction resolved the other way
 turns a recorder's own admission that it is blind somewhere into a map asserting
 it was watching.
 
+## A test that covered nothing
+
+An entry with an empty file list reads to a selector exactly like a test that
+covers nothing: no changed path matches it, so nothing ever selects it. The two
+situations behind it are opposites, though. Either the test really executes
+nothing — rare, and usually a test asserting on constants — or, far more often,
+**the recorder could not see what it executed**, because the test drives its
+subject in a child process, a worker, or a browser its coverage mechanism does
+not reach.
+
+A recorder declares its blind spots in `observed`, but that is one scope for the
+whole run, and it cannot say "this adapter sees everything except what these
+particular tests do". So the empty entry falls straight through it. covsel
+resolves it the same way it resolves a discovered test with no entry at all:
+**an entry crediting nothing is unknown coverage, not measured absence**, and
+the test file runs on every selection until it credits something. A test that
+genuinely covers nothing then runs when it need not, which is the cheap way to
+be wrong.
+
+The whole file runs, not just the unit that credits nothing. A recorder that
+could not see one test of a file has not earned trust in what it recorded for
+the tests beside it. Merging shard maps preserves it too: a test one shard
+credits with nothing keeps crediting nothing, instead of inheriting the coverage
+another shard happened to see.
+
+Recording says so as it happens, and `status` counts it afterwards, because a
+test that always runs is a cost you should be able to see:
+
+```
+  recorded test/built-artifact.test.js (1 tests, 0 sources)
+  NO SOURCES test/built-artifact.test.js: 1 of 1 unit(s) recorded no covered
+  source; nothing they executed was seen, so this file is selected on every run
+```
+
+```
+entries:    31
+unmeasured: 3 entry(ies) cover no source -- their test files are selected on every run
+```
+
+`covsel explain <test file>` says the same thing about one test, and
+distinguishes it from a test the map does not record at all — both always run,
+for related but different reasons.
+
+Recording is **not** refused over this. A test that legitimately covers nothing
+is allowed to exist, and failing the run would leave the project with no map at
+all over something selection handles safely.
+
 ## A script that cannot be mapped
 
 This rule belongs to the recorders that observe raw V8 coverage — the generic
@@ -92,9 +141,11 @@ build published no source map, there is no way back to the sources behind it,
 and the honest answer is that the recording failed — not that those tests cover
 nothing. This is reachable from a stock bundler setup: `vite build` emits no
 source map unless you ask for one, and `sourcemap: 'hidden'` writes the map but
-strips the comment pointing at it. Recording against such a build used to
-produce entries that existed and credited nothing, so editing the file every
-test executes selected zero tests.
+strips the comment pointing at it. Recording against such a build produces
+entries that exist and credit nothing — and while selection now runs those
+rather than skipping them, a map whose entries all credit nothing narrows
+nothing at all. Refusing it names the build that caused it, at the one moment
+the cause is visible.
 
 So a script that executed and resolves to no source in your repository fails the
 recording, naming the script, and no map is written. covsel looks for the map in
