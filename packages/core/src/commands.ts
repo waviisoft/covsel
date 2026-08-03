@@ -56,10 +56,19 @@ export interface GenericRecorderInit {
    * recorder can establish. A command arrives here as an argv somebody typed,
    * and one that drives a browser, shells out to another runtime, or runs its
    * tests in a container looks exactly like one that does not. Set it only when
-   * you know the runner — a caller that wrote the command, or an adapter for a
-   * runner that executes its own sources directly. Left unset, entries carry no
-   * packages and the map no inventory, so the recording holds no opinion about
-   * dependencies and a change to one is left to the lockfile sentinel.
+   * you know this run: a caller that wrote the command, and knows the suite it
+   * names executes nothing outside that tree.
+   *
+   * It is never a blanket answer for a runner. The claim is about where the code
+   * under test runs, not about how the runner loads it — a runner that executes
+   * its own sources directly can still be pointed at a spec that drives a
+   * browser, and an adapter vouching for every project that uses it would make
+   * the same guess this input exists to refuse.
+   *
+   * Left unset, entries carry no packages and the map no inventory, so the
+   * recording holds no opinion about dependencies and a change to one is left to
+   * the lockfile sentinel, which the default `sentinels` cover for npm, pnpm,
+   * and yarn.
    *
    * It does not widen `observes`, which is `**` either way: what an unvouched
    * command hides is a process boundary, and a repo-path scope cannot describe

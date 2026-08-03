@@ -5,8 +5,8 @@
 A recording can now capture which installed packages each test executed, and what
 was installed at the time, for a recorder whose caller vouches that the run
 executes everything under test in the Node process tree covsel spawns. Nothing
-selects on it yet — every lockfile change is still the full run it is today — but
-both halves are on disk and inspectable.
+selects on it yet — every lockfile change your `sentinels` name is still the full
+run it is today — but both halves are on disk and inspectable.
 
 `MapEntry` gains `packages`, the names of the packages a test ran code in.
 `CoverageMap` gains `dependencies`: the package manager, its install marker and
@@ -22,7 +22,9 @@ without an install would leave the tree looking unchanged, and "nothing changed"
 computed against a stale install is the answer that skips tests. pnpm writes a
 byte-identical copy of its lockfile into the store, npm a hidden lockfile, and
 yarn its install state; bun and yarn's PnP linker write nothing usable, so a
-project on either records no `dependencies` and keeps falling open. So does a
+project on either records no `dependencies`, and nothing measures what it
+installed — a change there is answered by whatever its `sentinels` name, and the
+default list does not name bun's lockfile. So does a
 tree carrying two managers' markers, where which install it reflects is
 unknowable.
 

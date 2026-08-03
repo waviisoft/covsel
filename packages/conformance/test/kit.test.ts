@@ -143,10 +143,13 @@ const partialViewSpec: AdapterConformanceSpec = {
  * The package declaration of the recorder being wrapped.
  *
  * These stand-ins vary one thing each and pass the real recorder's units
- * through otherwise, packages included. The declaration has to travel with
- * them: recording refuses a recorder whose units report packages it has not
- * claimed to watch, so a wrapper that dropped it would fail for a reason none
- * of these tests is about.
+ * through otherwise, packages included. Whatever the wrapped recorder declares
+ * has to travel with them, or a wrapper would contradict its own units for a
+ * reason none of these tests is about.
+ *
+ * The probe vouches for no command, so today there is no declaration to forward
+ * and its units carry no packages. This keeps the two agreeing either way rather
+ * than encoding which it currently is.
  */
 function forwardPackageClaim(real: Recorder): { observesPackages?: boolean } {
   return real.observesPackages === undefined

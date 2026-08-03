@@ -22,9 +22,10 @@ import {
  * What a recording has to know before a dependency bump can select anything:
  * which packages each test executed, and what was installed at the time.
  *
- * Nothing here selects. Both halves are recorded and neither is read yet, so
- * every lockfile change is still the full run it is today — which is the point
- * of landing them separately from the selection that will use them.
+ * Nothing here selects. Both halves are recorded and neither is read yet, so a
+ * lockfile change is still answered by the sentinel list, exactly as it is today
+ * — which is the point of landing them separately from the selection that will
+ * use them.
  */
 
 const dirs: string[] = [];
@@ -153,7 +154,9 @@ describe('recording what was installed', () => {
   it('records nothing when the package manager leaves no proof', async () => {
     // A bun project. The packages each test ran are still recorded, but with no
     // way to tell a fresh tree from a stale one there is nothing to measure a
-    // change against, and every dependency change keeps falling open.
+    // change against, so nothing here can ever answer a dependency change --
+    // which for bun means its sentinels answer it or nothing does, since the
+    // default list does not name `bun.lock`.
     const map = await record(fixture({ marker: false }));
 
     expect(map.dependencies).toBeUndefined();
@@ -196,7 +199,13 @@ describe('what the generic recorder may claim about the command it was handed', 
     // a browser or shells out to another runtime is indistinguishable from one
     // that runs everything under NODE_V8_COVERAGE. Declaring anyway would vouch
     // for packages nothing watched.
-    expect(handed(fixture()).observesPackages).toBeUndefined();
+    //
+    // A bare directory rather than the fixture: the declaration is made when the
+    // recorder is built, before anything has been run or read.
+    const cwd = mkdtempSync(join(tmpdir(), 'covsel-pkgclaim-'));
+    dirs.push(cwd);
+
+    expect(handed(cwd).observesPackages).toBeUndefined();
   });
 
   it('leaves its units silent about packages rather than reporting what it cannot stand behind', async () => {

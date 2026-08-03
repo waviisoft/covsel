@@ -14,7 +14,8 @@
  * spawns is a fact about the command, and the adapter that wraps whatever it is
  * handed is the one that cannot know it. A generic recording therefore carries
  * no package information at all, and holds no opinion about a dependency change:
- * answering one is left to the lockfile sentinel.
+ * answering one is left to the lockfile sentinel, which the default `sentinels`
+ * cover for npm, pnpm, and yarn.
  */
 import {
   type Adapter,
