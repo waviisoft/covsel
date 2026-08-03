@@ -32,7 +32,11 @@ export const genericAdapter: Adapter = {
     return [...new Set(tests.map((t) => t.file))];
   },
   createRecorder(init: RecorderInit): Recorder {
-    return createGenericRecorder(init);
+    // Named through rather than forwarded whole, so "vouches for no command" is
+    // a property of this code and not of what a caller happened to pass: an
+    // init carrying the assertion cannot reach the recorder through here.
+    const { command, cwd, config } = init;
+    return createGenericRecorder({ command, cwd, config });
   },
 };
 

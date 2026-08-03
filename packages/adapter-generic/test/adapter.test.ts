@@ -9,11 +9,17 @@ describe('generic adapter', () => {
     // has its entries paired with an inventory of what was installed, and a
     // package in that inventory which no entry credits reads as "installed and
     // never ran" -- so a browser-only dependency moving would select nothing.
+    // The in-process-looking names are here on purpose. The tempting wrong fix
+    // is an allowlist of runner binaries, and a probe that only ever passes
+    // commands nobody would allowlist would certify one.
     const config = resolveConfig({});
 
     for (const command of [
       ['node', '--test'],
       ['npx', 'playwright', 'test'],
+      ['npx', 'vitest', 'run'],
+      ['pnpm', 'jest'],
+      ['mocha', '--recursive'],
     ]) {
       const recorder = genericAdapter.createRecorder({
         command,
