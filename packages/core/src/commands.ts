@@ -9,6 +9,7 @@ import {
   type CovselConfig,
   type CovselConfigInput,
   recordedConfig,
+  recordedConfigOf,
   resolveConfig,
 } from './config.js';
 import { discoverTestFiles, isTestFile } from './discover.js';
@@ -1176,7 +1177,10 @@ export async function explainPath(init: ExplainInit): Promise<ExplainResult> {
       };
     }
     if (!isConfigFile) return undefined;
-    return recorded?.config !== undefined
+    // Asked the way the policy asks it, so a map whose record of its
+    // configuration covsel cannot read is reported as what it is: one with
+    // nothing to compare against, whose config change forces a run.
+    return recorded !== undefined && recordedConfigOf(recorded) !== undefined
       ? {
           always: false,
           why:

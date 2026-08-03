@@ -126,10 +126,12 @@ describe('mergeMaps', () => {
   it('keeps the recorded config when shards agree, however it was written', () => {
     const merged = mergeMaps([
       shard({ config: recorded({ sourceGlobs: ['src/**'] }) }),
-      // The same values reached by a different route: `sentinels` is not part of
+      // The same values reached by a different route: `store` is not part of
       // what a map records, so the shards recorded under one configuration and
       // the merged map may say so.
-      shard({ config: recorded({ sourceGlobs: ['src/**'], sentinels: ['a.json'] }) }),
+      shard({
+        config: recorded({ sourceGlobs: ['src/**'], store: { dir: 'elsewhere' } }),
+      }),
     ]);
     expect(merged.config).toEqual(recorded({ sourceGlobs: ['src/**'] }));
   });

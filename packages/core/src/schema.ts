@@ -1,4 +1,4 @@
-import type { RecordedConfig } from './config.js';
+import type { ConfigDigests } from './config.js';
 
 /**
  * The on-disk coverage-map schema. This is a versioned, stable contract:
@@ -125,8 +125,8 @@ export interface CoverageMap {
   /** Hashes of sentinel files at record time; any change invalidates the map. */
   sentinelHashes: Record<string, string>;
   /**
-   * The configuration this was recorded under, restricted to the fields whose
-   * values shape what the map means.
+   * The configuration this was recorded under: one digest per compared field,
+   * keyed by field name.
    *
    * A map is meaningful only under the configuration it was recorded with, and
    * this is what lets a later run ask whether that configuration actually
@@ -134,12 +134,16 @@ export interface CoverageMap {
    * appears in the diff, which answers yes to a reworded comment and no to a
    * value that changed for a reason the diff cannot show.
    *
-   * Absent means fall open: a map recorded before this was written, or merged
-   * from shards that disagreed about their configuration, has no recorded
-   * configuration to compare against, and any change to a config file keeps
-   * forcing the full run it forces today.
+   * Digested rather than stored, because a map travels: it is published to an
+   * archive other machines fetch, and a config holds paths that can be absolute
+   * and URL prefixes that can name an internal host. The comparison only asks
+   * whether a field moved, which a digest answers in full.
+   *
+   * Absent -- or present but not a record of digests, which is the same thing
+   * covsel can do nothing with -- means fall open: any change to a config file
+   * keeps forcing the full run it forces today.
    */
-  config?: RecordedConfig;
+  config?: ConfigDigests;
   /**
    * Repo-relative globs the recording was able to observe execution within.
    *

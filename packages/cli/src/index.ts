@@ -31,6 +31,7 @@ import {
   mergeMaps,
   publishMap,
   recordMap,
+  resolveConfig,
   resolveConfigFor,
   runAffected,
   runAffectedSelection,
@@ -175,6 +176,32 @@ function makeRecorder(
  */
 async function loadConfigFor(cwd: string, adapter: Adapter): Promise<CovselConfig> {
   return resolveConfigFor(adapter, await loadRawConfig(cwd));
+}
+
+/**
+ * The config for a command that reports on selection without performing one.
+ *
+ * `status` and `explain` answer "what will covsel do", so they have to resolve
+ * configuration exactly as the commands that do it -- through the adapter, which
+ * fills `testGlobs` for a runner whose tests are not `*.test.*` sources. Reading
+ * it without the adapter gives a different `testGlobs` for those projects, and
+ * since `testGlobs` is one of the fields a map records, `status` would report a
+ * configuration change on every run while `run` narrowed happily. Two commands
+ * answering the same question differently is the failure here; the wrong globs
+ * are only how it shows.
+ *
+ * An adapter that cannot be resolved is not fatal the way it is for a command
+ * that must record or run: reporting on the map is still worth doing without
+ * one, so this falls back to the project's own configuration.
+ */
+async function loadConfigForReport(cwd: string, argv: string[]): Promise<CovselConfig> {
+  const raw = await loadRawConfig(cwd);
+  const name = flag(argv, 'adapter') ?? raw.adapter ?? DEFAULT_ADAPTER;
+  try {
+    return resolveConfigFor(await loadAdapter(name, cwd), raw);
+  } catch {
+    return resolveConfig(raw);
+  }
 }
 
 function reportSelection(result: AffectedResult): void {
@@ -846,9 +873,9 @@ async function cmdWatch(argv: string[]): Promise<number> {
   }
 }
 
-async function cmdStatus(): Promise<number> {
+async function cmdStatus(argv: string[]): Promise<number> {
   const cwd = process.cwd();
-  const config = await loadConfig(cwd);
+  const config = await loadConfigForReport(cwd, argv);
   const s = await computeStatus({ cwd, config });
   out(`map:        ${s.mapPath}\n`);
   out(`exists:     ${s.exists ? 'yes' : 'no'}\n`);
@@ -1065,7 +1092,7 @@ async function cmdExplain(argv: string[]): Promise<number> {
   }
   const all = hasFlag(argv, 'all');
   const cwd = process.cwd();
-  const config = await loadConfig(cwd);
+  const config = await loadConfigForReport(cwd, argv);
   const result = await explainPath({ cwd, config, path: target });
   if (!result.ok) {
     err(`covsel explain: ${result.error ?? `cannot explain ${target}`}\n`);
@@ -1284,7 +1311,7 @@ export async function main(argv: string[] = process.argv.slice(2)): Promise<numb
     case 'watch':
       return cmdWatch(rest);
     case 'status':
-      return cmdStatus();
+      return cmdStatus(rest);
     case 'explain':
       return cmdExplain(rest);
     case 'merge':

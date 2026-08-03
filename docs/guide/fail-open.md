@@ -241,8 +241,8 @@ glance.
 ## What a config change is measured against
 
 A map is meaningful only under the configuration it was recorded with, which is
-a statement about that configuration's **values**. So the map records them, and
-selection compares the values in force against the ones it holds. A full run
+a statement about that configuration's **values**. So the map records a digest
+of each one, and selection compares the values in force against them. A full run
 follows when a field differs, and `covsel status` names which:
 
 ```
@@ -268,17 +268,37 @@ Every sentinel keeps its unconditional full run for the same reason it exists:
 covsel cannot read your `tsconfig.json` or your test setup for meaning, and does
 not guess.
 
-Four fields are left out of the comparison, because a change to one cannot leave
-the map meaning something other than what selection reads from it: `alwaysRun`
-and `sentinels` are applied from the configuration in force on every run, `store`
-says where the map is kept rather than what it says, and `adapter` names the
-recorder, whose every consequence for selection is written into the map by the
-recording itself. Everything else is compared, including any field added later.
+One field is left out: `store` says where the map is kept, not what it says.
+Point it somewhere else and a different map is read, or none, which falls open
+on its own. Everything else is compared, including any field added later — a
+field admitted as inert is one that silently stops forcing a full run when it
+moves, so the list of them is kept to what can be argued.
+
+`alwaysRun` and `sentinels` are compared even though both are read from the
+configuration in force, and so cannot leave the map meaning one thing while
+selection reads another. The commit that _removes_ one is why: it drops a file
+from `sentinels` and edits that same file, and without the comparison the very
+diff that gives up the protection is the one that goes unprotected.
+
+What the map stores is a digest per field, not the values. A map travels — it is
+published to an archive other machines fetch — and `sourceMaps.buildDirs` holds
+paths that can be absolute and URL prefixes that can name an internal host. The
+comparison only asks whether a field moved, and a digest answers that in full
+while still naming the field.
+
+A value covsel cannot serialise faithfully — a `RegExp`, a `Map`, a function, all
+of which a `.js` config can hold — reads as changed on every run rather than as
+equal to another one it also cannot read.
 
 A map recorded before covsel recorded its configuration carries none, and falls
 open on any change to a config file — the behavior every map had before this
 existed. So does a map merged from shards that disagreed about the configuration
-they were recorded under.
+they were recorded under, and one whose record of it is unreadable.
+
+One consequence worth expecting: after a covsel upgrade that _adds_ a
+configuration field, every map recorded before it reports that field as changed
+until it is re-recorded. The full run is correct — the map was recorded without
+the field — but the reason names a field you did not touch.
 
 ## How the map enforces it
 

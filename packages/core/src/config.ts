@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto';
 import { existsSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { pathToFileURL } from 'node:url';
@@ -147,53 +148,115 @@ export function resolveConfig(partial?: CovselConfigInput): CovselConfig {
  * A denylist rather than an allowlist, and deliberately so: everything else is
  * compared, so a field added to the config later is compared from the day it
  * exists rather than admitted as inert by an allowlist nobody remembered to
- * extend. Adding a name here is a claim that has to be argued, and the four
- * below are:
+ * extend. Adding a name here is a claim that has to be argued, and only one
+ * field survives the argument: `store` says where the map is kept, not what it
+ * says. Point it somewhere else and a different map is read -- or none, which
+ * falls open on its own.
  *
- *  - `alwaysRun` and `sentinels` are read from the configuration in force at
- *    selection time and applied to the diff in front of it. A change to either
- *    takes effect on the next run whatever the map says, so it cannot leave the
- *    map meaning one thing while selection reads another.
- *  - `store` says where the map is kept, not what it says. Point it somewhere
- *    else and a different map is read -- or none, which falls open on its own.
- *  - `adapter` names the recorder. Every consequence its identity has for
- *    selection -- what it was able to observe, what granularity it recorded at
- *    -- is written into the map by the recording itself, so the name adds
- *    nothing selection reads. It is also the one field a CLI flag overrides,
- *    and comparing it would make `--adapter` on one invocation and not the next
- *    look like a configuration change.
+ * `alwaysRun` and `sentinels` are not here, though they are read from the
+ * configuration in force and so cannot leave the map meaning one thing while
+ * selection reads another. The diff that *removes* one is the case: a commit
+ * that drops a file from `sentinels` and edits that same file would, if this
+ * were inert, take effect immediately and select nothing for a file nothing can
+ * attribute. They change rarely, so comparing them costs almost nothing and
+ * keeps the transition covered.
  */
-const INERT_CONFIG_FIELDS = ['adapter', 'alwaysRun', 'sentinels', 'store'] as const;
+const INERT_CONFIG_FIELDS = ['store'] as const;
 
 /**
- * The configuration a map is recorded under, as the map stores it: every
- * resolved field whose value shapes what the map means.
+ * A map's record of the configuration it was recorded under: one digest per
+ * compared field, keyed by field name.
+ *
+ * Digests rather than values, for two reasons. A map is published to an archive
+ * other machines fetch, and `sourceMaps.buildDirs` holds paths that can be
+ * absolute and URL prefixes that can name an internal host -- none of which a
+ * map has ever carried before, and none of which this feature needs. And the
+ * comparison only ever asks whether a field moved, so a digest answers it in
+ * full while naming the field it belongs to.
  */
-export type RecordedConfig = Omit<CovselConfig, (typeof INERT_CONFIG_FIELDS)[number]>;
+export type ConfigDigests = Record<string, string>;
 
-/** The part of a resolved config a map records, for a later run to compare against. */
-export function recordedConfig(config: CovselConfig): RecordedConfig {
-  const view: Record<string, unknown> = { ...config };
-  for (const field of INERT_CONFIG_FIELDS) delete view[field];
-  return view as RecordedConfig;
-}
+/**
+ * The digest of a value covsel cannot serialise faithfully, which therefore
+ * never compares equal to anything, including itself.
+ *
+ * A config file is `.js` and is never type-checked, so a field can hold a
+ * `RegExp`, a `Map`, a class instance or a function. Enumerating own properties
+ * renders every one of those as `{}`, which would make two different values
+ * agree -- and agreement is the answer that narrows a selection. Refusing to
+ * represent them means the field reads as changed on every run instead, which
+ * costs a full run and cannot cost a test.
+ */
+const OPAQUE = 'opaque';
 
 /**
  * Serialise a value so two configs compare by content: object keys sort, array
  * order is kept because it is meaningful in every field that holds one, and an
  * explicit `undefined` reads as the absence a JSON round-trip turns it into.
+ *
+ * Returns `undefined` for anything it cannot represent faithfully, which the
+ * caller must treat as changed rather than as equal.
  */
-function canonical(value: unknown): string {
+function canonical(value: unknown): string | undefined {
   if (value === undefined) return 'absent';
-  if (Array.isArray(value)) return `[${value.map(canonical).join(',')}]`;
-  if (typeof value === 'object' && value !== null) {
-    const fields = Object.entries(value as Record<string, unknown>)
+  if (value === null) return 'null';
+  if (Array.isArray(value)) {
+    const items = value.map(canonical);
+    return items.some((item) => item === undefined) ? undefined : `[${items.join(',')}]`;
+  }
+  if (typeof value === 'object') {
+    // Own enumerable properties describe a plain object and nothing else: a Map
+    // has none, a RegExp has none, a Date has none, and each would render as the
+    // same empty object as the next.
+    if (Object.prototype.toString.call(value) !== '[object Object]') return undefined;
+    const fields: string[] = [];
+    for (const [key, item] of Object.entries(value as Record<string, unknown>)
       .filter(([, v]) => v !== undefined)
-      .sort(([a], [b]) => (a < b ? -1 : 1))
-      .map(([k, v]) => `${JSON.stringify(k)}:${canonical(v)}`);
+      .sort(([a], [b]) => (a < b ? -1 : 1))) {
+      const rendered = canonical(item);
+      if (rendered === undefined) return undefined;
+      fields.push(`${JSON.stringify(key)}:${rendered}`);
+    }
     return `{${fields.join(',')}}`;
   }
-  return JSON.stringify(value);
+  // Everything left is a primitive, and `JSON.stringify` is typed `string` while
+  // returning `undefined` for a function or a symbol -- which is exactly the
+  // unrepresentable case, so it needs no separate test.
+  return JSON.stringify(value) as string | undefined;
+}
+
+/** The digest of one field's value, or the marker for one covsel cannot read. */
+function digest(value: unknown): string {
+  const rendered = canonical(value);
+  if (rendered === undefined) return OPAQUE;
+  return `sha256:${createHash('sha256').update(rendered).digest('hex').slice(0, 32)}`;
+}
+
+/** What a map records about the configuration it was recorded under. */
+export function recordedConfig(config: CovselConfig): ConfigDigests {
+  const values: Record<string, unknown> = { ...config };
+  for (const field of INERT_CONFIG_FIELDS) delete values[field];
+  const digests: ConfigDigests = {};
+  for (const [field, value] of Object.entries(values)) digests[field] = digest(value);
+  return digests;
+}
+
+/**
+ * A map's recorded configuration, when it has one covsel can compare against.
+ *
+ * A map carrying a `config` that is not a record of digests -- `null`, a
+ * number, a hand-edited fragment -- is one whose recording covsel cannot
+ * interrogate, which is the same position as a map that recorded none at all:
+ * the caller falls back to the check that reads the diff. Answering with a
+ * throw instead would turn `affected`, `status` and `merge` into a stack trace
+ * over a field whose whole purpose is to make a run safer.
+ */
+export function recordedConfigOf(map: { config?: unknown }): ConfigDigests | undefined {
+  const recorded = map.config;
+  if (typeof recorded !== 'object' || recorded === null || Array.isArray(recorded)) {
+    return undefined;
+  }
+  return recorded as ConfigDigests;
 }
 
 /**
@@ -204,16 +267,21 @@ function canonical(value: unknown): string {
  * in between -- a reworded comment, a reformatted array, a key that moved. The
  * question a full run turns on is whether a value covsel reads has moved, and
  * this is that question asked directly instead of inferred from a diff.
+ *
+ * A field covsel could not represent on either side counts as changed, since
+ * two values it cannot read are not two values it knows to be the same.
  */
 export function changedConfigFields(
-  before: RecordedConfig,
-  after: RecordedConfig,
+  before: ConfigDigests,
+  after: ConfigDigests,
 ): string[] {
-  const from = before as Record<string, unknown>;
-  const to = after as Record<string, unknown>;
-  const names = new Set([...Object.keys(from), ...Object.keys(to)]);
+  const names = new Set([...Object.keys(before), ...Object.keys(after)]);
   return [...names]
-    .filter((name) => canonical(from[name]) !== canonical(to[name]))
+    .filter((name) => {
+      const from = before[name];
+      const to = after[name];
+      return from === OPAQUE || to === OPAQUE || from !== to;
+    })
     .sort();
 }
 

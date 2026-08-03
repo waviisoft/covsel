@@ -1,5 +1,5 @@
 import { agreedScope } from './combine.js';
-import { changedConfigFields, type RecordedConfig } from './config.js';
+import { changedConfigFields, type ConfigDigests, recordedConfigOf } from './config.js';
 import {
   type CoverageMap,
   type CoveredBlock,
@@ -24,6 +24,29 @@ function byKey(a: string, b: string): number {
 }
 
 /**
+ * The configuration every shard agrees it recorded under, if there is one.
+ *
+ * A merged map claims one configuration for every entry in it, and shards that
+ * disagree have no single answer to make that claim with: one shard's entries
+ * were measured under `sourceGlobs` the other's were not, and a merged map
+ * naming either would vouch for entries recorded under the other. A shard with
+ * no recorded configuration says nothing about its own, which is the same
+ * absence -- as is one whose record of it covsel cannot read.
+ *
+ * Dropping it costs a full run on the next config change, which is what a map
+ * without one gets anyway.
+ */
+function agreedConfig(maps: CoverageMap[]): ConfigDigests | undefined {
+  const first = maps[0] === undefined ? undefined : recordedConfigOf(maps[0]);
+  if (first === undefined) return undefined;
+  const identical = maps.every((m) => {
+    const other = recordedConfigOf(m);
+    return other !== undefined && changedConfigFields(first, other).length === 0;
+  });
+  return identical ? first : undefined;
+}
+
+/**
  * The installed tree every shard agrees it recorded against, if there is one.
  *
  * The analogue of {@link agreedScope}, and safe for the same reason: a smaller
@@ -35,28 +58,6 @@ function byKey(a: string, b: string): number {
  * describe different resolutions of the same names, and a merged inventory
  * would vouch for a package at a version half the entries never ran.
  */
-/**
- * The configuration every shard agrees it recorded under, if there is one.
- *
- * A merged map claims one configuration for every entry in it, and shards that
- * disagree have no single answer to make that claim with: one shard's entries
- * were measured under `sourceGlobs` the other's were not, and a merged map
- * naming either would vouch for entries recorded under the other. A shard with
- * no recorded configuration says nothing about its own, which is the same
- * absence.
- *
- * Dropping it costs a full run on the next config change, which is what a map
- * without one gets anyway.
- */
-function agreedConfig(maps: CoverageMap[]): RecordedConfig | undefined {
-  const first = maps[0]?.config;
-  if (first === undefined) return undefined;
-  const identical = maps.every(
-    (m) => m.config !== undefined && changedConfigFields(first, m.config).length === 0,
-  );
-  return identical ? first : undefined;
-}
-
 function agreedDependencies(maps: CoverageMap[]): MapDependencies | undefined {
   const first = maps[0]?.dependencies;
   if (first === undefined) return undefined;

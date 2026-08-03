@@ -3,6 +3,7 @@ import {
   CONFIG_FILES,
   type CovselConfig,
   recordedConfig,
+  recordedConfigOf,
 } from './config.js';
 import type { Change, Policy } from './interfaces.js';
 import { makeMatcher, makeStrictMatcher } from './match.js';
@@ -27,48 +28,39 @@ const CONFIG_FILE_NAMES: ReadonlySet<string> = new Set<string>(CONFIG_FILES);
  * changed back across the recorded commit -- no file changed and the map does
  * not mean what selection is about to read.
  *
- * A map that recorded no configuration cannot be asked, and falls back to the
- * question the diff can answer: did a config file change at all. That is what
- * every map recorded before this existed gets, and it is today's behaviour.
+ * A map that recorded no configuration cannot be asked -- nor one whose record
+ * of it covsel cannot read -- and falls back to the question the diff can
+ * answer: did a config file change at all. That is what every map recorded
+ * before this existed gets, and it is today's behaviour.
  *
  * This is checked ahead of the project's own `sentinels` rather than added to
  * their defaults, because that list replaces wholesale when a project sets it —
  * and a project that tightens its sentinels should not lose the one that
- * protects the meaning of the map itself.
+ * protects the meaning of the map itself. It does not go the other way: a config
+ * file a project *did* put in `sentinels` keeps the unconditional full run that
+ * declaration asks for. covsel's defaults name no config file, so nobody lists
+ * one to keep a default, and the project may well have a reason covsel cannot
+ * see from the values it reads -- a test that loads the file as data covers it
+ * in no way any recorder can observe. The narrowing stays available by dropping
+ * the file from the list, since this check runs whatever the list says.
  */
 function changedCovselConfig(
   config: CovselConfig,
   map: CoverageMap,
   changes: Change[],
 ): string | undefined {
-  if (map.config === undefined) {
+  const recorded = recordedConfigOf(map);
+  if (recorded === undefined) {
     const file = changes.find((c) => CONFIG_FILE_NAMES.has(c.file))?.file;
     return file === undefined
       ? undefined
       : `${file} changed, so the map was recorded under a different configuration`;
   }
-  const fields = changedConfigFields(map.config, recordedConfig(config));
+  const fields = changedConfigFields(recorded, recordedConfig(config));
   return fields.length === 0
     ? undefined
     : `configuration changed since the map was recorded: ${fields.join(', ')}`;
 }
-
-/**
- * A note on the sentinel list, which this check deliberately leaves alone.
- *
- * Judging covsel's own config by its values does not extend to a config file a
- * project put in `sentinels`. covsel's defaults name no config file, so nobody
- * lists one to keep a default -- listing it is a deliberate declaration that a
- * change to that file runs everything, and the project may well have a reason
- * covsel cannot see from the values it reads: a test that loads the file as data
- * covers it in no way any recorder can observe. Second-guessing that declaration
- * would trade a guarantee the project asked for against CI minutes it already
- * decided to spend.
- *
- * The narrowing is still there for the asking, and is the default: drop the file
- * from `sentinels` and the check above -- which runs whatever the list says --
- * gives the sharper answer.
- */
 
 /**
  * The first changed path the recording was not in a position to observe, if

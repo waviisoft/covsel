@@ -67,10 +67,14 @@ export default {
    * This file is deliberately not among them, and listing it would be a choice
    * with a cost. Selection already asks about it, ahead of this list and without
    * consulting it, and asks a better question than a path match can: the map
-   * records the values it was recorded under, so a change here forces a full run
-   * when it moves one of them and not when it moves a comment. Naming it as a
-   * sentinel would only take that back, and every edit to the prose above would
-   * cost the whole suite again.
+   * records a digest of every value it was recorded under, so a change here
+   * forces a full run when it moves one of them and not when it moves a comment.
+   * Naming it as a sentinel would only take that back, and every edit to the
+   * prose above would cost the whole suite again.
+   *
+   * Editing the list itself does force one, since `sentinels` is among the
+   * values compared -- which is the point of comparing it, because this very
+   * edit removed a file from the list.
    */
   sentinels: [
     'package.json',

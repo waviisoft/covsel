@@ -11,7 +11,8 @@ import {
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterAll, afterEach, describe, expect, it, vi } from 'vitest';
-import { MAP_SCHEMA_VERSION } from '@covsel/core';
+import { MAP_SCHEMA_VERSION, recordedConfig, resolveConfigFor } from '@covsel/core';
+import { loadAdapter } from '../src/adapters.js';
 import { VERSION, main } from '../src/index.js';
 
 /** What the stubbed prompt answers; set by `answering`. */
@@ -306,7 +307,12 @@ function stubPackageManager(
  * A community adapter is a package like any other, and only an installed one
  * tells "covsel has not heard of this name" apart from "nothing provides it".
  */
-function stubAdapterPackage(cwd: string, packageName: string, name: string): void {
+function stubAdapterPackage(
+  cwd: string,
+  packageName: string,
+  name: string,
+  defaultTestGlobs?: string[],
+): void {
   const dir = join(cwd, 'node_modules', packageName);
   mkdirSync(dir, { recursive: true });
   writeFileSync(
@@ -317,6 +323,9 @@ function stubAdapterPackage(cwd: string, packageName: string, name: string): voi
     join(dir, 'index.js'),
     'export const adapter = {\n' +
       `  name: ${JSON.stringify(name)},\n` +
+      (defaultTestGlobs === undefined
+        ? ''
+        : `  defaultTestGlobs: ${JSON.stringify(defaultTestGlobs)},\n`) +
       '  formatSelection: (tests) => tests.map((t) => t.file),\n' +
       "  createRecorder: () => ({ observes: ['**'], record: async () => [] }),\n" +
       '};\n',
@@ -1043,7 +1052,11 @@ describe('covsel publish and fetch', () => {
 });
 
 /** Write a map with entries into a project's store. */
-function writeEntries(cwd: string, entries: unknown[]): void {
+function writeEntries(
+  cwd: string,
+  entries: unknown[],
+  config?: Record<string, string>,
+): void {
   mkdirSync(join(cwd, '.covsel'), { recursive: true });
   writeFileSync(
     join(cwd, '.covsel', 'map.json'),
@@ -1052,6 +1065,7 @@ function writeEntries(cwd: string, entries: unknown[]): void {
       granularity: 'file',
       recordedAt: '2026-07-01T00:00:00.000Z',
       sentinelHashes: {},
+      ...(config ? { config } : {}),
       observed: ['**'],
       entries,
     }),
@@ -1265,5 +1279,64 @@ describe('an entry that covers no source', () => {
       },
     );
     expect(out).not.toContain('unmeasured');
+  });
+});
+
+describe('status and explain answer for the same configuration a run uses', () => {
+  /**
+   * `record`, `affected`, `run` and `watch` resolve configuration through the
+   * adapter, which supplies `testGlobs` for a runner whose tests are not
+   * `*.test.*` sources. `status` and `explain` report on what those commands
+   * will do, so reading configuration without the adapter gives them different
+   * globs -- and since `testGlobs` is one of the fields a map records, the
+   * report would announce a configuration change on every run while the run
+   * itself narrowed happily. Two commands answering one question differently is
+   * the defect; the globs are only how it shows.
+   */
+  const withStubbedAdapter = async <T>(
+    fn: (cwd: string) => Promise<T>,
+    files: Record<string, string> = {},
+  ): Promise<T> =>
+    inProject(
+      {
+        'package.json': pkg({}),
+        'covsel.json': `${JSON.stringify({ adapter: 'spec-runner' })}\n`,
+        ...files,
+      },
+      async (cwd) => {
+        stubAdapterPackage(cwd, '@covsel/adapter-spec-runner', 'spec-runner', [
+          'spec/**/*.js',
+        ]);
+        mkdirSync(join(cwd, 'spec'), { recursive: true });
+        writeFileSync(join(cwd, 'spec', 'add.js'), '');
+        writeFileSync(join(cwd, 'math.js'), 'export const add = (a, b) => a + b;\n');
+        writeEntries(
+          cwd,
+          [
+            {
+              test: { file: 'spec/add.js' },
+              files: [{ file: 'math.js', fileHash: 'sha256:math' }],
+            },
+          ],
+          recordedConfig(resolveConfigFor(await loadAdapter('spec-runner', cwd), {})),
+        );
+        return fn(cwd);
+      },
+    );
+
+  it('does not report a configuration change the adapter itself supplied', async () => {
+    const { out } = await withStubbedAdapter(() => capture(() => main(['status'])));
+    expect(out).not.toContain('configuration changed');
+    expect(out).toContain('discovered: 1 test file(s)');
+  });
+
+  it('explains a path against those same globs', async () => {
+    const { out } = await withStubbedAdapter(() =>
+      capture(() => main(['explain', 'spec/add.js'])),
+    );
+    // Read as the test file the adapter's globs make it -- without them it is
+    // no test path at all, and explain answers about a source nothing covers.
+    expect(out).toContain('covers:');
+    expect(out).not.toContain('covered by:');
   });
 });
