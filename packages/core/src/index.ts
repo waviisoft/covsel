@@ -3,6 +3,7 @@ export * from './interfaces.js';
 export * from './adapter.js';
 export * from './config.js';
 export * from './init.js';
+export * from './lockfiles.js';
 export * from './match.js';
 export * from './name-pattern.js';
 export * from './packages.js';

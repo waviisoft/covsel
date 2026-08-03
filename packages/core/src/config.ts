@@ -2,6 +2,7 @@ import { existsSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { pathToFileURL } from 'node:url';
 
+import { LOCKFILE_NAMES } from './lockfiles.js';
 import { type Granularity, GRANULARITIES, isGranularity } from './schema.js';
 import type { BuildDirMapping } from './source-map.js';
 
@@ -87,13 +88,7 @@ export const DEFAULT_CONFIG: CovselConfig = {
   testGlobs: ['**/*.{test,spec}.?(c|m)[jt]s?(x)'],
   sourceGlobs: ['**/*'],
   alwaysRun: [],
-  sentinels: [
-    'package.json',
-    'pnpm-lock.yaml',
-    'package-lock.json',
-    'yarn.lock',
-    'tsconfig*.json',
-  ],
+  sentinels: ['package.json', ...LOCKFILE_NAMES, 'tsconfig*.json'],
   granularity: 'block',
   sourceMaps: { buildDirs: [], http: true, allowUnmappable: [] },
   store: { dir: '.covsel', archiveDir: 'archive' },

@@ -2,6 +2,7 @@ import { existsSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 
 import { findConfigFile, loadConfig } from './config.js';
+import { LOCKFILES } from './lockfiles.js';
 
 /**
  * Project bootstrap: work out which adapter records this project, say so, and —
@@ -279,12 +280,7 @@ function readPackageJson(cwd: string): PackageJson | undefined {
 export function detectPackageManager(cwd: string, declared?: string): string {
   const name = declared?.split('@')[0]?.trim();
   if (name !== undefined && name in INSTALL_ARGS) return name;
-  for (const [lockfile, manager] of [
-    ['pnpm-lock.yaml', 'pnpm'],
-    ['yarn.lock', 'yarn'],
-    ['package-lock.json', 'npm'],
-    ['bun.lockb', 'bun'],
-  ] as const) {
+  for (const [lockfile, manager] of LOCKFILES) {
     if (existsSync(join(cwd, lockfile))) return manager;
   }
   return 'npm';

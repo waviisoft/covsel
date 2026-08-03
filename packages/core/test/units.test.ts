@@ -9,6 +9,7 @@ import {
   FailOpenPolicy,
   fullRunReason,
   isExcludedRel,
+  LOCKFILES,
   LocalStore,
   loadConfig,
   MAP_SCHEMA_VERSION,
@@ -48,6 +49,14 @@ describe('config', () => {
     expect(c.alwaysRun).toEqual(['x/**']);
     expect(c.store.dir).toBe('out');
     expect(c.sentinels).toEqual(DEFAULT_CONFIG.sentinels);
+  });
+
+  it('makes a sentinel of every lockfile it can detect a manager from', () => {
+    // The two readings of that list have to agree: a manager covsel knows well
+    // enough to install an adapter with, but whose lockfile is not a sentinel,
+    // is one whose dependency bumps select against a map recorded before them.
+    const isSentinel = makeMatcher(DEFAULT_CONFIG.sentinels);
+    for (const [lockfile] of LOCKFILES) expect(isSentinel(lockfile)).toBe(true);
   });
 
   it('loads covsel.json over defaults', async () => {
@@ -120,6 +129,25 @@ describe('policy', () => {
     expect(policy.evaluate(minimalMap, [{ file: 'src/a.ts', kind: 'modified' }])).toBe(
       'select',
     );
+  });
+
+  // The shape a dependency bump actually takes: the lockfile is rewritten and
+  // nothing else, so `package.json` does not save the run. Named literally, so
+  // the check is on the default list rather than on itself.
+  it.each([
+    'pnpm-lock.yaml',
+    'yarn.lock',
+    'package-lock.json',
+    'npm-shrinkwrap.json',
+    'bun.lock',
+    'bun.lockb',
+  ])('full-run when %s alone changes', (lockfile) => {
+    expect(policy.evaluate(minimalMap, [{ file: lockfile, kind: 'modified' }])).toBe(
+      'full-run',
+    );
+    expect(
+      fullRunReason(DEFAULT_CONFIG, minimalMap, [{ file: lockfile, kind: 'modified' }]),
+    ).toContain(`sentinel changed: ${lockfile}`);
   });
 
   it('mandatory includes added/modified test files only', async () => {

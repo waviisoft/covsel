@@ -283,8 +283,12 @@ describe('covsel init — installing', () => {
     ['pnpm', 'pnpm-lock.yaml'],
     ['yarn', 'yarn.lock'],
     ['npm', 'package-lock.json'],
+    ['npm', 'npm-shrinkwrap.json'],
+    // bun writes the binary lockfile in older versions and the text one in
+    // newer, so a project has one name or the other and both mean bun.
+    ['bun', 'bun.lock'],
     ['bun', 'bun.lockb'],
-  ])('detects %s from its lockfile', async (manager, lockfile) => {
+  ])('detects %s from %s', async (manager, lockfile) => {
     const cwd = project({
       'package.json': pkg({ devDependencies: { vitest: '^3.0.0' } }),
       [lockfile]: '',
