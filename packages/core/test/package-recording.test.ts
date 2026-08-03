@@ -215,7 +215,7 @@ describe('what the generic recorder may claim about the command it was handed', 
     // no entry credits means "installed and never ran", so a bump to it need
     // select nothing. Recording it for an unvouched command would say that of
     // every package the run executed where the dump could not reach -- so the
-    // map carries neither half, and dependency changes keep falling open.
+    // map carries neither half and holds no opinion about a dependency change.
     const cwd = fixture();
     const map = await record(cwd, handed(cwd));
 
