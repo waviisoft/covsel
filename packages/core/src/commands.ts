@@ -1284,7 +1284,13 @@ export async function explainPath(init: ExplainInit): Promise<ExplainResult> {
           test: {
             units,
             unrecorded: units.length === 0,
-            unmeasured: units.some((u) => u.sources.length === 0),
+            // Asked of the entries through the same predicate selection uses,
+            // rather than re-derived from the sources listed above: explain
+            // exists to account for what the selector did, so it may not answer
+            // this from its own copy of the question.
+            unmeasured: map.entries.some(
+              (e) => e.test.file === rel && measuredNothing(e),
+            ),
           },
         }
       : {}),

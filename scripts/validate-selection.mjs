@@ -120,16 +120,36 @@ if (alwaysRun.length > 0) {
 }
 
 // The recorder saw nothing this test executed, so there is no coverage here to
-// select on -- only an entry shaped like a measurement. Checked from out here
-// because it needs nothing from the selector but the map and the answer.
+// select on -- only an entry shaped like a measurement.
+//
+// Asked with `alwaysRun` emptied, because on this repository the two sets are
+// the same three files: the project lists its child-process tests there as
+// well, so checking the selection as configured would pass on the strength of
+// the belt while the rule itself was broken. This asks the selector the
+// question with the belt removed, which is the only form of it that can fail.
 const unmeasured = new Set(
   map.entries.filter((e) => e.files.length === 0).map((e) => e.test.file),
 );
-const unmeasuredMissing = discovered.filter((t) => unmeasured.has(t) && !selected.has(t));
-if (unmeasuredMissing.length > 0) {
-  problems.push(
-    `tests whose entry covers no source, yet were not selected: ${unmeasuredMissing.join(', ')}`,
-  );
+if (unmeasured.size > 0) {
+  const bare = await selectAffected({ cwd, config: { ...config, alwaysRun: [] } });
+  // A full run there selects everything and settles nothing, which is not a
+  // failure -- it is the same accepted outcome as a full run of the real
+  // selection, and saying so beats a silent skip.
+  if (bare.fullRun) {
+    console.log(
+      `\nunmeasured: ${unmeasured.size} entry(ies) cover no source; not checkable ` +
+        `on this diff (the selection without alwaysRun is a full run)`,
+    );
+  } else {
+    const bareSelected = new Set(bare.tests);
+    const missing = discovered.filter((t) => unmeasured.has(t) && !bareSelected.has(t));
+    if (missing.length > 0) {
+      problems.push(
+        `tests whose entry covers no source, yet were not selected on their own ` +
+          `merit (alwaysRun aside): ${missing.join(', ')}`,
+      );
+    }
+  }
 }
 
 // The file-level safety net: no blocks recorded for a changed file means nothing

@@ -9,6 +9,7 @@ import {
   createGenericRecorder,
   explainPath,
   hashFileContents,
+  mergeMaps,
   OBSERVES_EVERYTHING,
   type RecordEvent,
   recordMap,
@@ -45,6 +46,7 @@ let cwd: string;
 
 const mapPath = (): string => join(cwd, config.store.dir, 'map.json');
 const readMap = (): CoverageMap => JSON.parse(readFileSync(mapPath(), 'utf8'));
+const clone = (map: CoverageMap): CoverageMap => JSON.parse(JSON.stringify(map));
 const writeMap = (map: CoverageMap): void =>
   writeFileSync(mapPath(), JSON.stringify(map));
 
@@ -155,14 +157,38 @@ describe('selection with an entry that credits nothing', () => {
     });
     writeMap(map);
 
-    change('src/child.mjs', `${GREET}// changed\n`);
+    // `src/a.mjs` rather than the child's source on purpose: this is the change
+    // that also selects the *named* unit, so the whole-file entry has something
+    // to supersede. Editing only what the blind unit drives would leave the
+    // deduplication below trivially satisfied.
+    change('src/a.mjs', `${ADD}// changed\n`);
 
     const result = await selectAffected({ cwd, config });
     expect(result.fullRun).toBe(false);
     expect(result.tests).toContain('test/a.test.mjs');
     expect(result.selected).toContainEqual({ file: 'test/a.test.mjs' });
-    // Whole file, not the blind unit alone.
+    // Whole file, not the named unit beside it and not the blind unit alone.
     expect(result.selected.filter((u) => u.file === 'test/a.test.mjs')).toHaveLength(1);
+  });
+
+  it('runs a test whose entry records blocks but credits no file', async () => {
+    // The predicate reads `files` alone, because that is all the selector
+    // matches a diff against -- blocks only refine a file that already matched.
+    // An entry carrying blocks and no files is therefore just as unselectable,
+    // and tightening the predicate to require both empty would skip this test
+    // on every run there will ever be.
+    const map = readMap();
+    const entry = map.entries.find((e) => e.test.file === 'test/child.test.mjs')!;
+    const blocks = entry.blocks ?? [];
+    expect(blocks.length).toBeGreaterThan(0);
+    entry.files = [];
+    writeMap(map);
+
+    change('src/child.mjs', `${GREET}// changed\n`);
+
+    const result = await selectAffected({ cwd, config });
+    expect(result.fullRun).toBe(false);
+    expect(result.tests).toContain('test/child.test.mjs');
   });
 
   it('runs on every selection, without dragging the measured tests along', async () => {
@@ -176,6 +202,43 @@ describe('selection with an entry that credits nothing', () => {
     const result = await selectAffected({ cwd, config });
     expect(result.fullRun).toBe(false);
     expect(result.tests).toEqual(['test/child.test.mjs']);
+  });
+});
+
+describe('merging shards that disagree about what a test covered', () => {
+  it('keeps the merged entry crediting nothing when either shard credited nothing', () => {
+    // One shard could see what the test executed; the other could not, and said
+    // so with an empty entry. Unioning the two produces an entry that credits
+    // exactly what the seeing shard saw, which is a claim neither shard made:
+    // everything the blind shard's run executed is missing from a map that now
+    // looks measured. Blocks and packages already degrade to unknown for this
+    // reason; files is the third field with an unknown state.
+    const measured = readMap();
+    const blind = clone(measured);
+    creditNothing(blind, 'test/child.test.mjs');
+
+    const merged = mergeMaps([blind, measured]);
+    const entry = merged.entries.find((e) => e.test.file === 'test/child.test.mjs');
+    expect(entry?.files).toEqual([]);
+    // The other test, which both shards measured, keeps its coverage.
+    const other = merged.entries.find((e) => e.test.file === 'test/a.test.mjs');
+    expect(other?.files.length).toBeGreaterThan(0);
+  });
+
+  it('selects the merged test on a change no shard credited it with', async () => {
+    const measured = readMap();
+    const blind = clone(measured);
+    creditNothing(blind, 'test/child.test.mjs');
+    writeMap(mergeMaps([blind, measured]));
+
+    // `src/a.mjs`, which the seeing shard did not credit this test with either.
+    // Editing what that shard *did* see would select the test through ordinary
+    // coverage and pass whatever the merge did with the empty entry.
+    change('src/a.mjs', `${ADD}// changed\n`);
+
+    const result = await selectAffected({ cwd, config });
+    expect(result.fullRun).toBe(false);
+    expect(result.tests).toContain('test/child.test.mjs');
   });
 });
 

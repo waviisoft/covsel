@@ -619,8 +619,8 @@ async function cmdRecord(argv: string[]): Promise<number> {
         if (e.unmeasured !== undefined) {
           err(
             `  NO SOURCES ${e.file}: ${e.unmeasured} of ${e.tests} unit(s) recorded no ` +
-              `covered source; nothing they executed was seen, so this file is ` +
-              `selected on every run\n`,
+              `covered source in this repository, so nothing a diff carries can ` +
+              `match them and this file is selected on every run\n`,
           );
         }
         // Every allowed script is coverage this entry does not have. Saying so
@@ -877,8 +877,8 @@ async function cmdStatus(): Promise<number> {
     // and this is worth noticing when it appears.
     if (s.unmeasuredEntryCount !== undefined && s.unmeasuredEntryCount > 0) {
       out(
-        `unmeasured: ${s.unmeasuredEntryCount} entry(ies) cover no source -- their ` +
-          'test files are selected on every run\n',
+        `unmeasured: ${s.unmeasuredEntryCount} entry(ies) cover no source -- every ` +
+          'test file with one is selected on every run\n',
       );
     }
     out(`sources:    ${s.coveredFileCount ?? 0}\n`);
@@ -1034,9 +1034,16 @@ function printCovers(r: ExplainResult, all: boolean): void {
     // The recorded-but-blind case. Without this the unit list below reads as a
     // measurement -- "0 source(s)" beside a healthy map -- and the reader has
     // no way to tell it from a test that really executes nothing.
+    //
+    // "selected on every run" only holds for a file selection can still find:
+    // it draws these from discovery, so an entry outliving its test file, or
+    // one left behind by a narrowed `testGlobs`, selects nothing at all.
     out(
-      '            a unit here covers no source, so nothing the map holds can\n' +
-        '            narrow this file and it is selected on every run\n',
+      r.present
+        ? '            a unit here covers no source, so nothing the map holds can\n' +
+            '            narrow this file and it is selected on every run\n'
+        : '            a unit here covers no source, and the file is not in the\n' +
+            '            working tree, so there is nothing left for covsel to run\n',
     );
   }
   const shown = all ? test.units : test.units.slice(0, EXPLAIN_LIMIT);

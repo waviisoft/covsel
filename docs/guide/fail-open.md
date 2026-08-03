@@ -103,7 +103,9 @@ be wrong.
 
 The whole file runs, not just the unit that credits nothing. A recorder that
 could not see one test of a file has not earned trust in what it recorded for
-the tests beside it.
+the tests beside it. Merging shard maps preserves it too: a test one shard
+credits with nothing keeps crediting nothing, instead of inheriting the coverage
+another shard happened to see.
 
 Recording says so as it happens, and `status` counts it afterwards, because a
 test that always runs is a cost you should be able to see:

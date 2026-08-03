@@ -26,6 +26,13 @@ has not earned trust in what it recorded for the units beside it, and a test
 that genuinely covers nothing running when it need not is the cheap way to be
 wrong.
 
+`covsel merge` carries the same doubt across a shard merge. A test one shard
+credits with no source keeps crediting nothing rather than inheriting what
+another shard saw: an empty entry is a shard reporting it could not see where
+the test ran, and unioning it away produced a merged entry claiming something
+neither shard claimed. Covered blocks and package lists already degraded to
+unknown this way when either shard lacked them; covered files now do too.
+
 Recording is not refused over it — a test that only asserts on constants
 legitimately covers nothing — but it is no longer silent. `covsel record` names
 each test file that recorded no source as it records it and again in its
