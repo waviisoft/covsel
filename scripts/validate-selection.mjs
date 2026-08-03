@@ -27,6 +27,10 @@
  *     worth knowing before debugging the harness.
  *   - Every changed test file is selected, whatever the map says about it.
  *   - Every `alwaysRun` test file is selected.
+ *   - Every test whose entry credits **no source at all** is selected. Nothing
+ *     in a diff can match an empty file list, so an entry like that is unknown
+ *     coverage rather than a measurement, and reading it the other way skips the
+ *     test on every run there will ever be.
  *   - A test the map credits with a changed file but records **no blocks** for
  *     is selected. With no block information there is nothing to narrow by, so
  *     file level is the answer and leaving it out is a skipped test.
@@ -113,6 +117,19 @@ const alwaysRun = discovered.filter(
 );
 if (alwaysRun.length > 0) {
   problems.push(`alwaysRun test files that were not selected: ${alwaysRun.join(', ')}`);
+}
+
+// The recorder saw nothing this test executed, so there is no coverage here to
+// select on -- only an entry shaped like a measurement. Checked from out here
+// because it needs nothing from the selector but the map and the answer.
+const unmeasured = new Set(
+  map.entries.filter((e) => e.files.length === 0).map((e) => e.test.file),
+);
+const unmeasuredMissing = discovered.filter((t) => unmeasured.has(t) && !selected.has(t));
+if (unmeasuredMissing.length > 0) {
+  problems.push(
+    `tests whose entry covers no source, yet were not selected: ${unmeasuredMissing.join(', ')}`,
+  );
 }
 
 // The file-level safety net: no blocks recorded for a changed file means nothing
