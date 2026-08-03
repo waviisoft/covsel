@@ -110,10 +110,16 @@ function functionName(node: ts.Node): string {
 /**
  * Parse a source file into content-hashed blocks: one `<module>` block for the
  * top-level skeleton (every outermost function body blanked out, so signature
- * and top-level changes register here) plus one block per function (signature +
- * body, so a body edit changes only that function's hash). The module block
- * always sorts first. Parsing is error-tolerant; malformed input still yields
- * blocks rather than throwing.
+ * and top-level changes register here) plus one block per function (its own
+ * signature and statements, with the bodies of the functions nested inside it
+ * blanked in turn, so a body edit changes only that function's hash however deep
+ * it is). The module block always sorts first. Parsing is error-tolerant;
+ * malformed input still yields blocks rather than throwing.
+ *
+ * The same rule at every depth is what keeps block granularity from collapsing
+ * to component granularity: a handler defined inside a component is the
+ * component's closure to build and the handler's body to run, so the handler's
+ * signature stays with the parent and only its body is blanked out of it.
  */
 export function extractBlocks(source: string, fileName = 'file.ts'): SourceBlock[] {
   const sf = ts.createSourceFile(
@@ -126,35 +132,40 @@ export function extractBlocks(source: string, fileName = 'file.ts'): SourceBlock
 
   const blocks: SourceBlock[] = [];
   const outermostBodySpans: [number, number][] = [];
-  let functionDepth = 0;
 
-  const visit = (node: ts.Node): void => {
+  /**
+   * Walk `node`, appending the bodies of the outermost functions found beneath
+   * it to `enclosing` — which is the exclusion list of whatever block contains
+   * them, module or function alike.
+   */
+  const visit = (node: ts.Node, enclosing: [number, number][]): void => {
     if (isFunctionLike(node)) {
       const body = (node as { body?: ts.Node }).body;
+      if (body) enclosing.push([body.getStart(sf), body.getEnd()]);
+      // Children first, since this block's own text is canonicalized with their
+      // bodies blanked. The slot keeps the emitted order parent-before-child:
+      // the block list reads as the file does, and the module block sorts first.
+      const slot = blocks.length;
+      const nested: [number, number][] = [];
+      ts.forEachChild(node, (child) => visit(child, nested));
       const name = functionName(node);
       const text = canonicalize(
         source,
         node.getStart(sf),
         node.getEnd(),
         literalSpans(node, sf),
-        [],
+        nested,
       );
-      blocks.push({
+      blocks.splice(slot, 0, {
         name,
         hash: hashString(`${name} ${text}`),
         probe: body ? body.getStart(sf) : node.getStart(sf),
       });
-      if (functionDepth === 0 && body) {
-        outermostBodySpans.push([body.getStart(sf), body.getEnd()]);
-      }
-      functionDepth += 1;
-      ts.forEachChild(node, visit);
-      functionDepth -= 1;
       return;
     }
-    ts.forEachChild(node, visit);
+    ts.forEachChild(node, (child) => visit(child, enclosing));
   };
-  ts.forEachChild(sf, visit);
+  ts.forEachChild(sf, (node) => visit(node, outermostBodySpans));
 
   const moduleText = canonicalize(
     source,

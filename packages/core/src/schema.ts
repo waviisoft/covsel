@@ -4,8 +4,15 @@
  * fail-open policy — forces a full test run with a clear log line.
  */
 
-/** Bump on any breaking change to the persisted map shape. */
-export const MAP_SCHEMA_VERSION = 3;
+/**
+ * Bump on any breaking change to the persisted map shape.
+ *
+ * A change to how block hashes are computed is one of those, even when no field
+ * moves: every recorded hash stops matching the same code, so the entries credit
+ * blocks that no longer exist. Rejecting such a map is what turns that into a
+ * full run instead of a selection made against hashes nothing can match.
+ */
+export const MAP_SCHEMA_VERSION = 4;
 
 /**
  * Identifies a test at the finest granularity we know about.

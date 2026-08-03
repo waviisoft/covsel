@@ -147,7 +147,7 @@ looking at:
 
 ```
 map:        /repo/.covsel/map.json
-exists:     yes, but not usable (schema v2, covsel reads v3 -- re-record)
+exists:     yes, but not usable (schema v3, covsel reads v4 -- re-record)
 next:       full run (recorded map is stale or has an incompatible schema)
 ```
 
@@ -261,6 +261,14 @@ matter). Editing one function then selects only the tests that actually ran it,
 even when several tests import the same file; a top-level edit, or anything
 covsel can't parse into blocks, falls back to selecting every test on that file.
 Set `"granularity": "file"` to record and select at whole-file granularity only.
+
+A function's hash covers its own signature and its own statements, with the
+bodies of the functions nested inside it left out. That is what keeps the
+granularity function-level in component code: a click handler defined inside a
+component is the component's closure to build and the handler's body to run, so
+editing the handler selects the tests that clicked it rather than every test that
+rendered the component. Changing the handler's _signature_ does select the
+component's tests, because constructing it is the component's own code.
 
 `block` and `file` are the only values. Any other one fails at config load naming
 those two, rather than quietly recording at a granularity you did not ask for.
