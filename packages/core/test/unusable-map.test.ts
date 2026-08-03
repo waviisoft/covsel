@@ -104,7 +104,17 @@ describe('a map recorded under an older schema', () => {
   it('gives a reason for the full run instead of leaving the field empty', async () => {
     const status = await computeStatus({ cwd, config });
     expect(status.nextIsFullRun).toBe(true);
-    expect(status.nextFullRunReason).toMatch(/stale or has an incompatible schema/);
+    expect(status.nextFullRunReason).toMatch(/re-record/);
+  });
+
+  it('says the same thing about it that explain does', async () => {
+    // Two commands answering "why is covsel about to do this" differently is
+    // the drift this whole shape exists to prevent, and the wording is the part
+    // a reader actually sees.
+    const status = await computeStatus({ cwd, config });
+    const explained = await explainPath({ cwd, config, path: 'src/math.js' });
+
+    expect(status.nextFullRunReason).toBe(explained.noMapReason);
   });
 
   it('still falls open to a full run, exactly as before', async () => {
@@ -155,6 +165,11 @@ describe('a map file that is not JSON', () => {
     const status = await computeStatus({ cwd, config });
     expect(status.mapState).toBe('unusable');
     expect(status.unusableReason).toMatch(/JSON/);
+    // And does not describe a file that is right there with the wording for one
+    // that is not: "no usable map recorded" beside "yes, but not usable" is the
+    // same contradiction in a second place.
+    expect(status.nextFullRunReason).toMatch(/JSON/);
+    expect(status.nextFullRunReason).not.toMatch(/no usable map recorded/);
   });
 });
 

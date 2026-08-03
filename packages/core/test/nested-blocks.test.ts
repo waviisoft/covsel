@@ -40,7 +40,10 @@ const CART = `export function Cart(items) {
   function onClick(item) {
     return [...items, item];
   }
-  return { label, onClick };
+  function onHover(item) {
+    return items.indexOf(item);
+  }
+  return { label, onClick, onHover };
 }
 `;
 
@@ -116,6 +119,7 @@ describe('a block hash covers its own code', () => {
       '<module>',
       'Cart',
       'onClick',
+      'onHover',
     ]);
   });
 
@@ -169,6 +173,57 @@ describe('no edit disappears between the blocks', () => {
 
   it.each(edits)('changing %s changes a block hash', (_what, edited) => {
     expect(changedBlockHashes(CART, edited)).not.toHaveLength(0);
+  });
+});
+
+describe('permuting same-named siblings is not invisible either', () => {
+  /**
+   * The other half of that guard, and the reason a block is hashed under its
+   * position in the nesting rather than by name alone.
+   *
+   * Blanking a body out of the parent is sound only while the child block covers
+   * it *distinguishably*. Two sibling callbacks that share a name would
+   * otherwise hash to each other's values when their bodies are exchanged — and
+   * since blocks are compared as a multiset, reordering them would register as
+   * no change to any block in the file. `<anonymous>` makes that the ordinary
+   * case rather than an exotic one: two `useEffect` calls in one component are
+   * two same-named siblings, and effect order is behavior.
+   */
+  const permutations: [what: string, before: string, after: string][] = [
+    [
+      'two effects in a component',
+      'export function Panel({ id }) {\n  useEffect(() => { subscribe(id); }, [id]);\n  useEffect(() => { track(id); }, [id]);\n  return null;\n}\n',
+      'export function Panel({ id }) {\n  useEffect(() => { track(id); }, [id]);\n  useEffect(() => { subscribe(id); }, [id]);\n  return null;\n}\n',
+    ],
+    [
+      'two anonymous callbacks in one function',
+      'function C() {\n  run(() => { a(); });\n  run(() => { b(); });\n}\n',
+      'function C() {\n  run(() => { b(); });\n  run(() => { a(); });\n}\n',
+    ],
+    [
+      'two anonymous callbacks at different depths',
+      'function C() {\n  run(() => { a(); });\n  function g() { run(() => { b(); }); }\n}\n',
+      'function C() {\n  run(() => { b(); });\n  function g() { run(() => { a(); }); }\n}\n',
+    ],
+    [
+      'two object literals with the same method name',
+      'function C() {\n  use({ m() { a(); } });\n  use({ m() { b(); } });\n}\n',
+      'function C() {\n  use({ m() { b(); } });\n  use({ m() { a(); } });\n}\n',
+    ],
+    [
+      'two nested classes with the same method name',
+      'function C() {\n  class X { m() { a(); } }\n  class Y { m() { b(); } }\n  return [X, Y];\n}\n',
+      'function C() {\n  class X { m() { b(); } }\n  class Y { m() { a(); } }\n  return [X, Y];\n}\n',
+    ],
+    [
+      'two anonymous callbacks at the top level',
+      'run(() => { a(); });\nrun(() => { b(); });\n',
+      'run(() => { b(); });\nrun(() => { a(); });\n',
+    ],
+  ];
+
+  it.each(permutations)('exchanging %s changes a block hash', (_what, before, after) => {
+    expect(changedBlockHashes(before, after, 'p.tsx')).not.toHaveLength(0);
   });
 });
 
@@ -270,5 +325,18 @@ describe('selection lands on the handler, not the component', () => {
     const result = await selectAffected({ cwd, config });
 
     expect(result.tests).toEqual(['test/click.test.mjs', 'test/render.test.mjs']);
+  });
+
+  it('selects nothing for a nested function no test ever executed', async () => {
+    // `onHover` is built every time the component is, and called by neither
+    // test. Blanking its body out of the component is what leaves this to the
+    // coverage measurement rather than to the component's hash, so this is the
+    // assertion that the narrowing rests on being right: nothing recorded runs
+    // this code, and nothing is selected for it.
+    write('src/cart.mjs', CART.replace('items.indexOf(item)', 'items.lastIndexOf(item)'));
+    const result = await selectAffected({ cwd, config });
+
+    expect(result.fullRun).toBe(false);
+    expect(result.tests).toEqual([]);
   });
 });

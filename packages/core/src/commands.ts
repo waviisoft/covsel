@@ -816,11 +816,17 @@ export async function computeStatus(init: StatusInit): Promise<StatusResult> {
       // Always a reason now. Falling back to a generic "the map cannot be
       // trusted" left the one user who most needs to know — the one whose map
       // was rejected for a schema bump — with no hint that re-recording is the
-      // fix, and a reading in which the map was lost. The rejected map goes to
-      // the shared wording so status cannot answer this differently.
+      // fix, and a reading in which the map was lost.
+      //
+      // A rejected map answers in its own words, the same words `explain` uses,
+      // rather than through the shared wording: "no usable map recorded" is what
+      // an absent map is called, and saying it about a file that is sitting
+      // right there is the misreport this all exists to stop.
       nextFullRunReason:
         noTests ??
-        fullRunReason(config, stored.state === 'absent' ? undefined : stored.map, []),
+        (stored.state === 'unusable'
+          ? stored.reason
+          : fullRunReason(config, undefined, [])),
     };
   }
 

@@ -148,7 +148,7 @@ looking at:
 ```
 map:        /repo/.covsel/map.json
 exists:     yes, but not usable (schema v3, covsel reads v4 -- re-record)
-next:       full run (recorded map is stale or has an incompatible schema)
+next:       full run (schema v3, covsel reads v4 -- re-record)
 ```
 
 The commonest cause is an upgrade: the map schema is versioned, and a covsel

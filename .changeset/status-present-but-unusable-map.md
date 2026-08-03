@@ -39,8 +39,11 @@ drawn beside it rather than inside it.
   needs.
 - `covsel status` prints `exists: yes, but not usable (schema v3, covsel reads v4
 -- re-record)`, and gives a reason under `next:` in every case rather than
-  falling back to a generic "map cannot be trusted". The recorded-at, granularity
-  and entry lines are still printed only for a map that parsed.
+  falling back to a generic "map cannot be trusted". A rejected map answers there
+  in its own words: "no usable map recorded" is what an absent map is called, and
+  saying it about a file that is sitting right there is the misreport this fixes.
+  The recorded-at, granularity and entry lines are still printed only for a map
+  that parsed.
 - `covsel explain` had the same lie in the same words — it printed `(none
 recorded)` beside the path of a map it had just rejected. `ExplainResult.mapExists`
   is replaced by the same `mapState`, `noMapReason` carries the rejection, and

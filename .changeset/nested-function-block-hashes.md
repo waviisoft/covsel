@@ -24,8 +24,23 @@ clicked.
 A block's hash now covers its own signature and its own statements, with the
 bodies of the functions nested inside it blanked the way the module block already
 blanks outermost ones — the same rule at every depth rather than only at the top.
-Nothing else moves: the blocks emitted, their names, their order, and their
-coverage probes are unchanged, and hashes remain stable across reformatting.
+The blocks emitted, their names, their order, and their coverage probes are
+unchanged, and hashes remain stable across reformatting.
+
+A block is also hashed under its position in the nesting now — the chain of
+enclosing functions, each with an index among the same-named blocks of its scope
+— because blanking a body out of the parent is sound only while the child block
+covers it _distinguishably_. Two sibling callbacks that share a name hash to each
+other's values when their bodies are exchanged, and blocks are compared as a
+multiset, so reordering them would have registered as no change to any block in
+the file. `<anonymous>` makes that the ordinary case rather than an exotic one:
+two `useEffect` calls in one component are two same-named siblings, effect order
+is behavior, and the enclosing function's hash used to catch the reorder only
+because it carried both bodies. It now catches it in the callbacks themselves.
+The cost is that inserting or moving a same-named sibling shifts the indices
+after it and re-selects their tests, which is the safe direction. This also
+closes the same hole at module scope, where two anonymous top-level callbacks
+could already be permuted without changing any hash.
 
 **A nested function's signature stays with its parent.** Only the body is the
 child's. The parent evaluates the function expression, so the parameter list and
