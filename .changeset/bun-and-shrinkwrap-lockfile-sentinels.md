@@ -27,7 +27,12 @@ sentinel defaults and `covsel init`'s package-manager detection now both read.
 Those two had drifted, which is how this happened: `bun.lockb` was already good
 enough to pick an install command with, but not good enough to invalidate a map.
 Detection gains the names it was missing along the way, so a bun project holding
-only the text lockfile no longer reads as npm.
+only the text lockfile no longer reads as npm. It answers as it always did for
+every tree it already recognised, including one carrying two managers'
+lockfiles: `npm-shrinkwrap.json` is checked last, after bun, because a tree
+holding only a shrinkwrap resolves to npm by the fallback regardless, and
+checking it earlier would have moved a bun project that once published one to
+npm for nothing.
 
 Setting `sentinels` still replaces the defaults wholesale, so a project that has
 narrowed the list keeps whatever lockfile it wants covered.

@@ -52,9 +52,14 @@ describe('config', () => {
   });
 
   it('makes a sentinel of every lockfile it can detect a manager from', () => {
-    // The two readings of that list have to agree: a manager covsel knows well
-    // enough to install an adapter with, but whose lockfile is not a sentinel,
-    // is one whose dependency bumps select against a map recorded before them.
+    // Not the guard that the names are right — the defaults spread this list, so
+    // this cannot fail while that spread stands, and the literal-name cases
+    // below are what would catch a missing lockfile. What it catches is someone
+    // unpicking the spread back into a hand-written array, which is how the two
+    // readings of the list drifted apart in the first place: a manager covsel
+    // knows well enough to install an adapter with, but whose lockfile is not a
+    // sentinel, is one whose dependency bumps select against a map recorded
+    // before them.
     const isSentinel = makeMatcher(DEFAULT_CONFIG.sentinels);
     for (const [lockfile] of LOCKFILES) expect(isSentinel(lockfile)).toBe(true);
   });

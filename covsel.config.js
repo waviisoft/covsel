@@ -65,10 +65,10 @@ export default {
   /*
    * A change to any of these forces a full run.
    *
-   * The first four are covsel's defaults, restated because setting the field
-   * replaces them rather than adding to them. The defaults also name the other
-   * package managers' lockfiles, which a repository that installs with pnpm will
-   * never see. The rest are this repository's own:
+   * The first four are drawn from covsel's defaults, restated because setting
+   * the field replaces them rather than adding to them. The defaults name
+   * further lockfiles, for package managers this repository does not use. The
+   * rest are this repository's own:
    * the vitest config decides what the suite even is, this file decides what
    * selection means, and the shims and the CLI entry point run in child processes
    * the recorder cannot observe — so a change to one of them cannot be attributed
