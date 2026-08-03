@@ -71,8 +71,11 @@ async function recordFixture(observes: readonly string[]): Promise<{
   const config = resolveConfig({ sourceGlobs: ['src/**'] });
   const base = createGenericRecorder({ command: ['node', '--test'], cwd, config });
   // Only `observes` varies. The units come from the generic recorder unchanged,
-  // packages included, so its package declaration has to come along with them —
-  // recording refuses a recorder whose units and declaration disagree.
+  // so whatever it declares about packages has to come along with them, or
+  // recording would see a recorder whose units and declaration disagree. Nothing
+  // vouches for the command here, so today that declaration is "no" and the
+  // units carry no packages; the forwarding is what keeps the two agreeing if
+  // the base recorder is ever given the assertion.
   const recorder: Recorder = {
     observes,
     observesPackages: base.observesPackages === true,

@@ -8,6 +8,7 @@ import {
   CONFIG_FILES,
   type CovselConfig,
   type CovselConfigInput,
+  recordedConfig,
   resolveConfig,
 } from './config.js';
 import { discoverTestFiles, isTestFile } from './discover.js';
@@ -47,6 +48,34 @@ export interface GenericRecorderInit {
   cwd: string;
   config: MapperConfig & Pick<CovselConfig, 'granularity'>;
   env?: NodeJS.ProcessEnv;
+  /**
+   * The caller's assertion that this command executes everything under test
+   * inside the Node process tree covsel starts, so the coverage dump holds every
+   * script the run loaded.
+   *
+   * It is what makes `observesPackages` sound, and it is not something this
+   * recorder can establish. A command arrives here as an argv somebody typed,
+   * and one that drives a browser, shells out to another runtime, or runs its
+   * tests in a container looks exactly like one that does not. Set it only when
+   * you know this run: a caller that wrote the command, and knows the suite it
+   * names executes nothing outside that tree.
+   *
+   * It is never a blanket answer for a runner. The claim is about where the code
+   * under test runs, not about how the runner loads it — a runner that executes
+   * its own sources directly can still be pointed at a spec that drives a
+   * browser, and an adapter vouching for every project that uses it would make
+   * the same guess this input exists to refuse.
+   *
+   * Left unset, entries carry no packages and the map no inventory, so the
+   * recording holds no opinion about dependencies and a change to one is left to
+   * the lockfile sentinel, which the default `sentinels` cover for npm, pnpm,
+   * and yarn.
+   *
+   * It does not widen `observes`, which is `**` either way: what an unvouched
+   * command hides is a process boundary, and a repo-path scope cannot describe
+   * one.
+   */
+  runsInNodeProcessTree?: boolean;
 }
 
 /** The whole-file recorder: ProcessObserver (NODE_V8_COVERAGE) piped into the V8 mapper. */
@@ -58,15 +87,27 @@ export function createGenericRecorder(init: GenericRecorderInit): Recorder {
   });
   const mapper = new V8FileMapper({ cwd: init.cwd, config: init.config });
   const wantBlocks = init.config.granularity !== 'file';
+  // Only the caller can answer whether the command runs everything under test in
+  // the tree covsel spawns, so only the caller's answer is used.
+  const observesPackages = init.runsInNodeProcessTree === true;
   return {
-    // NODE_V8_COVERAGE is inherited by child processes and dumps every script
-    // they load, so anything the run executes anywhere in the process tree is
-    // visible to this recorder wherever it lives in the repo.
+    // Bounded by that same process tree. NODE_V8_COVERAGE is inherited by child
+    // processes and dumps every script they load, so anything the run executes
+    // in the tree is visible to this recorder wherever it lives in the repo. A
+    // command that executes code outside it — a browser, another runtime — is
+    // not, and no scope can say so: globs name where in the repo a path is,
+    // never which process ran it.
     observes: OBSERVES_EVERYTHING,
     // The same dump is what makes packages visible: it holds every script the
     // process tree loaded, vendored code included, before any coverage provider
-    // has had the chance to filter `node_modules` out of it.
-    observesPackages: true,
+    // has had the chance to filter `node_modules` out of it. But only for what
+    // ran in that tree, and this recorder is handed a command rather than
+    // knowing one. Reading the claim off the command name would be a guess
+    // dressed as evidence, and reading it off the dump could only ever refute
+    // it — vendored code in the dump is equally consistent with having missed
+    // every package that ran somewhere else. So the claim belongs to whoever
+    // chose the command, and is absent until they make it.
+    ...(observesPackages ? { observesPackages: true } : {}),
     async record(testFile: string) {
       await observer.startTest({ file: testFile });
       const raw = await observer.endTest({ file: testFile });
@@ -77,7 +118,10 @@ export function createGenericRecorder(init: GenericRecorderInit): Recorder {
           test: { file: testFile },
           files,
           blocks,
-          packages: await mapper.toPackages(raw),
+          // Attributed exactly when it is claimed. A list nobody stands behind
+          // is dropped by recording anyway, and a unit carrying one while its
+          // recorder is silent contradicts what a unit's packages mean.
+          ...(observesPackages ? { packages: await mapper.toPackages(raw) } : {}),
         },
       ];
     },
@@ -129,7 +173,7 @@ function hashSentinels(cwd: string, sentinels: string[]): Record<string, string>
 function assembleMap(
   entries: MapEntry[],
   cwd: string,
-  config: Pick<CovselConfig, 'sentinels' | 'granularity'>,
+  config: CovselConfig,
   recordedAt: string,
   observed: readonly string[],
   dirty: boolean,
@@ -161,6 +205,10 @@ function assembleMap(
     ...(commit ? { commit } : {}),
     recordedAt,
     sentinelHashes: hashSentinels(cwd, config.sentinels),
+    // What the entries below mean, stated rather than left to be inferred from a
+    // later diff: a selection made under different values is reading the map for
+    // something it never measured.
+    config: recordedConfig(config),
     observed: [...observed],
     ...(dependencies ? { dependencies } : {}),
     entries,
@@ -1025,6 +1073,22 @@ export interface TestExplanation {
   unmeasured: boolean;
 }
 
+/**
+ * Why a change to one path forces a full run, and whether it always does.
+ *
+ * Sentinels always do: covsel cannot attribute a change in one to any test, so
+ * the whole suite is the only sound answer. Its own config does not, since the
+ * question there is whether the change moved a value covsel reads — and telling
+ * a reader "a change here runs everything" when a reworded comment does nothing
+ * of the sort is the drift this separation exists to prevent.
+ */
+export interface FullRunTrigger {
+  /** True when any change to the path forces a full run, whatever it changed. */
+  always: boolean;
+  /** The whole answer, as a sentence: what a change does, and why. */
+  why: string;
+}
+
 export interface ExplainResult {
   /**
    * False when the path itself could not be explained. `error` says why, and no
@@ -1054,12 +1118,10 @@ export interface ExplainResult {
    */
   observed?: boolean;
   /**
-   * Why a change to this path on its own forces a full run, when one does.
-   * Sentinels are not the only way that happens — a change to covsel's own
-   * config invalidates the map without going through the sentinel list — so
-   * this names the reason rather than reporting the glob match.
+   * What a change to this path on its own does to the next run, when it does
+   * anything at all.
    */
-  forcesFullRun?: string;
+  forcesFullRun?: FullRunTrigger;
   /** True when an alwaysRun glob matches, so this test runs whatever the diff. */
   alwaysRun: boolean;
   /** True when the configured test globs match this path. */
@@ -1176,16 +1238,45 @@ export async function explainPath(init: ExplainInit): Promise<ExplainResult> {
   const alwaysRun = matchesAny(rel, config.alwaysRun);
   const excluded = isExcludedRel(rel);
   // A sentinel is not the only path a change to which invalidates the map:
-  // covsel's own config decides what the map means, and the policy forces a
-  // full run on it without consulting the sentinel list.
-  const forcesFullRun = matchesAny(rel, config.sentinels)
-    ? 'it is a sentinel, so a change to it invalidates the map'
-    : (CONFIG_FILES as readonly string[]).includes(rel)
-      ? "it is covsel's own configuration, and the map means what it means only " +
-        'under the config it was recorded with'
-      : undefined;
+  // covsel's own config decides what the map means, and the policy asks about it
+  // without consulting the sentinel list. The sentinel answer is reported first
+  // even for a config file, because it is the one that holds: a project that
+  // listed the file said any change to it runs everything, and selection honors
+  // that ahead of anything the values say.
+  const isConfigFile = (CONFIG_FILES as readonly string[]).includes(rel);
+  const fullRunTrigger = (
+    recorded: CoverageMap | undefined,
+  ): FullRunTrigger | undefined => {
+    if (matchesAny(rel, config.sentinels)) {
+      return {
+        always: true,
+        why:
+          'a change here forces one -- it is a sentinel, so a change to it ' +
+          'invalidates the map',
+      };
+    }
+    if (!isConfigFile) return undefined;
+    return recorded?.config !== undefined
+      ? {
+          always: false,
+          why:
+            'a change here forces one only when it moves a value covsel reads ' +
+            "-- it is covsel's own configuration, and the map records the " +
+            'values it was recorded under',
+        }
+      : {
+          always: true,
+          why:
+            "a change here forces one -- it is covsel's own configuration, and " +
+            'the map records no values to compare against',
+        };
+  };
 
+  // The diagnostic read, as in `status`: which kind of nothing there is to
+  // explain is part of the answer. What decides anything is still the usable
+  // map, or the absence of one.
   const map = stored.state === 'usable' ? stored.map : undefined;
+  const forcesFullRun = fullRunTrigger(map);
   if (map === undefined) {
     if (!present) return fail(rel, `${rel} is not in ${cwd}`);
     return {

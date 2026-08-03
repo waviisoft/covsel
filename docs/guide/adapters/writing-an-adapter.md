@@ -163,7 +163,7 @@ return {
 };
 ```
 
-Most recorders should leave it off, and two shapes must:
+Most recorders should leave it off, and three shapes must:
 
 - **A runner's own coverage provider.** `@vitest/coverage-v8` and Jest both drop
   `node_modules` before covsel is handed anything, so an adapter reading their
@@ -171,6 +171,20 @@ Most recorders should leave it off, and two shapes must:
 - **A per-test window opened in a hook.** `beforeEach` runs after the test
   file's imports have evaluated, so a dependency imported for its side effects,
   or imported but never called inside the window, is invisible.
+- **A recorder wrapping a command nobody vouched for.** The dump above holds
+  every script the process tree loaded — but only that tree. A command that
+  drives a browser, shells out to another runtime, or runs its tests in a
+  container arrives as the same opaque argv as `node --test`, and nothing about
+  it can be read off the command name or off the dump: vendored code appearing in
+  the dump is equally consistent with having missed every package that ran
+  elsewhere. So `createGenericRecorder` takes the assertion as an input,
+  `runsInNodeProcessTree`, and the generic adapter never makes it.
+
+  Vouching is about the run, never about the runner. Your runner executing its
+  own sources directly is not the question — any runner can be pointed at a spec
+  that drives a browser — so an adapter that sets it for every project using it
+  has made the guess the input exists to refuse. Only someone who knows the suite
+  a command names can say it executes nothing outside the process tree.
 
 Declaring it commits you to setting `packages` on every unit — an empty array
 included, since `[]` is the measurement "this test ran no vendored code" and
@@ -271,7 +285,7 @@ re-derive:
 | editing a function body selects it   | **blocks are real, not just module skeletons**         |
 | a selection runs the units it names  | **the invocation honours the selection**               |
 | a test added after recording runs    | new tests are never skipped                            |
-| a sentinel change runs everything    | config changes invalidate the map                      |
+| a sentinel change runs everything    | a change covsel cannot attribute invalidates the map   |
 | an unusable map runs everything      | a stale map never means "run nothing"                  |
 | blind spots fall open                | **a partial view is declared, never assumed**          |
 

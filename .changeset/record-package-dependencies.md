@@ -2,9 +2,11 @@
 '@covsel/core': minor
 ---
 
-A recording now captures which installed packages each test executed, and what
-was installed at the time. Nothing selects on it yet — every lockfile change is
-still the full run it is today — but both halves are on disk and inspectable.
+A recording can now capture which installed packages each test executed, and what
+was installed at the time, for a recorder whose caller vouches that the run
+executes everything under test in the Node process tree covsel spawns. Nothing
+selects on it yet — every lockfile change your `sentinels` name is still the full
+run it is today — but both halves are on disk and inspectable.
 
 `MapEntry` gains `packages`, the names of the packages a test ran code in.
 `CoverageMap` gains `dependencies`: the package manager, its install marker and
@@ -20,7 +22,9 @@ without an install would leave the tree looking unchanged, and "nothing changed"
 computed against a stale install is the answer that skips tests. pnpm writes a
 byte-identical copy of its lockfile into the store, npm a hidden lockfile, and
 yarn its install state; bun and yarn's PnP linker write nothing usable, so a
-project on either records no `dependencies` and keeps falling open. So does a
+project on either records no `dependencies`, and nothing measures what it
+installed — a change there is answered by whatever its `sentinels` name, and the
+default list does not name bun's lockfile. So does a
 tree carrying two managers' markers, where which install it reflects is
 unknowable.
 
@@ -43,10 +47,11 @@ walks a cycle rather than a tree.
 
 `Recorder` gains `observesPackages`, a claim `observes` cannot express — `**`
 already matches every `node_modules` path, so no scope distinguishes a recorder
-that watches vendored code from one that never sees it. Only the generic
-`NODE_V8_COVERAGE` recorder declares it: a runner's own coverage provider drops
-`node_modules` before covsel sees anything, and a per-test window opened in a
-`beforeEach` misses whatever ran while the module graph was evaluating.
+that watches vendored code from one that never sees it. Only a recorder reading
+a raw `NODE_V8_COVERAGE` dump is in a position to declare it: a runner's own
+coverage provider drops `node_modules` before covsel sees anything, and a
+per-test window opened in a `beforeEach` misses whatever ran while the module
+graph was evaluating.
 
 Recording **fails** a declaring recorder whose unit omits `packages`, since
 there is no safe way to guess what it ran. The reverse is only declined: a unit
