@@ -3,7 +3,9 @@
 ---
 
 The installed-package inventory now records **resolution edges** rather than
-versions, and `MAP_SCHEMA_VERSION` is 5.
+versions, and `MAP_SCHEMA_VERSION` is 5. Every stored map is invalidated: covsel
+rejects a map written under an older schema, which forces one full run with a
+log line saying so, and recording again restores selection.
 
 A version set answers "which versions are installed somewhere in this
 repository". That is not the question. The question is whether the code a given
@@ -35,5 +37,19 @@ Measured against real `pnpm install`: both situations above are now detected,
 and an ordinary bump of one of two dependencies still names exactly the one that
 moved. That control matters as much as the fixes — a change that caught both
 failures by over-selecting would have bought nothing.
+
+An identity names the store it came from as well as the entry, because a
+repository can hold more than one — a nested example app or an end-to-end
+project with its own lockfile is walked like any other — and two stores name
+their entries independently. Comparing bare names would let a change in one
+cancel out a change in the other.
+
+Two shapes are deliberately left out of the inventory, and so keep falling open.
+A package whose store entry names a directory rather than its contents — a
+`file:` or `link:` dependency, copied into the store under a name built from the
+path it came from — can have its source edited and reinstalled without the
+identity moving. And a store entry's link to its own package carries nothing
+that another edge does not already say, so it is skipped; that was a third of
+the edges recorded on this repository.
 
 `changedPackages` is unchanged; it compares the same shape it always did.

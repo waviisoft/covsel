@@ -266,6 +266,12 @@ describe('readInstalledInventory', () => {
       );
 
       expect(names(cwd)).toEqual(['left-pad', 'old-consumer']);
+      // Both copies, not just the one the root importer got: a bump to either
+      // has to be visible, and recording one would let the other move unseen.
+      expect(edgesOf(cwd, 'left-pad')).toEqual([
+        '.:node_modules/.pnpm/left-pad@1.3.0',
+        'node_modules/.pnpm/old-consumer@1.0.0:node_modules/.pnpm/left-pad@1.1.0',
+      ]);
     });
 
     it('finds a dependency bundled inside another', () => {
@@ -337,9 +343,10 @@ describe('readInstalledInventory', () => {
 
       // The store entry name is pnpm's own resolution identity, so covsel does
       // not have to invent one.
-      expect(readInstalledInventory(cwd)?.inventory['left-pad']).toContain(
-        '.:left-pad@1.3.0',
-      );
+      // The identity names the store as well as the entry, because a
+      // repository can hold more than one store and they name entries
+      // independently.
+      expect(edgesOf(cwd, 'left-pad')).toEqual(['.:node_modules/.pnpm/left-pad@1.3.0']);
     });
 
     it('moves when one importer swaps between versions others still hold', () => {
@@ -355,8 +362,12 @@ describe('readInstalledInventory', () => {
         [...new Set(edgesOf(cwd, 'is-odd').map(storeEntry))].sort();
       expect(identities(after)).toEqual(identities(before));
 
-      expect(edgesOf(before, 'is-odd')).toContain('packages/a:is-odd@3.0.1');
-      expect(edgesOf(after, 'is-odd')).toContain('packages/a:is-odd@2.0.0');
+      expect(edgesOf(before, 'is-odd')).toContain(
+        'packages/a:node_modules/.pnpm/is-odd@3.0.1',
+      );
+      expect(edgesOf(after, 'is-odd')).toContain(
+        'packages/a:node_modules/.pnpm/is-odd@2.0.0',
+      );
     });
 
     it('moves when a package is patched without its version changing', () => {
@@ -375,10 +386,84 @@ describe('readInstalledInventory', () => {
 
       // The store entry also links to its own package, so the root importer's
       // edge is one of two rather than the only one.
-      expect(edgesOf(cwd, 'is-odd')).toContain('.:is-odd@3.0.1_patch_hash=abc123');
-      expect(edgesOf(cwd, 'is-odd').every((e) => e.includes('patch_hash=abc123'))).toBe(
-        true,
+      expect(edgesOf(cwd, 'is-odd')).toEqual([
+        '.:node_modules/.pnpm/is-odd@3.0.1_patch_hash=abc123',
+      ]);
+    });
+
+    it('tells two stores in one repository apart', () => {
+      // A nested example app or an end-to-end project with its own lockfile is
+      // walked like any other tree, and the two stores name their entries
+      // independently. Comparing bare entry names would let a change in one
+      // cancel out a change in the other.
+      const cwd = pnpmProject({
+        'node_modules/.pnpm/dep@1.0.0/node_modules/dep/package.json': manifest(
+          'dep',
+          '1.0.0',
+        ),
+        'sub/node_modules/.pnpm/dep@1.0.0/node_modules/dep/package.json': manifest(
+          'dep',
+          '1.0.0',
+        ),
+      });
+      link(cwd, 'node_modules/dep', '.pnpm/dep@1.0.0/node_modules/dep');
+      link(cwd, 'sub/node_modules/dep', '.pnpm/dep@1.0.0/node_modules/dep');
+
+      expect(edgesOf(cwd, 'dep')).toEqual([
+        '.:node_modules/.pnpm/dep@1.0.0',
+        'sub:sub/node_modules/.pnpm/dep@1.0.0',
+      ]);
+    });
+
+    it('names a node_modules by where it is, not by the path that reached it', () => {
+      // `packages/app` depends on the workspace package `lib`, so `lib`'s own
+      // `node_modules` is reachable two ways. Labelling it for whichever route
+      // arrived first makes the recorded importer a matter of `readdirSync`
+      // order, which differs between filesystems.
+      const cwd = pnpmProject({
+        'packages/lib/package.json': manifest('lib', '1.0.0'),
+        'packages/app/package.json': manifest('app', '1.0.0'),
+        'packages/lib/node_modules/dep/package.json': manifest('dep', '1.0.0'),
+      });
+      link(cwd, 'packages/app/node_modules/lib', '../../lib');
+
+      expect(edgesOf(cwd, 'dep')).toEqual([
+        'packages/lib:packages/lib/node_modules/dep@1.0.0',
+      ]);
+    });
+
+    it('leaves out a package whose store entry names a directory rather than contents', () => {
+      // A `file:` dependency is copied into the store under a name built from
+      // the path it came from. Editing that directory and reinstalling leaves
+      // the identity untouched while the code a test runs changes, so there is
+      // nothing here worth comparing and the package falls open.
+      const cwd = pnpmProject({
+        'node_modules/.pnpm/shared@file+vendor+shared/node_modules/shared/package.json':
+          manifest('shared', '1.0.0'),
+      });
+      link(
+        cwd,
+        'node_modules/shared',
+        '.pnpm/shared@file+vendor+shared/node_modules/shared',
       );
+
+      expect(names(cwd)).toEqual([]);
+    });
+
+    it('keeps a bundled copy distinct from its namesake under another parent', () => {
+      // The npm and yarn shape the non-store identity exists for: one name, two
+      // copies, each inside a different dependent.
+      const cwd = pnpmProject({
+        'node_modules/one/package.json': manifest('one', '1.0.0'),
+        'node_modules/one/node_modules/dep/package.json': manifest('dep', '1.0.0'),
+        'node_modules/two/package.json': manifest('two', '1.0.0'),
+        'node_modules/two/node_modules/dep/package.json': manifest('dep', '2.0.0'),
+      });
+
+      expect(edgesOf(cwd, 'dep')).toEqual([
+        'node_modules/one:node_modules/one/node_modules/dep@1.0.0',
+        'node_modules/two:node_modules/two/node_modules/dep@2.0.0',
+      ]);
     });
 
     it('identifies a package outside any store by where it sits and what it says', () => {
@@ -450,7 +535,11 @@ describe('readInstalledInventory', () => {
       });
       link(cwd, 'node_modules/aliased', '.pnpm/real@1.0.0/node_modules/real');
 
-      expect(names(cwd)).toEqual(['real']);
+      // `real` goes too, because the alias was its only way in: what is left is
+      // the store entry's link to its own package, which names nothing the
+      // inventory does not already have. Both fall open, which is the safe
+      // direction for a name attribution can never produce.
+      expect(names(cwd)).not.toContain('aliased');
     });
 
     it('terminates on a cycle of linked workspace packages', () => {

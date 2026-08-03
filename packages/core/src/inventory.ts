@@ -147,31 +147,60 @@ function storeSiblings(cwd: string, packageRealAbs: string): string | undefined 
 }
 
 /**
- * The pnpm store entry a realpath sits in, if it sits in one.
+ * The pnpm store entry a realpath sits in, as a repo-relative path, if it sits
+ * in one.
  *
- * The store entry name is the resolution identity pnpm already computed:
- * `is-odd@3.0.1`, `is-odd@3.0.1_patch_hash=00bb…` once patched,
- * `vite@8.0.0_@types+node@22.0.0` once peers are resolved. Everything a version
- * cannot say about which code this is, that name says.
+ * The entry name is the resolution identity pnpm already computed:
+ * `is-odd@3.0.1`, `is-odd@3.0.1_patch_hash=00bb...` once patched,
+ * `vite@8.0.0_@types+node@22.0.0` once peers are resolved, the commit for a git
+ * specifier. Most of what a version cannot say about which code this is, that
+ * name says.
+ *
+ * The store it lives in comes along with it. A repository can hold more than
+ * one -- a nested example app or an end-to-end project with its own lockfile is
+ * walked like any other -- and two stores name their entries independently, so
+ * `is-odd@3.0.1` in one is a different package from `is-odd@3.0.1` in the
+ * other. Comparing bare names lets a change in one cancel out a change in the
+ * other.
  */
 function storeEntryOf(rel: string): string | undefined {
   const segments = rel.split('/');
   const vendor = segments.lastIndexOf(VENDOR_DIR);
   return vendor >= 2 && segments[vendor - 2] === '.pnpm'
-    ? segments[vendor - 1]
+    ? segments.slice(0, vendor).join('/')
     : undefined;
 }
 
 /**
+ * Specifier protocols pnpm writes into a store entry name that say *where* a
+ * package came from without saying *what* it is.
+ *
+ * A registry tarball's name pins its version, a git specifier's pins the
+ * commit, and a patch adds its hash. A `file:` or `link:` directory pins
+ * nothing: the entry is named for the path it was copied from, so editing that
+ * directory and reinstalling leaves the identity untouched while the code a
+ * test runs changes. Those packages are left out, and fall open.
+ *
+ * A protocol not listed here is trusted, which is the wrong default for one
+ * nobody has looked at -- but the alternative refuses every specifier covsel has
+ * not seen, and that refuses the registry case this exists to serve.
+ */
+const UNPINNED_SPECIFIER = /@(?:file|link)\+/;
+
+/**
  * What a package resolved to, as something two recordings can compare.
  *
- * A store entry names itself. Anything else — a hoisted npm or yarn tree, a
- * bundled dependency — is identified by where it really sits plus the version
- * it declares, because for those layouts the path alone does not say which code
- * is there.
+ * A store entry names itself, store and all. Anything else -- a hoisted tree, a
+ * bundled dependency -- is identified by where it really sits plus the version
+ * it declares. That is weaker: a version is not a content hash, so a package
+ * whose source changes without its version moving is invisible in that shape.
+ * It is the best the layout offers, and it is why the store is where the
+ * identity comes from wherever there is one.
  */
-function identityOf(resolved: string, version: string): string {
-  return storeEntryOf(resolved) ?? `${resolved}@${version}`;
+function identityOf(resolved: string, version: string): string | undefined {
+  const entry = storeEntryOf(resolved);
+  if (entry === undefined) return `${resolved}@${version}`;
+  return UNPINNED_SPECIFIER.test(entry) ? undefined : entry;
 }
 
 /**
@@ -185,9 +214,15 @@ function resolverOf(nodeModulesRel: string): string {
   return importer === '' ? '.' : importer;
 }
 
-/** A package directory the walk found, and the `node_modules` it was found in. */
+/** A package directory the walk found, and what resolved it. */
 interface FoundPackage {
+  /** Repo-relative path of the package directory, as the walk reached it. */
   dir: string;
+  /**
+   * Label for whatever holds the link: an importer by its directory, `.` at the
+   * repository root, or a store entry by its own identity. Derived from where
+   * that directory really is, so it does not depend on which path reached it.
+   */
   resolver: string;
 }
 
@@ -226,7 +261,12 @@ function packageDirs(
   if (visited.has(real)) return;
   visited.add(real);
 
-  const resolver = resolverOf(nodeModulesRel);
+  // Labelled from where the directory really is, not from the path that got
+  // here first. A `node_modules` reachable by several routes -- which is every
+  // workspace package another workspace package depends on -- would otherwise
+  // be named for whichever route `readdirSync` happened to yield first, and
+  // that order differs between filesystems.
+  const resolver = resolverOf(toRepoRelative(cwd, real) ?? nodeModulesRel);
   for (const name of subdirectories(join(cwd, nodeModulesRel))) {
     const rel = `${nodeModulesRel}/${name}`;
     // `.pnpm`, `.bin`, `.cache`, and the markers. The store is reached through
@@ -372,7 +412,16 @@ export function readInstalledInventory(cwd: string): InstalledInventory | undefi
     // The edge, not the version: which resolver got which copy. A version set
     // is unchanged by a patch and by an importer moving between two versions
     // that both stay installed, and in each case the code a test runs moved.
-    const edge = `${resolver}:${identityOf(resolved, version)}`;
+    const identity = identityOf(resolved, version);
+    // No identity means the entry names a location rather than contents, so
+    // this package has to fall open rather than be vouched for.
+    if (identity === undefined) continue;
+    // A store entry links to its own package, and that edge carries nothing:
+    // resolver and identity are the same string, and every other edge that
+    // reaches the package already names the identity. A third of the edges on
+    // this repository were these.
+    if (resolver === identity) continue;
+    const edge = `${resolver}:${identity}`;
     const edges = (inventory[name] ??= []);
     if (!edges.includes(edge)) edges.push(edge);
   }
