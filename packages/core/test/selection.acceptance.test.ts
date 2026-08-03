@@ -171,6 +171,28 @@ describe('fail-open acceptance', () => {
     rmSync(join(cwd, 'covsel.json'));
   });
 
+  // Every lockfile a package manager covsel can name writes, spelled out here
+  // rather than read from the config: what is being checked is that the default
+  // list holds these names, which a test deriving them from that list could not
+  // tell. A dependency change is invisible to a recording — vendored code under
+  // node_modules is outside what it maps — so the lockfile is the only place
+  // covsel sees one, and a lockfile-only diff is the ordinary shape of an
+  // update that re-resolves a floating range.
+  it.each([
+    'pnpm-lock.yaml',
+    'yarn.lock',
+    'package-lock.json',
+    'npm-shrinkwrap.json',
+    'bun.lock',
+    'bun.lockb',
+  ])('3f. a %s change alone forces a full run', async (lockfile) => {
+    write(lockfile, 'resolved\n');
+    const result = await selectAffected({ cwd, config });
+    expect(result.fullRun).toBe(true);
+    expect(result.reason).toContain(`sentinel changed: ${lockfile}`);
+    expect(result.tests).toEqual(['test/a.test.mjs', 'test/b.test.mjs']);
+  });
+
   it('4. a brand-new test file always runs, even absent from the map', async () => {
     write('test/c.test.mjs', FILES['test/a.test.mjs']!);
     const result = await selectAffected({ cwd, config });

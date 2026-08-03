@@ -209,7 +209,7 @@ Selection needs no configuration once an adapter is installed. To refine, add a 
   "testGlobs": ["**/*.{test,spec}.?(c|m)[jt]s?(x)"],
   "sourceGlobs": ["**/*"], // repo minus node_modules/dist/coverage/.covsel and tests
   "alwaysRun": ["**/fixtures/**"], // test files that must always run
-  "sentinels": ["package.json", "pnpm-lock.yaml", "tsconfig*.json"],
+  "sentinels": ["package.json", "pnpm-lock.yaml", "tsconfig*.json"], // replaces the defaults below
   "granularity": "block", // "block" (function-level) | "file"
   "store": {
     "dir": ".covsel",
@@ -223,6 +223,18 @@ forces one when it moves a value covsel reads — a reworded comment or a
 reformatted array does not, because the map records the values it was recorded
 under and compares against those. See
 [the fail-open guarantee](/guide/fail-open).
+
+The default `sentinels` list is `package.json`, `tsconfig*.json`, and every
+lockfile covsel recognises -- `pnpm-lock.yaml`, `yarn.lock`,
+`package-lock.json`, `npm-shrinkwrap.json`, `bun.lock`, and `bun.lockb`. The
+lockfiles matter because a dependency change is the one change covsel cannot see
+any other way: code under `node_modules` is outside what a recording maps, so
+nothing in the map moves when a dependency version does.
+
+Setting `sentinels` **replaces** that list rather than adding to it, so restate
+whatever you still want. Dropping your lockfile from it means a `bun update` or
+a lockfile-maintenance pull request selects against a map recorded before the
+bump.
 
 ### Bundled code
 

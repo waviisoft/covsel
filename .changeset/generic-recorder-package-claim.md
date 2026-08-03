@@ -36,7 +36,7 @@ so a unit is silent about them exactly when its recorder is.
 is what the adapter is for. A recording made through it now carries no `packages`
 on any entry and no `dependencies` inventory, so it holds no opinion about a
 dependency change and answering one is left to the lockfile sentinel, which the
-default `sentinels` cover for npm, pnpm, and yarn.
+default `sentinels` cover for every package manager covsel recognises.
 
 `observes` stays `OBSERVES_EVERYTHING` on the same recorder. The uncertainty is
 identical, but the two claims do not have the same expressive range: withholding

@@ -63,9 +63,9 @@ universal.
   and an adapter that wraps whatever you hand it cannot know one — so it does not
   claim to have watched your dependencies, and the map holds no opinion about
   them. A dependency change is answered by the lockfile sentinel instead, which
-  the default `sentinels` cover for npm, pnpm, and yarn — if your package manager
-  writes some other lockfile, add it to `sentinels` so a change to it still runs
-  everything.
+  the default `sentinels` cover for npm, pnpm, yarn, and bun — if your package
+  manager writes some other lockfile, add it to `sentinels` so a change to it
+  still runs everything.
 - Discovery, source globs, and sentinels are controlled by
   [configuration](/guide/getting-started#configuration); zero-config works out
   of the box.

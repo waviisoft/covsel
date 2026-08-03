@@ -24,7 +24,7 @@ byte-identical copy of its lockfile into the store, npm a hidden lockfile, and
 yarn its install state; bun and yarn's PnP linker write nothing usable, so a
 project on either records no `dependencies`, and nothing measures what it
 installed — a change there is answered by whatever its `sentinels` name, and the
-default list does not name bun's lockfile. So does a
+default list names every lockfile covsel recognises, bun's included. So does a
 tree carrying two managers' markers, where which install it reflects is
 unknowable.
 

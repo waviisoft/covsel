@@ -57,12 +57,13 @@ export default {
   /*
    * A change to any of these forces a full run.
    *
-   * The first four are covsel's defaults, restated because setting the field
-   * replaces them rather than adding to them. The rest are this repository's own:
-   * the vitest config decides what the suite even is, and the shims and the CLI
-   * entry point run in child processes the recorder cannot observe — so a change
-   * to one of them cannot be attributed to any test, and the only sound answer is
-   * to run everything.
+   * The first four are drawn from covsel's defaults, restated because setting
+   * the field replaces them rather than adding to them; the defaults name
+   * further lockfiles, for package managers this repository does not use. The
+   * rest are this repository's own: the vitest config decides what the suite
+   * even is, and the shims and the CLI entry point run in child processes the
+   * recorder cannot observe — so a change to one of them cannot be attributed to
+   * any test, and the only sound answer is to run everything.
    *
    * This file is deliberately not among them, and listing it would be a choice
    * with a cost. Selection already asks about it, ahead of this list and without

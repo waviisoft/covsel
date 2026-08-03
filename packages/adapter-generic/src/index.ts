@@ -15,7 +15,7 @@
  * handed is the one that cannot know it. A generic recording therefore carries
  * no package information at all, and holds no opinion about a dependency change:
  * answering one is left to the lockfile sentinel, which the default `sentinels`
- * cover for npm, pnpm, and yarn.
+ * cover for every package manager covsel recognises.
  */
 import {
   type Adapter,

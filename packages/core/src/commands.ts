@@ -68,8 +68,8 @@ export interface GenericRecorderInit {
    *
    * Left unset, entries carry no packages and the map no inventory, so the
    * recording holds no opinion about dependencies and a change to one is left to
-   * the lockfile sentinel, which the default `sentinels` cover for npm, pnpm,
-   * and yarn.
+   * the lockfile sentinel, which the default `sentinels` cover for every package
+   * manager covsel recognises.
    *
    * It does not widen `observes`, which is `**` either way: what an unvouched
    * command hides is a process boundary, and a repo-path scope cannot describe
