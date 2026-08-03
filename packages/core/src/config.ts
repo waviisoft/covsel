@@ -135,6 +135,83 @@ export function resolveConfig(partial?: CovselConfigInput): CovselConfig {
   };
 }
 
+/**
+ * Configuration fields whose change cannot leave a recorded map meaning
+ * something other than what selection reads out of it.
+ *
+ * A denylist rather than an allowlist, and deliberately so: everything else is
+ * compared, so a field added to the config later is compared from the day it
+ * exists rather than admitted as inert by an allowlist nobody remembered to
+ * extend. Adding a name here is a claim that has to be argued, and the four
+ * below are:
+ *
+ *  - `alwaysRun` and `sentinels` are read from the configuration in force at
+ *    selection time and applied to the diff in front of it. A change to either
+ *    takes effect on the next run whatever the map says, so it cannot leave the
+ *    map meaning one thing while selection reads another.
+ *  - `store` says where the map is kept, not what it says. Point it somewhere
+ *    else and a different map is read -- or none, which falls open on its own.
+ *  - `adapter` names the recorder. Every consequence its identity has for
+ *    selection -- what it was able to observe, what granularity it recorded at
+ *    -- is written into the map by the recording itself, so the name adds
+ *    nothing selection reads. It is also the one field a CLI flag overrides,
+ *    and comparing it would make `--adapter` on one invocation and not the next
+ *    look like a configuration change.
+ */
+const INERT_CONFIG_FIELDS = ['adapter', 'alwaysRun', 'sentinels', 'store'] as const;
+
+/**
+ * The configuration a map is recorded under, as the map stores it: every
+ * resolved field whose value shapes what the map means.
+ */
+export type RecordedConfig = Omit<CovselConfig, (typeof INERT_CONFIG_FIELDS)[number]>;
+
+/** The part of a resolved config a map records, for a later run to compare against. */
+export function recordedConfig(config: CovselConfig): RecordedConfig {
+  const view: Record<string, unknown> = { ...config };
+  for (const field of INERT_CONFIG_FIELDS) delete view[field];
+  return view as RecordedConfig;
+}
+
+/**
+ * Serialise a value so two configs compare by content: object keys sort, array
+ * order is kept because it is meaningful in every field that holds one, and an
+ * explicit `undefined` reads as the absence a JSON round-trip turns it into.
+ */
+function canonical(value: unknown): string {
+  if (value === undefined) return 'absent';
+  if (Array.isArray(value)) return `[${value.map(canonical).join(',')}]`;
+  if (typeof value === 'object' && value !== null) {
+    const fields = Object.entries(value as Record<string, unknown>)
+      .filter(([, v]) => v !== undefined)
+      .sort(([a], [b]) => (a < b ? -1 : 1))
+      .map(([k, v]) => `${JSON.stringify(k)}:${canonical(v)}`);
+    return `{${fields.join(',')}}`;
+  }
+  return JSON.stringify(value);
+}
+
+/**
+ * Fields whose values differ between the configuration a map was recorded under
+ * and the one in force now, sorted.
+ *
+ * Empty means the map means what it meant, whatever the config file's bytes did
+ * in between -- a reworded comment, a reformatted array, a key that moved. The
+ * question a full run turns on is whether a value covsel reads has moved, and
+ * this is that question asked directly instead of inferred from a diff.
+ */
+export function changedConfigFields(
+  before: RecordedConfig,
+  after: RecordedConfig,
+): string[] {
+  const from = before as Record<string, unknown>;
+  const to = after as Record<string, unknown>;
+  const names = new Set([...Object.keys(from), ...Object.keys(to)]);
+  return [...names]
+    .filter((name) => canonical(from[name]) !== canonical(to[name]))
+    .sort();
+}
+
 /** Config file names looked up, in priority order. */
 export const CONFIG_FILES = [
   'covsel.json',

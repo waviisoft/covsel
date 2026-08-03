@@ -9,6 +9,7 @@ export * from './name-pattern.js';
 export * from './packages.js';
 export * from './paths.js';
 export * from './inventory.js';
+export * from './dependencies.js';
 export * from './discover.js';
 export * from './observer.js';
 export * from './inspector-observer.js';

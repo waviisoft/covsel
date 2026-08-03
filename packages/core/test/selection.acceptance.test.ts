@@ -130,10 +130,15 @@ describe('fail-open acceptance', () => {
     expect(result.tests).toEqual(['test/a.test.mjs', 'test/b.test.mjs']);
   });
 
-  it('3c. changing covsel.json forces a full run', async () => {
-    // The map means what it means only under the config it was recorded with.
+  it('3c. changing a value in covsel.json forces a full run', async () => {
+    // The map means what it means only under the config it was recorded with,
+    // and the config in force is the one covsel loaded from that file — so the
+    // file and the values move together, as they do through the CLI.
     write('covsel.json', `${JSON.stringify({ granularity: 'file' })}\n`);
-    const result = await selectAffected({ cwd, config });
+    const result = await selectAffected({
+      cwd,
+      config: { ...config, granularity: 'file' },
+    });
     expect(result.fullRun).toBe(true);
     expect(result.tests).toEqual(['test/a.test.mjs', 'test/b.test.mjs']);
     rmSync(join(cwd, 'covsel.json'));
@@ -147,10 +152,22 @@ describe('fail-open acceptance', () => {
     write('covsel.json', `${JSON.stringify({ sourceGlobs: ['src/a.mjs'] })}\n`);
     const result = await selectAffected({
       cwd,
-      config: { ...config, sentinels: [] },
+      config: { ...config, sourceGlobs: ['src/a.mjs'], sentinels: [] },
     });
     expect(result.fullRun).toBe(true);
-    expect(result.reason).toContain('different configuration');
+    expect(result.reason).toContain('sourceGlobs');
+    rmSync(join(cwd, 'covsel.json'));
+  });
+
+  it('3e. a config file whose values did not move does not force one', async () => {
+    // The narrowing this rule is worth: an edit that changed no value covsel
+    // reads leaves the map meaning exactly what it meant, and the suite it would
+    // have cost is the whole suite. Guarded by 3c and 3d above — the moment a
+    // value does move, the full run is back.
+    write('covsel.json', `${JSON.stringify(config, null, 2)}\n`);
+    const result = await selectAffected({ cwd, config });
+    expect(result.fullRun).toBe(false);
+    expect(result.tests).toEqual([]);
     rmSync(join(cwd, 'covsel.json'));
   });
 
@@ -168,7 +185,7 @@ describe('fail-open acceptance', () => {
     'npm-shrinkwrap.json',
     'bun.lock',
     'bun.lockb',
-  ])('3e. a %s change alone forces a full run', async (lockfile) => {
+  ])('3f. a %s change alone forces a full run', async (lockfile) => {
     write(lockfile, 'resolved\n');
     const result = await selectAffected({ cwd, config });
     expect(result.fullRun).toBe(true);

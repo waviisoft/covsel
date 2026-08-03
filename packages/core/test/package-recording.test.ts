@@ -7,6 +7,7 @@ import { commitAll, write } from './helpers/repo.js';
 import {
   combineObservations,
   type CoverageMap,
+  type CovselConfig,
   createGenericRecorder,
   MAP_SCHEMA_VERSION,
   mergeMaps,
@@ -21,9 +22,10 @@ import {
  * What a recording has to know before a dependency bump can select anything:
  * which packages each test executed, and what was installed at the time.
  *
- * Nothing here selects. Both halves are recorded and neither is read yet, so
- * every lockfile change is still the full run it is today — which is the point
- * of landing them separately from the selection that will use them.
+ * Nothing here selects. Both halves are recorded and neither is read yet, so a
+ * lockfile change is still answered by the sentinel list, exactly as it is today
+ * — which is the point of landing them separately from the selection that will
+ * use them.
  */
 
 const dirs: string[] = [];
@@ -74,14 +76,30 @@ function fixture({ marker = true }: { marker?: boolean } = {}): string {
   return cwd;
 }
 
+/**
+ * The generic recorder, told what it is running.
+ *
+ * `node --test` executes the whole fixture inside the process tree covsel
+ * spawns, and these tests are the caller that knows it, having written the
+ * command themselves. The recorder makes no package claim of its own, so
+ * without the assertion there would be no package recording here to test.
+ */
+function vouchedRecorder(cwd: string, config: CovselConfig): Recorder {
+  return createGenericRecorder({
+    command: ['node', '--test'],
+    cwd,
+    config,
+    runsInNodeProcessTree: true,
+  });
+}
+
 /** Record the fixture with the generic recorder, or a stand-in for it. */
 async function record(cwd: string, recorder?: Recorder): Promise<CoverageMap> {
   const config = resolveConfig({ sourceGlobs: ['src/**'] });
   const result = await recordMap({
     cwd,
     config,
-    recorder:
-      recorder ?? createGenericRecorder({ command: ['node', '--test'], cwd, config }),
+    recorder: recorder ?? vouchedRecorder(cwd, config),
   });
   expect(result.failures).toEqual([]);
   return result.map!;
@@ -136,7 +154,9 @@ describe('recording what was installed', () => {
   it('records nothing when the package manager leaves no proof', async () => {
     // A bun project. The packages each test ran are still recorded, but with no
     // way to tell a fresh tree from a stale one there is nothing to measure a
-    // change against, and every dependency change keeps falling open.
+    // change against, so nothing here can ever answer a dependency change --
+    // which for bun means its sentinels answer it or nothing does, since the
+    // default list does not name `bun.lock`.
     const map = await record(fixture({ marker: false }));
 
     expect(map.dependencies).toBeUndefined();
@@ -146,7 +166,7 @@ describe('recording what was installed', () => {
   it('records nothing for a recorder that does not watch packages', async () => {
     const cwd = fixture();
     const config = resolveConfig({ sourceGlobs: ['src/**'] });
-    const base = createGenericRecorder({ command: ['node', '--test'], cwd, config });
+    const base = vouchedRecorder(cwd, config);
     const blind: Recorder = {
       observes: OBSERVES_EVERYTHING,
       async record(file) {
@@ -162,6 +182,68 @@ describe('recording what was installed', () => {
     // is exactly the pairing that skips tests.
     expect(map.dependencies).toBeUndefined();
     expect(map.entries.every((e) => e.packages === undefined)).toBe(true);
+  }, 120_000);
+});
+
+describe('what the generic recorder may claim about the command it was handed', () => {
+  /** The command as the recorder receives it: a string somebody typed. */
+  const handed = (cwd: string) =>
+    createGenericRecorder({
+      command: ['node', '--test'],
+      cwd,
+      config: resolveConfig({ sourceGlobs: ['src/**'] }),
+    });
+
+  it('claims no package observation for a command nobody vouched for', () => {
+    // Every command reaches this recorder as an opaque argv, and one that drives
+    // a browser or shells out to another runtime is indistinguishable from one
+    // that runs everything under NODE_V8_COVERAGE. Declaring anyway would vouch
+    // for packages nothing watched.
+    //
+    // A bare directory rather than the fixture: the declaration is made when the
+    // recorder is built, before anything has been run or read.
+    const cwd = mkdtempSync(join(tmpdir(), 'covsel-pkgclaim-'));
+    dirs.push(cwd);
+
+    expect(handed(cwd).observesPackages).toBeUndefined();
+  });
+
+  it('leaves its units silent about packages rather than reporting what it cannot stand behind', async () => {
+    const units = await handed(fixture()).record('test/a.test.mjs');
+
+    expect(units).toHaveLength(1);
+    // The silence is a choice, not an empty recording: this unit saw the test
+    // execute `src/a.mjs`, which imports `left-pad`. What it declines to say is
+    // that it would have seen every package, wherever the command ran one.
+    expect(units[0]?.files.map((f) => f.file)).toContain('src/a.mjs');
+    expect(units[0]?.packages).toBeUndefined();
+  }, 120_000);
+
+  it('records no inventory beside entries whose silence would be read as a measurement', async () => {
+    // This is the pairing selection will read: a package in the inventory that
+    // no entry credits means "installed and never ran", so a bump to it need
+    // select nothing. Recording it for an unvouched command would say that of
+    // every package the run executed where the dump could not reach -- so the
+    // map carries neither half and holds no opinion about a dependency change.
+    const cwd = fixture();
+    const map = await record(cwd, handed(cwd));
+
+    expect(map.entries.length).toBeGreaterThan(0);
+    expect(map.dependencies).toBeUndefined();
+    expect(map.entries.every((e) => e.packages === undefined)).toBe(true);
+  }, 120_000);
+
+  it('claims it once the caller vouches for the command', async () => {
+    // The claim is available, it just belongs to whoever knows what is being
+    // run. Nothing about the recording changes; only who stands behind it.
+    const cwd = fixture();
+    const config = resolveConfig({ sourceGlobs: ['src/**'] });
+
+    expect(vouchedRecorder(cwd, config).observesPackages).toBe(true);
+
+    const map = await record(cwd);
+    expect(map.dependencies?.inventory['left-pad']).toEqual(['1.3.0']);
+    expect(packagesOf(map, 'test/a.test.mjs')).toContain('left-pad');
   }, 120_000);
 });
 
