@@ -150,7 +150,7 @@ describe('recording what was installed', () => {
     const blind: Recorder = {
       observes: OBSERVES_EVERYTHING,
       async record(file) {
-        const units = await base.record(file);
+        const units = await base.record!(file);
         return units.map(({ packages: _drop, ...unit }) => unit);
       },
     };

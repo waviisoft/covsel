@@ -183,7 +183,7 @@ describe('mocha per-test recording', () => {
       cwd,
       config,
     });
-    const units = await recorder.record('test/other.test.mjs');
+    const units = await recorder.record!('test/other.test.mjs');
     expect(units.map((u) => u.test.name).sort()).toEqual(['math adds', 'other adds up']);
   }, 60_000);
 });

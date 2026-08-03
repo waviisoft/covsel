@@ -4,6 +4,7 @@ import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 
 import {
+  type RecordedUnit,
   type Adapter,
   createGenericRecorder,
   extractBlocks,
@@ -155,12 +156,7 @@ function forwardPackageClaim(real: Recorder): { observesPackages?: boolean } {
 }
 
 /** The honest adapter, recording through it and then damaging what it reported. */
-const derive = (
-  damage: (
-    unit: Awaited<ReturnType<Recorder['record']>>[number],
-    cwd: string,
-  ) => Awaited<ReturnType<Recorder['record']>>[number],
-): Adapter => ({
+const derive = (damage: (unit: RecordedUnit, cwd: string) => RecordedUnit): Adapter => ({
   ...probeAdapter,
   createRecorder(init) {
     const real = probeAdapter.createRecorder(init);
@@ -168,7 +164,7 @@ const derive = (
       observes: real.observes,
       ...forwardPackageClaim(real),
       async record(file) {
-        return (await real.record(file)).map((unit) => damage(unit, init.cwd));
+        return (await real.record!(file)).map((unit) => damage(unit, init.cwd));
       },
     };
   },
@@ -195,7 +191,7 @@ const partialView = (observes: readonly string[]): Adapter => ({
       observes,
       ...forwardPackageClaim(real),
       async record(file) {
-        return (await real.record(file)).map((unit) => ({
+        return (await real.record!(file)).map((unit) => ({
           ...unit,
           files: unit.files.filter((f) => inView(f.file)),
           blocks: unit.blocks.filter((b) => inView(b.file)),

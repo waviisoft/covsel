@@ -23,6 +23,8 @@ import {
   MAP_SCHEMA_VERSION,
   MODULE_BLOCK,
   recordMap,
+  type RecordedUnit,
+  type Recorder,
   resolveConfigFor,
   runSelected as runSelectedThroughAdapter,
   selectAffected,
@@ -49,6 +51,30 @@ function spawnDetail(res: SpawnSyncReturns<string>): string {
   if (res.error) return res.error.message;
   if (res.signal) return `killed by ${res.signal}`;
   return (res.stderr || res.stdout || '').trim() || `exited ${res.status ?? 'unknown'}`;
+}
+
+/**
+ * Record one file, whichever way the recorder records.
+ *
+ * A recorder that drives its runner once for the whole suite has no per-file
+ * entry point, so the kit asks it for a run limited to the one file it wants and
+ * keeps the units belonging to it. Without this a run-mode adapter could not sit
+ * the suite at all, and the checks exist precisely to hold the adapters covsel
+ * cannot see inside.
+ */
+async function recordOneFile(
+  recorder: Recorder,
+  testFile: string,
+): Promise<RecordedUnit[]> {
+  if (typeof recorder.record === 'function') return recorder.record(testFile);
+  if (typeof recorder.recordRun === 'function') {
+    const units = await recorder.recordRun([testFile]);
+    return units.filter((unit) => unit.test.file === testFile);
+  }
+  throw new Error(
+    'this recorder implements neither `record` nor `recordRun`, so there is no ' +
+      'way to observe a test with it',
+  );
 }
 
 function git(cwd: string, args: string[]): void {
@@ -791,7 +817,7 @@ const CHECKS: { name: string; run: Check }[] = [
           cwd: project.cwd,
           config: project.config,
         });
-        const units = await recorder.record(spec.fixture.units.a.testFile);
+        const units = await recordOneFile(recorder, spec.fixture.units.a.testFile);
         const withBlocks = units.filter((u) => u.blocks.length > 0);
         if (withBlocks.length > 0) {
           const first = withBlocks[0]!;

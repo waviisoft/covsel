@@ -76,7 +76,7 @@ async function recordFixture(observes: readonly string[]): Promise<{
   const recorder: Recorder = {
     observes,
     observesPackages: base.observesPackages === true,
-    record: (f) => base.record(f),
+    record: (f) => base.record!(f),
   };
   const result = await recordMap({ cwd, config, recorder });
   expect(result.ok).toBe(true);

@@ -183,7 +183,30 @@ export interface Recorder {
    * tests.
    */
   readonly observesPackages?: boolean;
-  record(testFile: string): Promise<RecordedUnit[]>;
+  /**
+   * Record one test file. A recorder implements this or `recordRun`, and
+   * recording refuses a recorder offering neither.
+   */
+  record?(testFile: string): Promise<RecordedUnit[]>;
+  /**
+   * Record the whole suite in one invocation, returning a unit per test.
+   *
+   * For a runner whose startup cost is paid per invocation — a browser, an
+   * application server — driving it once per test file is not a slower version
+   * of the same thing, it is a recording nobody will run twice. Such a recorder
+   * implements this instead of `record`.
+   *
+   * The cost is a safety property. Driven file by file, covsel knows which file
+   * it asked about, so a file that yields nothing is visibly a shortfall; here
+   * a test the run never mentions is indistinguishable from a test that covered
+   * nothing, which selection reads as "no test to run". Recording therefore
+   * reconciles what comes back against the files it asked for, and a file the
+   * run never reported fails the recording rather than being written as silence.
+   *
+   * The whole suite is one unit of success: a run that throws records nothing,
+   * because a partial map cannot be told apart from a complete one afterwards.
+   */
+  recordRun?(testFiles: readonly string[]): Promise<RecordedUnit[]>;
   /**
    * Scripts the most recent `record` executed, could not map back to any source,
    * and accepted anyway because the project listed them in

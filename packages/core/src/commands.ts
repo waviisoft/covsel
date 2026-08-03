@@ -248,9 +248,98 @@ function packageClaimMismatch(
 }
 
 /**
- * Record a fresh map. Runs the recorder over every discovered test file. If any
- * file fails to record (e.g. a failing test invalidates its coverage), the map
- * is *not* written — a partial map cannot be trusted for selection.
+ * Drive a recorder that records the whole suite in one invocation, and reconcile
+ * what came back against what was asked for.
+ *
+ * The reconciliation is the point. Driven file by file, a file that yields
+ * nothing is visibly a shortfall because covsel named it; here the run reports
+ * whatever it reports, and a test file missing from that report would otherwise
+ * be written as silence — which selection reads as "covers nothing", and so
+ * never runs. A file the run never mentioned is therefore a failure against that
+ * file. Nothing is asserted about tests *within* a file, since covsel does not
+ * know how many a file holds; that is the recorder's own contract with its
+ * runner.
+ */
+async function recordWholeRun(init: {
+  recorder: Recorder;
+  testFiles: readonly string[];
+  ingest: (units: readonly RecordedUnit[]) => number;
+  onEvent?: (event: RecordEvent) => void;
+}): Promise<{ failures: { file: string; reason: string }[]; error?: string }> {
+  const { recorder, testFiles, ingest, onEvent } = init;
+  let units: RecordedUnit[];
+  try {
+    units = await recorder.recordRun!(testFiles);
+  } catch (err) {
+    // The suite is one unit of success: a run that died partway leaves coverage
+    // for the tests it reached, and nothing afterwards can tell that apart from
+    // a complete recording.
+    const reason = err instanceof Error ? err.message : String(err);
+    recorder.unmappableAllowed?.();
+    onEvent?.({ kind: 'failed', file: '(the run)', reason });
+    return { failures: [], error: reason };
+  }
+
+  const byFile = new Map<string, RecordedUnit[]>();
+  for (const unit of units) {
+    const list = byFile.get(unit.test.file);
+    if (list === undefined) byFile.set(unit.test.file, [unit]);
+    else list.push(unit);
+  }
+
+  const failures: { file: string; reason: string }[] = [];
+  const allowed = recorder.unmappableAllowed?.() ?? [];
+  // Every file covsel discovered, in its order, so the report reads the same as
+  // the per-file path's regardless of what order the run reported in.
+  for (const file of testFiles) {
+    const forFile = byFile.get(file);
+    if (forFile === undefined) {
+      const reason =
+        'the run reported no coverage for it. A test file the run never ' +
+        'mentions cannot be told apart from one that covers nothing, and ' +
+        'covering nothing means never being selected again.';
+      failures.push({ file, reason });
+      onEvent?.({ kind: 'failed', file, reason });
+      continue;
+    }
+    try {
+      const sources = ingest(forFile);
+      onEvent?.({
+        kind: 'recorded',
+        file,
+        tests: forFile.length,
+        sources,
+        ...(allowed.length > 0 ? { allowedUnmappable: allowed } : {}),
+      });
+    } catch (err) {
+      const reason = err instanceof Error ? err.message : String(err);
+      failures.push({ file, reason });
+      onEvent?.({ kind: 'failed', file, reason });
+    }
+  }
+
+  // Units for files covsel never discovered are kept rather than refused: the
+  // recorder saw the runner execute them, and an entry selection never consults
+  // costs nothing, while refusing would fail a recording over a disagreement
+  // about discovery that the user may have configured deliberately.
+  for (const [file, forFile] of byFile) {
+    if (testFiles.includes(file)) continue;
+    try {
+      ingest(forFile);
+    } catch (err) {
+      failures.push({ file, reason: err instanceof Error ? err.message : String(err) });
+    }
+  }
+
+  return { failures };
+}
+
+/**
+ * Record a fresh map. Drives the recorder over every discovered test file —
+ * one invocation per file, or one invocation for the whole suite when the
+ * recorder records that way. If any file fails to record (e.g. a failing test
+ * invalidates its coverage), the map is *not* written — a partial map cannot be
+ * trusted for selection.
  */
 export async function recordMap(init: RecordInit): Promise<RecordResult> {
   const { cwd, config, recorder } = init;
@@ -286,57 +375,93 @@ export async function recordMap(init: RecordInit): Promise<RecordResult> {
 
   const wantBlocks = config.granularity !== 'file';
   const observesPackages = recorder.observesPackages === true;
-  for (const file of testFiles) {
-    try {
-      const units = await recorder.record(file);
-      for (const unit of units) {
-        const overclaimed = overclaimedGlobs(unit, recorder.observes);
-        if (overclaimed.length > 0) {
-          throw new Error(
-            `recorded as observing ${overclaimed.join(', ')}, which the recorder ` +
-              `does not declare (it declares ${[...recorder.observes].join(', ') || 'nothing'})`,
-          );
-        }
-        const mismatch = packageClaimMismatch(unit, observesPackages);
-        if (mismatch !== undefined) throw new Error(mismatch);
+
+  /**
+   * Check a run's units and turn them into entries, returning how many sources
+   * they credited. Shared by both recording modes so neither can be held to a
+   * weaker rule than the other. Throws on the first unit that breaks one.
+   */
+  const ingest = (units: readonly RecordedUnit[]): number => {
+    for (const unit of units) {
+      const overclaimed = overclaimedGlobs(unit, recorder.observes);
+      if (overclaimed.length > 0) {
+        throw new Error(
+          `recorded as observing ${overclaimed.join(', ')}, which the recorder ` +
+            `does not declare (it declares ${[...recorder.observes].join(', ') || 'nothing'})`,
+        );
       }
-      let sources = 0;
-      for (const unit of units) {
-        entries.push({
-          test: unit.test,
-          files: unit.files,
-          ...(wantBlocks && unit.blocks.length > 0 ? { blocks: unit.blocks } : {}),
-          // Kept only when the recorder stands behind it: a list from one that
-          // does not is declined rather than trusted. `!== undefined` rather
-          // than truthiness, because `[]` is the measurement "ran no vendored
-          // code" and turning that into silence is what skips tests.
-          ...(observesPackages && unit.packages !== undefined
-            ? { packages: unit.packages }
-            : {}),
-        });
-        // A unit combined from several observation windows knows the scope those
-        // windows add up to, which is what its entry was really watched for; a
-        // unit from a single window is covered by the recorder's declaration.
-        scopes.push(unit.observes ?? recorder.observes);
-        sources += unit.files.length;
-      }
-      const allowed = recorder.unmappableAllowed?.() ?? [];
-      init.onEvent?.({
-        kind: 'recorded',
-        file,
-        tests: units.length,
-        sources,
-        ...(allowed.length > 0 ? { allowedUnmappable: allowed } : {}),
+      const mismatch = packageClaimMismatch(unit, observesPackages);
+      if (mismatch !== undefined) throw new Error(mismatch);
+    }
+    let sources = 0;
+    for (const unit of units) {
+      entries.push({
+        test: unit.test,
+        files: unit.files,
+        ...(wantBlocks && unit.blocks.length > 0 ? { blocks: unit.blocks } : {}),
+        ...(observesPackages && unit.packages !== undefined
+          ? { packages: unit.packages }
+          : {}),
       });
-    } catch (err) {
-      const reason = err instanceof Error ? err.message : String(err);
-      failures.push({ file, reason });
-      // Drop whatever this file let through unmapped before moving on. A
-      // recorder that accumulates across files (the generic one does, in its
-      // mapper) would otherwise carry it to the next file's event, naming a
-      // script that file never executed.
-      recorder.unmappableAllowed?.();
-      init.onEvent?.({ kind: 'failed', file, reason });
+      scopes.push(unit.observes ?? recorder.observes);
+      sources += unit.files.length;
+    }
+    return sources;
+  };
+
+  if (typeof recorder.recordRun === 'function') {
+    const outcome = await recordWholeRun({
+      recorder,
+      testFiles,
+      ingest,
+      ...(init.onEvent ? { onEvent: init.onEvent } : {}),
+    });
+    if (outcome.error !== undefined) {
+      return {
+        ok: false,
+        recorded: entries.length,
+        failures: outcome.failures,
+        mapPath: store.path(),
+        testFiles,
+        error: outcome.error,
+      };
+    }
+    failures.push(...outcome.failures);
+  } else if (typeof recorder.record !== 'function') {
+    return {
+      ok: false,
+      recorded: 0,
+      failures: [],
+      mapPath: store.path(),
+      testFiles,
+      error:
+        'the adapter’s recorder implements neither `record` nor `recordRun`, so ' +
+        'there is no way to observe a test. This is an adapter bug; report it to ' +
+        'whoever publishes it.',
+    };
+  } else {
+    for (const file of testFiles) {
+      try {
+        const units = await recorder.record(file);
+        const sources = ingest(units);
+        const allowed = recorder.unmappableAllowed?.() ?? [];
+        init.onEvent?.({
+          kind: 'recorded',
+          file,
+          tests: units.length,
+          sources,
+          ...(allowed.length > 0 ? { allowedUnmappable: allowed } : {}),
+        });
+      } catch (err) {
+        const reason = err instanceof Error ? err.message : String(err);
+        failures.push({ file, reason });
+        // Drop whatever this file let through unmapped before moving on. A
+        // recorder that accumulates across files (the generic one does, in its
+        // mapper) would otherwise carry it to the next file's event, naming a
+        // script that file never executed.
+        recorder.unmappableAllowed?.();
+        init.onEvent?.({ kind: 'failed', file, reason });
+      }
     }
   }
 
