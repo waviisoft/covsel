@@ -271,7 +271,7 @@ re-derive:
 | editing a function body selects it   | **blocks are real, not just module skeletons**         |
 | a selection runs the units it names  | **the invocation honours the selection**               |
 | a test added after recording runs    | new tests are never skipped                            |
-| a sentinel change runs everything    | config changes invalidate the map                      |
+| a sentinel change runs everything    | a change covsel cannot attribute invalidates the map   |
 | an unusable map runs everything      | a stale map never means "run nothing"                  |
 | blind spots fall open                | **a partial view is declared, never assumed**          |
 

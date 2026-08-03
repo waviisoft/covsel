@@ -1,3 +1,5 @@
+import type { RecordedConfig } from './config.js';
+
 /**
  * The on-disk coverage-map schema. This is a versioned, stable contract:
  * bumping MAP_SCHEMA_VERSION invalidates every stored map, which — per the
@@ -122,6 +124,22 @@ export interface CoverageMap {
   recordedAt: string;
   /** Hashes of sentinel files at record time; any change invalidates the map. */
   sentinelHashes: Record<string, string>;
+  /**
+   * The configuration this was recorded under, restricted to the fields whose
+   * values shape what the map means.
+   *
+   * A map is meaningful only under the configuration it was recorded with, and
+   * this is what lets a later run ask whether that configuration actually
+   * moved. Without it the only available question is whether the config *file*
+   * appears in the diff, which answers yes to a reworded comment and no to a
+   * value that changed for a reason the diff cannot show.
+   *
+   * Absent means fall open: a map recorded before this was written, or merged
+   * from shards that disagreed about their configuration, has no recorded
+   * configuration to compare against, and any change to a config file keeps
+   * forcing the full run it forces today.
+   */
+  config?: RecordedConfig;
   /**
    * Repo-relative globs the recording was able to observe execution within.
    *

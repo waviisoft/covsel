@@ -8,6 +8,7 @@ import {
   CONFIG_FILES,
   type CovselConfig,
   type CovselConfigInput,
+  recordedConfig,
   resolveConfig,
 } from './config.js';
 import { discoverTestFiles, isTestFile } from './discover.js';
@@ -129,7 +130,7 @@ function hashSentinels(cwd: string, sentinels: string[]): Record<string, string>
 function assembleMap(
   entries: MapEntry[],
   cwd: string,
-  config: Pick<CovselConfig, 'sentinels' | 'granularity'>,
+  config: CovselConfig,
   recordedAt: string,
   observed: readonly string[],
   dirty: boolean,
@@ -161,6 +162,10 @@ function assembleMap(
     ...(commit ? { commit } : {}),
     recordedAt,
     sentinelHashes: hashSentinels(cwd, config.sentinels),
+    // What the entries below mean, stated rather than left to be inferred from a
+    // later diff: a selection made under different values is reading the map for
+    // something it never measured.
+    config: recordedConfig(config),
     observed: [...observed],
     ...(dependencies ? { dependencies } : {}),
     entries,
@@ -995,6 +1000,22 @@ export interface TestExplanation {
   unmeasured: boolean;
 }
 
+/**
+ * Why a change to one path forces a full run, and whether it always does.
+ *
+ * Sentinels always do: covsel cannot attribute a change in one to any test, so
+ * the whole suite is the only sound answer. Its own config does not, since the
+ * question there is whether the change moved a value covsel reads — and telling
+ * a reader "a change here runs everything" when a reworded comment does nothing
+ * of the sort is the drift this separation exists to prevent.
+ */
+export interface FullRunTrigger {
+  /** True when any change to the path forces a full run, whatever it changed. */
+  always: boolean;
+  /** The whole answer, as a sentence: what a change does, and why. */
+  why: string;
+}
+
 export interface ExplainResult {
   /**
    * False when the path itself could not be explained. `error` says why, and no
@@ -1020,12 +1041,10 @@ export interface ExplainResult {
    */
   observed?: boolean;
   /**
-   * Why a change to this path on its own forces a full run, when one does.
-   * Sentinels are not the only way that happens — a change to covsel's own
-   * config invalidates the map without going through the sentinel list — so
-   * this names the reason rather than reporting the glob match.
+   * What a change to this path on its own does to the next run, when it does
+   * anything at all.
    */
-  forcesFullRun?: string;
+  forcesFullRun?: FullRunTrigger;
   /** True when an alwaysRun glob matches, so this test runs whatever the diff. */
   alwaysRun: boolean;
   /** True when the configured test globs match this path. */
@@ -1139,16 +1158,42 @@ export async function explainPath(init: ExplainInit): Promise<ExplainResult> {
   const alwaysRun = matchesAny(rel, config.alwaysRun);
   const excluded = isExcludedRel(rel);
   // A sentinel is not the only path a change to which invalidates the map:
-  // covsel's own config decides what the map means, and the policy forces a
-  // full run on it without consulting the sentinel list.
-  const forcesFullRun = matchesAny(rel, config.sentinels)
-    ? 'it is a sentinel, so a change to it invalidates the map'
-    : (CONFIG_FILES as readonly string[]).includes(rel)
-      ? "it is covsel's own configuration, and the map means what it means only " +
-        'under the config it was recorded with'
-      : undefined;
+  // covsel's own config decides what the map means, and the policy asks about it
+  // without consulting the sentinel list. The sentinel answer is reported first
+  // even for a config file, because it is the one that holds: a project that
+  // listed the file said any change to it runs everything, and selection honors
+  // that ahead of anything the values say.
+  const isConfigFile = (CONFIG_FILES as readonly string[]).includes(rel);
+  const fullRunTrigger = (
+    recorded: CoverageMap | undefined,
+  ): FullRunTrigger | undefined => {
+    if (matchesAny(rel, config.sentinels)) {
+      return {
+        always: true,
+        why:
+          'a change here forces one -- it is a sentinel, so a change to it ' +
+          'invalidates the map',
+      };
+    }
+    if (!isConfigFile) return undefined;
+    return recorded?.config !== undefined
+      ? {
+          always: false,
+          why:
+            'a change here forces one only when it moves a value covsel reads ' +
+            "-- it is covsel's own configuration, and the map records the " +
+            'values it was recorded under',
+        }
+      : {
+          always: true,
+          why:
+            "a change here forces one -- it is covsel's own configuration, and " +
+            'the map records no values to compare against',
+        };
+  };
 
   const map = await store.read();
+  const forcesFullRun = fullRunTrigger(map);
   if (map === undefined) {
     if (!present) return fail(rel, `${rel} is not in ${cwd}`);
     return {

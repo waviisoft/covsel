@@ -218,7 +218,10 @@ Selection needs no configuration once an adapter is installed. To refine, add a 
 }
 ```
 
-Any change matching `sentinels` forces a full run; see
+Any change matching `sentinels` forces a full run. A change to this file itself
+forces one when it moves a value covsel reads — a reworded comment or a
+reformatted array does not, because the map records the values it was recorded
+under and compares against those. See
 [the fail-open guarantee](/guide/fail-open).
 
 ### Bundled code

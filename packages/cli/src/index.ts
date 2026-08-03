@@ -935,7 +935,7 @@ function printExplainHeader(r: ExplainResult): void {
       : 'observed:   yes (the recording could see this path)\n',
   );
   if (r.forcesFullRun !== undefined) {
-    out(`full run:   a change here forces one -- ${r.forcesFullRun}\n`);
+    out(`full run:   ${r.forcesFullRun.why}\n`);
   }
   if (r.alwaysRun) {
     out('alwaysRun:  yes -- this test runs whatever the diff says\n');
@@ -958,7 +958,7 @@ function printCoveredBy(r: ExplainResult, all: boolean): void {
     out(
       r.observed === false
         ? 'covered by: nothing recorded, and the recording could not observe it\n'
-        : r.forcesFullRun !== undefined
+        : r.forcesFullRun?.always === true
           ? 'covered by: no recorded test covers this file -- a change to it runs\n' +
             '            everything anyway, for the reason above\n'
           : 'covered by: no recorded test covers this file -- a change to it selects\n' +

@@ -1,4 +1,5 @@
 import { agreedScope } from './combine.js';
+import { changedConfigFields, type RecordedConfig } from './config.js';
 import {
   type CoverageMap,
   type CoveredBlock,
@@ -34,6 +35,28 @@ function byKey(a: string, b: string): number {
  * describe different resolutions of the same names, and a merged inventory
  * would vouch for a package at a version half the entries never ran.
  */
+/**
+ * The configuration every shard agrees it recorded under, if there is one.
+ *
+ * A merged map claims one configuration for every entry in it, and shards that
+ * disagree have no single answer to make that claim with: one shard's entries
+ * were measured under `sourceGlobs` the other's were not, and a merged map
+ * naming either would vouch for entries recorded under the other. A shard with
+ * no recorded configuration says nothing about its own, which is the same
+ * absence.
+ *
+ * Dropping it costs a full run on the next config change, which is what a map
+ * without one gets anyway.
+ */
+function agreedConfig(maps: CoverageMap[]): RecordedConfig | undefined {
+  const first = maps[0]?.config;
+  if (first === undefined) return undefined;
+  const identical = maps.every(
+    (m) => m.config !== undefined && changedConfigFields(first, m.config).length === 0,
+  );
+  return identical ? first : undefined;
+}
+
 function agreedDependencies(maps: CoverageMap[]): MapDependencies | undefined {
   const first = maps[0]?.dependencies;
   if (first === undefined) return undefined;
@@ -167,6 +190,8 @@ export function mergeMaps(maps: CoverageMap[]): CoverageMap {
   const sentinelHashes: Record<string, string> = {};
   for (const map of usable) Object.assign(sentinelHashes, map.sentinelHashes);
 
+  const config = agreedConfig(usable);
+
   // An inventory is only meaningful when every entry says which packages it
   // ran: one that does not would be read as a test running no vendored code,
   // and every dependency it really uses would go unselected on a bump. Keeping
@@ -183,6 +208,7 @@ export function mergeMaps(maps: CoverageMap[]): CoverageMap {
     ...(commit ? { commit } : {}),
     recordedAt,
     sentinelHashes,
+    ...(config ? { config } : {}),
     observed,
     ...(dependencies ? { dependencies } : {}),
     entries,
