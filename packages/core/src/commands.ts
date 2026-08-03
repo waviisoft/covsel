@@ -945,8 +945,12 @@ export interface ExplainResult {
   /** The path, repo-relative, or as given when it could not be resolved. */
   file: string;
   mapPath: string;
-  /** True when a usable map is in the store. */
-  mapExists: boolean;
+  /**
+   * Whether the store holds a map covsel can use, one it cannot, or no file at
+   * all. Anything but `usable` means there is nothing to explain — and which of
+   * the two it is decides whether the reader should go looking for the file.
+   */
+  mapState: StoredMap['state'];
   /** Why there is nothing to explain, when no usable map is stored. */
   noMapReason?: string;
   recordedAt?: string;
@@ -1039,12 +1043,15 @@ export async function explainPath(init: ExplainInit): Promise<ExplainResult> {
   const { cwd, config } = init;
   const store = new LocalStore({ cwd, dir: config.store.dir });
   const mapPath = store.path();
+  // Read as a diagnostic, like status: this command answers questions about the
+  // map, so "there is no usable map" is an answer that has to say which kind.
+  const stored = store.inspect();
   const fail = (file: string, error: string): ExplainResult => ({
     ok: false,
     error,
     file,
     mapPath,
-    mapExists: false,
+    mapState: stored.state,
     present: false,
     alwaysRun: false,
     isTestPath: false,
@@ -1088,15 +1095,20 @@ export async function explainPath(init: ExplainInit): Promise<ExplainResult> {
         'under the config it was recorded with'
       : undefined;
 
-  const map = await store.read();
+  const map = stored.state === 'usable' ? stored.map : undefined;
   if (map === undefined) {
     if (!present) return fail(rel, `${rel} is not in ${cwd}`);
     return {
       ok: true,
       file: rel,
       mapPath,
-      mapExists: false,
-      noMapReason: fullRunReason(config, undefined, []),
+      mapState: stored.state,
+      // A map that was rejected says so in its own words; one that is not there
+      // gets the wording every other command uses for the same state.
+      noMapReason:
+        stored.state === 'unusable'
+          ? stored.reason
+          : fullRunReason(config, undefined, []),
       present,
       ...(forcesFullRun !== undefined ? { forcesFullRun } : {}),
       alwaysRun,
@@ -1207,7 +1219,7 @@ export async function explainPath(init: ExplainInit): Promise<ExplainResult> {
     ok: true,
     file: rel,
     mapPath,
-    mapExists: true,
+    mapState: 'usable',
     recordedAt: map.recordedAt,
     granularity: map.granularity,
     present,

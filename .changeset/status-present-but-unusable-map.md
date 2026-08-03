@@ -37,7 +37,12 @@ drawn beside it rather than inside it.
   an incompatible schema" branch was unreachable while the parameter was typed as
   a `CoverageMap`, which is exactly the wording a caller holding a rejected map
   needs.
-- `covsel status` prints `exists: yes, but not usable (schema v2, covsel reads v3
+- `covsel status` prints `exists: yes, but not usable (schema v3, covsel reads v4
 -- re-record)`, and gives a reason under `next:` in every case rather than
   falling back to a generic "map cannot be trusted". The recorded-at, granularity
   and entry lines are still printed only for a map that parsed.
+- `covsel explain` had the same lie in the same words — it printed `(none
+recorded)` beside the path of a map it had just rejected. `ExplainResult.mapExists`
+  is replaced by the same `mapState`, `noMapReason` carries the rejection, and
+  the CLI prints `(not usable)` for a map that is there. **Breaking** in the same
+  way: `mapExists === true` becomes `mapState === 'usable'`.

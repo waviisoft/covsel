@@ -120,6 +120,14 @@ function functionName(node: ts.Node): string {
  * to component granularity: a handler defined inside a component is the
  * component's closure to build and the handler's body to run, so the handler's
  * signature stays with the parent and only its body is blanked out of it.
+ *
+ * What blanking gives up, at every depth equally: blocks are compared as a
+ * multiset of hashes, so exchanging the bodies of two sibling functions that
+ * share a name and a signature — two `<anonymous>` callbacks, say — leaves the
+ * same hashes in the file and registers as no change at all. The module block
+ * has always had that property for top-level functions; a block hash that
+ * encoded a function's position among its siblings would close it, at the cost
+ * of the stability under moves that content hashing exists for.
  */
 export function extractBlocks(source: string, fileName = 'file.ts'): SourceBlock[] {
   const sf = ts.createSourceFile(

@@ -1036,11 +1036,17 @@ async function cmdExplain(argv: string[]): Promise<number> {
     return 1;
   }
 
-  if (!result.mapExists) {
+  if (result.mapState !== 'usable') {
     // Nothing to index, which is an answer rather than an error: with no map
     // every test runs, so nothing about this path is being decided by coverage.
+    // Which kind of nothing still matters — a rejected map is a file to go and
+    // re-record, not one to go looking for.
     out(`path:       ${result.file}\n`);
-    out(`map:        ${result.mapPath} (none recorded)\n`);
+    out(
+      `map:        ${result.mapPath} ${
+        result.mapState === 'absent' ? '(none recorded)' : '(not usable)'
+      }\n`,
+    );
     out(
       `nothing to explain -- ${result.noMapReason ?? 'no usable map recorded'}, so\n` +
         'the next selection is a full run\n',

@@ -7,6 +7,7 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import {
   computeStatus,
   type CoverageMap,
+  explainPath,
   isUsableMap,
   LocalStore,
   MAP_SCHEMA_VERSION,
@@ -112,6 +113,29 @@ describe('a map recorded under an older schema', () => {
     write('src/math.js', 'exports.add = (a, b) => a + b; // changed\n');
     const result = await selectAffected({ cwd, config });
     expect(result.fullRun).toBe(true);
+  });
+});
+
+describe('explain, asked about a path while the map cannot be used', () => {
+  it('does not report a map that is present as one that was never recorded', async () => {
+    // The same lie in a second place: `explain` reads the store through the same
+    // collapsing read, and a schema bump makes every user meet both at once.
+    writeMapFile(
+      JSON.stringify({ ...usableMap(), schemaVersion: MAP_SCHEMA_VERSION - 1 }),
+    );
+    const r = await explainPath({ cwd, config, path: 'src/math.js' });
+
+    expect(r.ok).toBe(true);
+    expect(r.mapState).toBe('unusable');
+    expect(r.noMapReason).toMatch(/re-record/);
+  });
+
+  it('says a map is absent when it is', async () => {
+    const r = await explainPath({ cwd, config, path: 'src/math.js' });
+
+    expect(r.ok).toBe(true);
+    expect(r.mapState).toBe('absent');
+    expect(r.noMapReason).toMatch(/no usable map recorded/);
   });
 });
 
