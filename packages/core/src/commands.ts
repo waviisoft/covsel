@@ -58,7 +58,8 @@ export interface GenericRecorderInit {
    * tests in a container looks exactly like one that does not. Set it only when
    * you know the runner — a caller that wrote the command, or an adapter for a
    * runner that executes its own sources directly. Left unset, entries carry no
-   * packages and the map no inventory, so every dependency change falls open.
+   * packages and the map no inventory, so the recording holds no opinion about
+   * dependencies and a change to one is left to the lockfile sentinel.
    *
    * It does not widen `observes`, which is `**` either way: what an unvouched
    * command hides is a process boundary, and a repo-path scope cannot describe

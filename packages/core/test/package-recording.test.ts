@@ -203,6 +203,10 @@ describe('what the generic recorder may claim about the command it was handed', 
     const units = await handed(fixture()).record('test/a.test.mjs');
 
     expect(units).toHaveLength(1);
+    // The silence is a choice, not an empty recording: this unit saw the test
+    // execute `src/a.mjs`, which imports `left-pad`. What it declines to say is
+    // that it would have seen every package, wherever the command ran one.
+    expect(units[0]?.files.map((f) => f.file)).toContain('src/a.mjs');
     expect(units[0]?.packages).toBeUndefined();
   }, 120_000);
 

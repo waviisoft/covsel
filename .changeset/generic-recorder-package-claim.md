@@ -16,8 +16,8 @@ with an inventory of what was installed, and a package in the inventory that no
 entry credits reads as _installed and never ran_, so a bump to it need select
 nothing. Claimed for a command whose code runs elsewhere, that reading is applied
 to every dependency the recording never watched — and a browser-only dependency
-moving would skip the tests that exercise it. Withholding the claim costs full
-runs on dependency changes; making it wrongly skips tests.
+moving would skip the tests that exercise it. Withholding the claim gives up the
+precision a bump could have had; making it wrongly skips tests.
 
 Neither the command nor the recording can settle it. An allowlist of runner
 binaries still declares for `node run-e2e.mjs` and declines for a shell wrapper
@@ -34,8 +34,9 @@ only when it is set — attributing packages exactly when it stands behind them,
 so a unit is silent about them exactly when its recorder is.
 `@covsel/adapter-generic` never sets it, because wrapping whatever it is handed
 is what the adapter is for. A recording made through it now carries no `packages`
-on any entry and no `dependencies` inventory, and every dependency change keeps
-falling open to a full run.
+on any entry and no `dependencies` inventory, so it holds no opinion about a
+dependency change and answering one is left to the lockfile sentinel, which the
+default `sentinels` cover for npm, pnpm, and yarn.
 
 `observes` stays `OBSERVES_EVERYTHING` on the same recorder. The uncertainty is
 identical, but the two claims do not have the same expressive range: withholding

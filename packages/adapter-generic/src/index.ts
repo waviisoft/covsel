@@ -13,7 +13,8 @@
  * observation: whether a run executes all of its code in the process tree covsel
  * spawns is a fact about the command, and the adapter that wraps whatever it is
  * handed is the one that cannot know it. A generic recording therefore carries
- * no package information, and dependency changes fall open to a full run.
+ * no package information at all, and holds no opinion about a dependency change:
+ * answering one is left to the lockfile sentinel.
  */
 import {
   type Adapter,

@@ -2,9 +2,11 @@
 '@covsel/core': minor
 ---
 
-A recording now captures which installed packages each test executed, and what
-was installed at the time. Nothing selects on it yet — every lockfile change is
-still the full run it is today — but both halves are on disk and inspectable.
+A recording can now capture which installed packages each test executed, and what
+was installed at the time, for a recorder whose caller vouches that the run
+executes everything under test in the Node process tree covsel spawns. Nothing
+selects on it yet — every lockfile change is still the full run it is today — but
+both halves are on disk and inspectable.
 
 `MapEntry` gains `packages`, the names of the packages a test ran code in.
 `CoverageMap` gains `dependencies`: the package manager, its install marker and
