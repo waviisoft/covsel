@@ -7,10 +7,11 @@ have run_. So every design tension resolves toward **over-selection**:
   map says nothing about — unknown coverage never reads as "covers nothing".
 - Changes to **sentinel files** (`package.json`, tsconfig, lockfile, test setup)
   invalidate the map and trigger a **full run**.
-- Changes to **covsel's own config** trigger a **full run**, whatever your
-  `sentinels` say. A map means what it means only under the config it was
-  recorded with — narrowing `sourceGlobs`, for instance, stops changes outside
-  the new globs counting at all, and nothing else would notice.
+- Changes to the **values in covsel's own config** trigger a **full run**,
+  whatever your `sentinels` say. A map means what it means only under the config
+  it was recorded with — narrowing `sourceGlobs`, for instance, stops changes
+  outside the new globs counting at all, and nothing else would notice. See
+  [what a config change is measured against](#what-a-config-change-is-measured-against).
 - A stale, unreadable, or wrong-schema map means a **full run**, never a skipped
   one.
 - A map whose recorded commit this checkout does not have, or that records no
@@ -185,6 +186,48 @@ it:
 `covsel status` reports the discovered test count for the same reason: a healthy
 map beside `discovered: 0 test file(s)` is the one combination worth noticing at a
 glance.
+
+## What a config change is measured against
+
+A map is meaningful only under the configuration it was recorded with, which is
+a statement about that configuration's **values**. So the map records them, and
+selection compares the values in force against the ones it holds. A full run
+follows when a field differs, and `covsel status` names which:
+
+```
+next:       full run -- configuration changed since the map was recorded: sourceGlobs
+```
+
+That is a sharper question than "did the config file change", in both
+directions. Reword a comment, reformat an array, move a key — the file changed
+and the map still means exactly what it meant, so selection narrows as usual.
+Compute a value from the environment, or change one and change it back across
+the commit the map was recorded on — no file changed and the map does not mean
+what selection is about to read, so it falls open.
+
+This applies to the config file on its own account, ahead of and without
+consulting `sentinels`. If you also list the file in `sentinels`, that listing
+wins and every change to it forces a full run: covsel's defaults name no config
+file, so listing one is a deliberate declaration — and you may have a reason
+covsel cannot see from the values, such as a test that loads the file as data.
+Drop it from the list to get the narrowing; nothing is lost by doing so, because
+this check runs whatever the list says.
+
+Every sentinel keeps its unconditional full run for the same reason it exists:
+covsel cannot read your `tsconfig.json` or your test setup for meaning, and does
+not guess.
+
+Four fields are left out of the comparison, because a change to one cannot leave
+the map meaning something other than what selection reads from it: `alwaysRun`
+and `sentinels` are applied from the configuration in force on every run, `store`
+says where the map is kept rather than what it says, and `adapter` names the
+recorder, whose every consequence for selection is written into the map by the
+recording itself. Everything else is compared, including any field added later.
+
+A map recorded before covsel recorded its configuration carries none, and falls
+open on any change to a config file — the behavior every map had before this
+existed. So does a map merged from shards that disagreed about the configuration
+they were recorded under.
 
 ## How the map enforces it
 

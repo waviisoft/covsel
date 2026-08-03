@@ -67,10 +67,18 @@ export default {
    *
    * The first four are covsel's defaults, restated because setting the field
    * replaces them rather than adding to them. The rest are this repository's own:
-   * the vitest config decides what the suite even is, this file decides what
-   * selection means, and the shims and the CLI entry point run in child processes
-   * the recorder cannot observe — so a change to one of them cannot be attributed
-   * to any test, and the only sound answer is to run everything.
+   * the vitest config decides what the suite even is, and the shims and the CLI
+   * entry point run in child processes the recorder cannot observe — so a change
+   * to one of them cannot be attributed to any test, and the only sound answer is
+   * to run everything.
+   *
+   * This file is deliberately not among them, and listing it would be a choice
+   * with a cost. Selection already asks about it, ahead of this list and without
+   * consulting it, and asks a better question than a path match can: the map
+   * records the values it was recorded under, so a change here forces a full run
+   * when it moves one of them and not when it moves a comment. Naming it as a
+   * sentinel would only take that back, and every edit to the prose above would
+   * cost the whole suite again.
    */
   sentinels: [
     'package.json',
@@ -78,7 +86,6 @@ export default {
     'tsconfig*.json',
     'yarn.lock',
     'vitest.config.ts',
-    'covsel.config.js',
     'packages/*/src/shim.{js,mjs}',
     'packages/cli/src/bin.ts',
   ],
