@@ -449,7 +449,7 @@ describe('explain: nothing to explain', () => {
     const r = await explainPath({ cwd, config, path: 'src/math.js' });
 
     expect(r.ok).toBe(true);
-    expect(r.mapExists).toBe(false);
+    expect(r.mapState).toBe('absent');
     expect(r.noMapReason).toBeTruthy();
   });
 

@@ -306,6 +306,12 @@ This is the difference between a toy and something a team trusts in CI: the
 failure mode is _wasted CI minutes_, never _a real regression that shipped
 green_.
 
+Selection never asks _why_ a map is unusable — an unusable map runs everything
+however it got that way — but `covsel status` does, and reports the map as
+present and rejected rather than as missing. The reason it prints comes from the
+same check `isUsableMap` is defined by, so what `status` explains and what
+selection acts on cannot come apart.
+
 ## In watch mode
 
 A long-running loop has one extra way to fail: it can keep looking healthy while

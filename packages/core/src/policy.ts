@@ -133,10 +133,17 @@ export class FailOpenPolicy implements Policy {
   }
 }
 
-/** Human-readable reason a diff forces a full run (for logging/status). */
+/**
+ * Human-readable reason a diff forces a full run (for logging/status).
+ *
+ * The map is taken as `unknown` because one of the answers here is about a map
+ * that failed the schema check: typing it as a `CoverageMap` would make that
+ * branch unreachable, and a caller holding a rejected map would have to invent
+ * its own wording for the case this function already covers.
+ */
 export function fullRunReason(
   config: CovselConfig,
-  map: CoverageMap | undefined,
+  map: unknown,
   changes: Change[],
 ): string {
   if (map === undefined) return 'no usable map recorded';

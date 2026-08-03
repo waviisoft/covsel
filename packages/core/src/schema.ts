@@ -6,8 +6,15 @@ import type { RecordedConfig } from './config.js';
  * fail-open policy — forces a full test run with a clear log line.
  */
 
-/** Bump on any breaking change to the persisted map shape. */
-export const MAP_SCHEMA_VERSION = 3;
+/**
+ * Bump on any breaking change to the persisted map shape.
+ *
+ * A change to how block hashes are computed is one of those, even when no field
+ * moves: every recorded hash stops matching the same code, so the entries credit
+ * blocks that no longer exist. Rejecting such a map is what turns that into a
+ * full run instead of a selection made against hashes nothing can match.
+ */
+export const MAP_SCHEMA_VERSION = 4;
 
 /**
  * Identifies a test at the finest granularity we know about.
@@ -173,13 +180,28 @@ export interface CoverageMap {
 export const OBSERVES_EVERYTHING: readonly string[] = Object.freeze(['**']);
 
 /**
- * Returns true when a stored map can be used for selection. A false result
- * must be treated as "run everything" (fail open), never "run nothing".
+ * Why a stored value cannot be used for selection, or `undefined` when it can.
+ *
+ * Selection must not care which of these is true — an unusable map runs
+ * everything however it got that way — so the reason is for the commands that
+ * explain covsel to a human. It lives here, and `isUsableMap` is defined in
+ * terms of it, so there is exactly one place that decides usability: a second
+ * predicate written to produce these strings could drift, and the direction it
+ * would drift in is the one that skips tests.
  */
-export function isUsableMap(map: unknown): map is CoverageMap {
-  if (typeof map !== 'object' || map === null) return false;
+export function mapRejection(map: unknown): string | undefined {
+  if (typeof map !== 'object' || map === null || Array.isArray(map)) {
+    return 'the file does not hold a JSON object';
+  }
   const m = map as Partial<CoverageMap>;
-  if (m.schemaVersion !== MAP_SCHEMA_VERSION || !Array.isArray(m.entries)) return false;
+  if (m.schemaVersion !== MAP_SCHEMA_VERSION) {
+    const found =
+      typeof m.schemaVersion === 'number'
+        ? `schema v${m.schemaVersion}`
+        : 'no schema version';
+    return `${found}, covsel reads v${MAP_SCHEMA_VERSION} -- re-record`;
+  }
+  if (!Array.isArray(m.entries)) return 'it records no entries list';
   // A granularity covsel cannot record at says the entries were measured by
   // something this build does not understand, so what they credit — and what
   // their silence means — is unknown. Rejecting is the reading that cannot skip
@@ -187,9 +209,22 @@ export function isUsableMap(map: unknown): map is CoverageMap {
   // `=== 'block'` would degrade it to whole-file, and one spelled `!== 'file'`
   // would select by blocks the entries may not carry. The map never has to be
   // read for that to be decided.
-  if (!isGranularity(m.granularity)) return false;
+  if (!isGranularity(m.granularity)) {
+    return `it was recorded at ${JSON.stringify(m.granularity)} granularity, which covsel does not record at`;
+  }
   // A map that does not say what it could observe cannot be told apart from one
   // that observed everything, and guessing "everything" is the guess that skips
   // tests. Require the declaration, and treat its absence as unusable.
-  return Array.isArray(m.observed) && m.observed.every((g) => typeof g === 'string');
+  if (!Array.isArray(m.observed) || !m.observed.every((g) => typeof g === 'string')) {
+    return 'it does not say what the recording could observe';
+  }
+  return undefined;
+}
+
+/**
+ * Returns true when a stored map can be used for selection. A false result
+ * must be treated as "run everything" (fail open), never "run nothing".
+ */
+export function isUsableMap(map: unknown): map is CoverageMap {
+  return mapRejection(map) === undefined;
 }

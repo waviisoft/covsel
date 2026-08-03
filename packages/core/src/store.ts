@@ -3,7 +3,7 @@ import { dirname, join } from 'node:path';
 
 import type { Store } from './interfaces.js';
 import { mergeMaps } from './merge.js';
-import { type CoverageMap, isUsableMap } from './schema.js';
+import { type CoverageMap, mapRejection } from './schema.js';
 
 export interface LocalStoreInit {
   /** Repo root. */
@@ -11,6 +11,20 @@ export interface LocalStoreInit {
   /** Store directory, relative to `cwd` (e.g. `.covsel`). */
   dir: string;
 }
+
+/**
+ * What the store holds, told apart for the commands that have to explain covsel
+ * rather than obey it.
+ *
+ * `absent` is no file at the path. `unusable` is a file that is there and cannot
+ * be believed — unreadable, unparseable, or a map this build does not accept —
+ * and carries the reason and whatever parsed out of it. `usable` is a map
+ * selection may narrow with.
+ */
+export type StoredMap =
+  | { state: 'absent' }
+  | { state: 'unusable'; reason: string; map: unknown }
+  | { state: 'usable'; map: CoverageMap };
 
 /**
  * Local JSON store: a single `map.json` under the store directory. A missing,
@@ -29,14 +43,49 @@ export class LocalStore implements Store {
     return this.file;
   }
 
-  async read(): Promise<CoverageMap | undefined> {
+  /**
+   * The map as a diagnostic sees it: present or not, usable or not, and why not.
+   *
+   * `read()` is the selection path and answers the only question selection may
+   * ask, which is why it collapses all three of those into `undefined`. A
+   * command that reports a present-but-rejected map as a missing one sends its
+   * reader to look for a file that is sitting right there, so the distinction is
+   * drawn here — beside the selection read and defining it, never in a second
+   * opinion about usability that could come to disagree with it.
+   */
+  inspect(): StoredMap {
+    let raw: string;
+    try {
+      raw = readFileSync(this.file, 'utf8');
+    } catch (e) {
+      if ((e as NodeJS.ErrnoException).code === 'ENOENT') return { state: 'absent' };
+      const detail = e instanceof Error ? e.message : String(e);
+      return {
+        state: 'unusable',
+        reason: `the map file could not be read: ${detail}`,
+        map: undefined,
+      };
+    }
     let parsed: unknown;
     try {
-      parsed = JSON.parse(readFileSync(this.file, 'utf8'));
-    } catch {
-      return undefined;
+      parsed = JSON.parse(raw);
+    } catch (e) {
+      const detail = e instanceof Error ? e.message : String(e);
+      return {
+        state: 'unusable',
+        reason: `the map file is not valid JSON: ${detail}`,
+        map: undefined,
+      };
     }
-    return isUsableMap(parsed) ? parsed : undefined;
+    const rejection = mapRejection(parsed);
+    return rejection === undefined
+      ? { state: 'usable', map: parsed as CoverageMap }
+      : { state: 'unusable', reason: rejection, map: parsed };
+  }
+
+  async read(): Promise<CoverageMap | undefined> {
+    const stored = this.inspect();
+    return stored.state === 'usable' ? stored.map : undefined;
   }
 
   async write(map: CoverageMap): Promise<void> {

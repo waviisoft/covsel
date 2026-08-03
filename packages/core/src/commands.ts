@@ -41,7 +41,7 @@ import {
   type TestId,
 } from './schema.js';
 import { FileSelector } from './selector.js';
-import { LocalStore } from './store.js';
+import { LocalStore, type StoredMap } from './store.js';
 
 export interface GenericRecorderInit {
   command: string[];
@@ -820,7 +820,19 @@ export async function runAffected(
 
 export interface StatusResult {
   mapPath: string;
-  exists: boolean;
+  /**
+   * Whether the store holds a map covsel can use, one it cannot, or no file at
+   * all. The three are one decision to selection — anything but `usable` runs
+   * everything — and three different answers to someone asking why, which is
+   * the question this command exists to answer.
+   */
+  mapState: StoredMap['state'];
+  /**
+   * Why the stored map cannot be used, when `mapState` is `unusable`. Never the
+   * grounds for a decision, only the sentence that saves a reader from looking
+   * for a file that is right where covsel said it was.
+   */
+  unusableReason?: string;
   /**
    * Test files discovery found. Zero means covsel has nothing to select between,
    * whatever the map says, so it is reported alongside the map rather than
@@ -887,7 +899,11 @@ function nextSelection(
 export async function computeStatus(init: StatusInit): Promise<StatusResult> {
   const { cwd, config } = init;
   const store = new LocalStore({ cwd, dir: config.store.dir });
-  const map = await store.read();
+  // The diagnostic read, because this command reports rather than decides. What
+  // it decides is still the selection read's answer: nothing below narrows
+  // anything unless the map came back usable.
+  const stored = store.inspect();
+  const map = stored.state === 'usable' ? stored.map : undefined;
   const now = init.now ?? Date.now();
 
   // Discovery is what `affected` would select from, so a status that did not
@@ -912,11 +928,25 @@ export async function computeStatus(init: StatusInit): Promise<StatusResult> {
   if (!map) {
     return {
       mapPath: store.path(),
-      exists: false,
+      mapState: stored.state,
+      ...(stored.state === 'unusable' ? { unusableReason: stored.reason } : {}),
       discoveredTestCount: discovered.length,
       changedSentinels: [],
       nextIsFullRun: true,
-      ...(noTests !== undefined ? { nextFullRunReason: noTests } : {}),
+      // Always a reason now. Falling back to a generic "the map cannot be
+      // trusted" left the one user who most needs to know — the one whose map
+      // was rejected for a schema bump — with no hint that re-recording is the
+      // fix, and a reading in which the map was lost.
+      //
+      // A rejected map answers in its own words, the same words `explain` uses,
+      // rather than through the shared wording: "no usable map recorded" is what
+      // an absent map is called, and saying it about a file that is sitting
+      // right there is the misreport this all exists to stop.
+      nextFullRunReason:
+        noTests ??
+        (stored.state === 'unusable'
+          ? stored.reason
+          : fullRunReason(config, undefined, [])),
     };
   }
 
@@ -946,7 +976,7 @@ export async function computeStatus(init: StatusInit): Promise<StatusResult> {
 
   return {
     mapPath: store.path(),
-    exists: true,
+    mapState: 'usable',
     discoveredTestCount: discovered.length,
     recordedAt: map.recordedAt,
     ageMs: now - Date.parse(map.recordedAt),
@@ -1069,8 +1099,12 @@ export interface ExplainResult {
   /** The path, repo-relative, or as given when it could not be resolved. */
   file: string;
   mapPath: string;
-  /** True when a usable map is in the store. */
-  mapExists: boolean;
+  /**
+   * Whether the store holds a map covsel can use, one it cannot, or no file at
+   * all. Anything but `usable` means there is nothing to explain — and which of
+   * the two it is decides whether the reader should go looking for the file.
+   */
+  mapState: StoredMap['state'];
   /** Why there is nothing to explain, when no usable map is stored. */
   noMapReason?: string;
   recordedAt?: string;
@@ -1161,12 +1195,15 @@ export async function explainPath(init: ExplainInit): Promise<ExplainResult> {
   const { cwd, config } = init;
   const store = new LocalStore({ cwd, dir: config.store.dir });
   const mapPath = store.path();
+  // Read as a diagnostic, like status: this command answers questions about the
+  // map, so "there is no usable map" is an answer that has to say which kind.
+  const stored = store.inspect();
   const fail = (file: string, error: string): ExplainResult => ({
     ok: false,
     error,
     file,
     mapPath,
-    mapExists: false,
+    mapState: stored.state,
     present: false,
     alwaysRun: false,
     isTestPath: false,
@@ -1235,7 +1272,10 @@ export async function explainPath(init: ExplainInit): Promise<ExplainResult> {
         };
   };
 
-  const map = await store.read();
+  // The diagnostic read, as in `status`: which kind of nothing there is to
+  // explain is part of the answer. What decides anything is still the usable
+  // map, or the absence of one.
+  const map = stored.state === 'usable' ? stored.map : undefined;
   const forcesFullRun = fullRunTrigger(map);
   if (map === undefined) {
     if (!present) return fail(rel, `${rel} is not in ${cwd}`);
@@ -1243,8 +1283,13 @@ export async function explainPath(init: ExplainInit): Promise<ExplainResult> {
       ok: true,
       file: rel,
       mapPath,
-      mapExists: false,
-      noMapReason: fullRunReason(config, undefined, []),
+      mapState: stored.state,
+      // A map that was rejected says so in its own words; one that is not there
+      // gets the wording every other command uses for the same state.
+      noMapReason:
+        stored.state === 'unusable'
+          ? stored.reason
+          : fullRunReason(config, undefined, []),
       present,
       ...(forcesFullRun !== undefined ? { forcesFullRun } : {}),
       alwaysRun,
@@ -1355,7 +1400,7 @@ export async function explainPath(init: ExplainInit): Promise<ExplainResult> {
     ok: true,
     file: rel,
     mapPath,
-    mapExists: true,
+    mapState: 'usable',
     recordedAt: map.recordedAt,
     granularity: map.granularity,
     present,
