@@ -1260,4 +1260,63 @@ describe('covsel explain', () => {
     expect(code).toBe(1);
     expect(err).toContain('expected a path');
   });
+
+  it('says a recorded test covering no source is selected every run', async () => {
+    const { code, out } = await inProject(
+      { 'package.json': pkg({}), 'child.test.js': '' },
+      (cwd) => {
+        writeEntries(cwd, [{ test: { file: 'child.test.js' }, files: [] }]);
+        return capture(() => main(['explain', 'child.test.js']));
+      },
+    );
+    expect(code).toBe(0);
+    // Not the unrecorded wording: the map does record this one, and a reader
+    // has to be able to tell the two apart.
+    expect(out).toContain('1 recorded unit(s)');
+    expect(out).toContain('covers no source');
+    expect(out).toContain('selected on every run');
+  });
+});
+
+/**
+ * A map entry that credits nothing is unselectable by any diff, so selection
+ * runs its test file whatever changed. That makes it a cost rather than a hole
+ * — and a silent one, since the entry looks like any other in the map. These
+ * cover the two places covsel says so out loud.
+ */
+describe('an entry that covers no source', () => {
+  it('is counted by status rather than folded into the entry count', async () => {
+    const { code, out } = await inProject(
+      { 'package.json': pkg({}), 'child.test.js': '' },
+      (cwd) => {
+        writeEntries(cwd, [
+          { test: { file: 'child.test.js' }, files: [] },
+          {
+            test: { file: 'add.test.js' },
+            files: [{ file: 'math.js', fileHash: 'sha256:math' }],
+          },
+        ]);
+        return capture(() => main(['status']));
+      },
+    );
+    expect(code).toBe(0);
+    expect(out).toContain('entries:    2');
+    expect(out).toContain('unmeasured: 1');
+  });
+
+  it('leaves status quiet when every entry measured something', async () => {
+    const { out } = await inProject(
+      { 'package.json': pkg({}), 'math.js': 'export const x = 1;\n' },
+      (cwd) => {
+        writeEntries(cwd, [
+          {
+            test: { file: 'add.test.js' },
+            files: [{ file: 'math.js', fileHash: 'sha256:math' }],
+          },
+        ]);
+        return capture(() => main(['status']));
+      },
+    );
+    expect(out).not.toContain('unmeasured');
+  });
 });

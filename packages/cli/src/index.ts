@@ -612,6 +612,17 @@ async function cmdRecord(argv: string[]): Promise<number> {
     onEvent: (e) => {
       if (e.kind === 'recorded') {
         err(`  recorded ${e.file} (${e.tests} tests, ${e.sources} sources)\n`);
+        // A count of zero sources printed as ordinary progress is how this went
+        // unnoticed: it reads like any other line. Named here, at the moment it
+        // is recorded, because the cause is almost always visible from the test
+        // itself -- it drives its subject somewhere the recorder cannot watch.
+        if (e.unmeasured !== undefined) {
+          err(
+            `  NO SOURCES ${e.file}: ${e.unmeasured} of ${e.tests} unit(s) recorded no ` +
+              `covered source in this repository, so nothing a diff carries can ` +
+              `match them and this file is selected on every run\n`,
+          );
+        }
         // Every allowed script is coverage this entry does not have. Saying so
         // on each recording is what keeps the accommodation from becoming the
         // silent hole it exists to replace.
@@ -649,6 +660,18 @@ async function cmdRecord(argv: string[]): Promise<number> {
     return 1;
   }
   err(`covsel record: wrote ${result.recorded} entries to ${result.mapPath}\n`);
+  if (result.unmeasured !== undefined) {
+    // Said again at the end, because the per-file line above scrolls past in a
+    // suite of any size. Selection is already safe here -- these run whatever
+    // the diff -- so this is about the CI minutes they cost until whatever the
+    // recorder could not watch is brought into view.
+    err(
+      `covsel record: ${result.unmeasured.length} recorded unit(s) cover no source, ` +
+        `so their test files are selected on every run: ${[
+          ...new Set(result.unmeasured.map((t) => t.file)),
+        ].join(', ')}\n`,
+    );
+  }
   if (result.unanchored) {
     // Said here rather than left for selection to explain later: the map is
     // correct about what it saw, and deliberately claims no commit, so every
@@ -861,6 +884,14 @@ async function cmdStatus(): Promise<number> {
       }\n`,
     );
     out(`entries:    ${s.entryCount ?? 0}\n`);
+    // Only when there are any: a line reading 0 on every healthy map is noise,
+    // and this is worth noticing when it appears.
+    if (s.unmeasuredEntryCount !== undefined && s.unmeasuredEntryCount > 0) {
+      out(
+        `unmeasured: ${s.unmeasuredEntryCount} entry(ies) cover no source -- every ` +
+          'test file with one is selected on every run\n',
+      );
+    }
     out(`sources:    ${s.coveredFileCount ?? 0}\n`);
     if (s.coveredBlockCount !== undefined) out(`blocks:     ${s.coveredBlockCount}\n`);
     out(
@@ -1010,6 +1041,22 @@ function printCovers(r: ExplainResult, all: boolean): void {
     return;
   }
   out(`covers:     ${test.units.length} recorded unit(s)\n`);
+  if (test.unmeasured) {
+    // The recorded-but-blind case. Without this the unit list below reads as a
+    // measurement -- "0 source(s)" beside a healthy map -- and the reader has
+    // no way to tell it from a test that really executes nothing.
+    //
+    // "selected on every run" only holds for a file selection can still find:
+    // it draws these from discovery, so an entry outliving its test file, or
+    // one left behind by a narrowed `testGlobs`, selects nothing at all.
+    out(
+      r.present
+        ? '            a unit here covers no source, so nothing the map holds can\n' +
+            '            narrow this file and it is selected on every run\n'
+        : '            a unit here covers no source, and the file is not in the\n' +
+            '            working tree, so there is nothing left for covsel to run\n',
+    );
+  }
   const shown = all ? test.units : test.units.slice(0, EXPLAIN_LIMIT);
   for (const unit of shown) {
     const name = unit.test.name ?? '(whole file)';
