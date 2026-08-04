@@ -134,7 +134,7 @@ describe('recording which packages a test ran', () => {
     const map = await record(fixture());
 
     for (const entry of map.entries) expect(entry.packages).not.toContain('right-pad');
-    expect(map.dependencies?.inventory['right-pad']).toEqual(['2.0.0']);
+    expect(Object.keys(map.dependencies?.inventory ?? {})).toContain('right-pad');
   }, 120_000);
 });
 
@@ -145,10 +145,14 @@ describe('recording what was installed', () => {
     expect(map.dependencies?.manager).toBe('pnpm');
     expect(map.dependencies?.marker).toBe('node_modules/.pnpm/lock.yaml');
     expect(map.dependencies?.markerHash).toMatch(/^sha256:/);
-    expect(map.dependencies?.inventory).toMatchObject({
-      'left-pad': ['1.3.0'],
-      'right-pad': ['2.0.0'],
-    });
+    // Edges rather than versions: which resolver got which copy, so a patch or
+    // an importer moving between two installed versions is visible.
+    expect(map.dependencies?.inventory['left-pad']).toEqual([
+      '.:node_modules/left-pad@1.3.0',
+    ]);
+    expect(map.dependencies?.inventory['right-pad']).toEqual([
+      '.:node_modules/right-pad@2.0.0',
+    ]);
   }, 120_000);
 
   it('records nothing when the package manager leaves no proof', async () => {
@@ -242,7 +246,9 @@ describe('what the generic recorder may claim about the command it was handed', 
     expect(vouchedRecorder(cwd, config).observesPackages).toBe(true);
 
     const map = await record(cwd);
-    expect(map.dependencies?.inventory['left-pad']).toEqual(['1.3.0']);
+    expect(map.dependencies?.inventory['left-pad']).toEqual([
+      '.:node_modules/left-pad@1.3.0',
+    ]);
     expect(packagesOf(map, 'test/a.test.mjs')).toContain('left-pad');
   }, 120_000);
 });

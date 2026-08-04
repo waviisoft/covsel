@@ -20,7 +20,7 @@ export interface InstalledInventory {
   markerHash: string;
   /**
    * Every installed package covsel could have observed executing, and the
-   * versions it was installed at, sorted.
+   * resolution edges that put it there, sorted.
    *
    * Keyed the way coverage attribution names a package — by the directory it
    * sits in, not by what its manifest calls itself. An aliased install puts one
@@ -147,6 +147,112 @@ function storeSiblings(cwd: string, packageRealAbs: string): string | undefined 
 }
 
 /**
+ * The pnpm store entry a realpath sits in, as a repo-relative path, if it sits
+ * in one.
+ *
+ * The entry name is the resolution identity pnpm already computed:
+ * `is-odd@3.0.1`, `is-odd@3.0.1_patch_hash=00bb...` once patched,
+ * `vite@8.0.0_@types+node@22.0.0` once peers are resolved, the commit for a git
+ * specifier. Most of what a version cannot say about which code this is, that
+ * name says.
+ *
+ * The store it lives in comes along with it. A repository can hold more than
+ * one -- a nested example app or an end-to-end project with its own lockfile is
+ * walked like any other -- and two stores name their entries independently, so
+ * `is-odd@3.0.1` in one is a different package from `is-odd@3.0.1` in the
+ * other. Comparing bare names lets a change in one cancel out a change in the
+ * other.
+ */
+function storeEntryOf(rel: string): string | undefined {
+  const segments = rel.split('/');
+  const vendor = segments.lastIndexOf(VENDOR_DIR);
+  return vendor >= 2 && segments[vendor - 2] === '.pnpm'
+    ? segments.slice(0, vendor).join('/')
+    : undefined;
+}
+
+/**
+ * Specifier protocols pnpm writes into a store entry name that say *where* a
+ * package came from without saying *what* it is.
+ *
+ * A registry tarball's name pins its version, a git specifier's pins the
+ * commit, and a patch adds its hash. A `file:` or `link:` directory pins
+ * nothing: the entry is named for the path it was copied from, so editing that
+ * directory and reinstalling leaves the identity untouched while the code a
+ * test runs changes. Those packages are left out, and fall open.
+ *
+ * A protocol not listed here is trusted, which is the wrong default for one
+ * nobody has looked at -- but the alternative refuses every specifier covsel has
+ * not seen, and that refuses the registry case this exists to serve.
+ */
+const UNPINNED_SPECIFIER = /^(?:file|link)\+/;
+
+/**
+ * The specifier half of a store entry name -- what follows the package name.
+ *
+ * Read positionally rather than by searching for a marker anywhere in the
+ * string, because pnpm spells `/` as `+` in scoped names and in resolved peers
+ * alike: a package under an `@link` scope is `@link+core@1.0.0`, and a peer on
+ * one is `my-lib@1.0.0_@link+core@1.0.0`. Both contain the text a careless
+ * check would read as a `link:` dependency.
+ */
+function specifierOf(entryPath: string): string {
+  const entry = entryPath.slice(entryPath.lastIndexOf('/') + 1);
+  const at = entry.startsWith('@') ? entry.indexOf('@', 1) : entry.indexOf('@');
+  return at === -1 ? '' : entry.slice(at + 1);
+}
+
+/** An edge from a store entry to the package that entry holds. */
+function isSelfEdge(edge: string): boolean {
+  const at = edge.indexOf(':');
+  return edge.slice(0, at) === edge.slice(at + 1);
+}
+
+/** Whether a store entry names where a package came from rather than what it is. */
+function namesALocation(entryPath: string): boolean {
+  return UNPINNED_SPECIFIER.test(specifierOf(entryPath));
+}
+
+/**
+ * What a package resolved to, as something two recordings can compare.
+ *
+ * A store entry names itself, store and all. Anything else -- a hoisted tree, a
+ * bundled dependency -- is identified by where it really sits plus the version
+ * it declares. That is weaker: a version is not a content hash, so a package
+ * whose source changes without its version moving is invisible in that shape.
+ * It is the best the layout offers, and it is why the store is where the
+ * identity comes from wherever there is one.
+ */
+function identityOf(resolved: string, version: string): string | undefined {
+  const entry = storeEntryOf(resolved);
+  if (entry === undefined) return `${resolved}@${version}`;
+  return namesALocation(entry) ? undefined : entry;
+}
+
+/**
+ * Who owns the links inside one `node_modules`: a store entry by its own
+ * identity, or an importer by its directory.
+ */
+function resolverOf(nodeModulesRel: string): string {
+  const store = storeEntryOf(`${nodeModulesRel}/x`);
+  if (store !== undefined) return store;
+  const importer = nodeModulesRel.replace(/\/?node_modules$/, '');
+  return importer === '' ? '.' : importer;
+}
+
+/** A package directory the walk found, and what resolved it. */
+interface FoundPackage {
+  /** Repo-relative path of the package directory, as the walk reached it. */
+  dir: string;
+  /**
+   * Label for whatever holds the link: an importer by its directory, `.` at the
+   * repository root, or a store entry by its own identity. Derived from where
+   * that directory really is, so it does not depend on which path reached it.
+   */
+  resolver: string;
+}
+
+/**
  * Every package directory reachable from one `node_modules`, as repo-relative
  * paths.
  *
@@ -164,7 +270,7 @@ function storeSiblings(cwd: string, packageRealAbs: string): string | undefined 
 function packageDirs(
   cwd: string,
   nodeModulesRel: string,
-  out: string[],
+  out: FoundPackage[],
   visited: Set<string>,
 ): void {
   // Symlinks are followed, so the graph being walked is not a tree: a monorepo
@@ -181,6 +287,12 @@ function packageDirs(
   if (visited.has(real)) return;
   visited.add(real);
 
+  // Labelled from where the directory really is, not from the path that got
+  // here first. A `node_modules` reachable by several routes -- which is every
+  // workspace package another workspace package depends on -- would otherwise
+  // be named for whichever route `readdirSync` happened to yield first, and
+  // that order differs between filesystems.
+  const resolver = resolverOf(toRepoRelative(cwd, real) ?? nodeModulesRel);
   for (const name of subdirectories(join(cwd, nodeModulesRel))) {
     const rel = `${nodeModulesRel}/${name}`;
     // `.pnpm`, `.bin`, `.cache`, and the markers. The store is reached through
@@ -188,11 +300,11 @@ function packageDirs(
     if (name.startsWith('.')) continue;
     if (name.startsWith('@')) {
       for (const scoped of subdirectories(join(cwd, rel))) {
-        recordPackage(cwd, `${rel}/${scoped}`, out, visited);
+        recordPackage(cwd, `${rel}/${scoped}`, resolver, out, visited);
       }
       continue;
     }
-    recordPackage(cwd, rel, out, visited);
+    recordPackage(cwd, rel, resolver, out, visited);
   }
 }
 
@@ -200,10 +312,11 @@ function packageDirs(
 function recordPackage(
   cwd: string,
   dir: string,
-  out: string[],
+  resolver: string,
+  out: FoundPackage[],
   visited: Set<string>,
 ): void {
-  out.push(dir);
+  out.push({ dir, resolver });
   // A dependency bundled inside this package, the npm and yarn shape.
   packageDirs(cwd, `${dir}/node_modules`, out, visited);
   // Its dependencies as pnpm arranges them, which are siblings rather than
@@ -261,15 +374,20 @@ function nodeModulesRoots(cwd: string): string[] {
  * Each is dropped, and each then falls open. The ordinary pnpm case is
  * unaffected: `node_modules/left-pad` resolves into the store at
  * `.pnpm/left-pad@1.3.0/node_modules/left-pad`, which still reads as `left-pad`.
+ *
+ * Returns the resolved path when it agrees, because that is also what names the
+ * copy this package resolved to and re-reading it costs a syscall per package.
  */
-function survivesResolution(cwd: string, dir: string, name: string): boolean {
+function survivesResolution(cwd: string, dir: string, name: string): string | undefined {
   let resolved: string | undefined;
   try {
     resolved = toRepoRelative(cwd, realpathSync(join(cwd, dir)));
   } catch {
-    return false;
+    return undefined;
   }
-  return resolved !== undefined && packageNameFromRelPath(resolved) === name;
+  return resolved !== undefined && packageNameFromRelPath(resolved) === name
+    ? resolved
+    : undefined;
 }
 
 /**
@@ -294,15 +412,16 @@ export function readInstalledInventory(cwd: string): InstalledInventory | undefi
     return undefined;
   }
 
-  const dirs: string[] = [];
+  const dirs: FoundPackage[] = [];
   const visited = new Set<string>();
   for (const root of nodeModulesRoots(cwd)) packageDirs(cwd, root, dirs, visited);
 
   const inventory: Record<string, string[]> = {};
-  for (const dir of dirs) {
+  for (const { dir, resolver } of dirs) {
     const name = packageNameFromRelPath(dir);
     if (name === undefined) continue;
-    if (!survivesResolution(cwd, dir, name)) continue;
+    const resolved = survivesResolution(cwd, dir, name);
+    if (resolved === undefined) continue;
     let manifest: Record<string, unknown>;
     try {
       const parsed: unknown = JSON.parse(
@@ -316,15 +435,39 @@ export function readInstalledInventory(cwd: string): InstalledInventory | undefi
     const version = manifest['version'];
     if (typeof version !== 'string' || version === '') continue;
     if (!shipsObservableJs(join(cwd, dir), manifest)) continue;
-    const versions = (inventory[name] ??= []);
-    if (!versions.includes(version)) versions.push(version);
+    // The edge, not the version: which resolver got which copy. A version set
+    // is unchanged by a patch and by an importer moving between two versions
+    // that both stay installed, and in each case the code a test runs moved.
+    const identity = identityOf(resolved, version);
+    // No identity means the entry names a location rather than contents, so
+    // this package has to fall open rather than be vouched for. The resolver
+    // half is refused for the same reason and one more: a `file:` dependency's
+    // entry is named for the path it was copied from, which may sit outside the
+    // repository entirely, and the map is a published artifact.
+    if (identity === undefined || namesALocation(resolver)) continue;
+    const edge = `${resolver}:${identity}`;
+    const edges = (inventory[name] ??= []);
+    if (!edges.includes(edge)) edges.push(edge);
   }
   // Insertion order is `readdirSync` order, which differs between filesystems.
   // The map is compared byte for byte across shards and across runs, so the
   // ordering has to come from the names rather than from the host.
+  //
+  // A store entry links to its own package, and that edge usually says nothing
+  // another edge does not -- a third of the edges on this repository were
+  // these. Usually, not always: when the link that reached the entry was itself
+  // dropped, as an aliased install's is, the self-edge is the only thing naming
+  // that copy. Deciding that per name, once every edge is in, is the difference
+  // between dropping a redundancy and dropping a package -- the unconditional
+  // version lost the whole of `react-is` here, and with it any notice that one
+  // of its copies had moved.
+  const identity = (edge: string): string => edge.slice(edge.indexOf(':') + 1);
   const sorted: Record<string, string[]> = {};
-  for (const name of Object.keys(inventory).sort())
-    sorted[name] = inventory[name]!.sort();
+  for (const name of Object.keys(inventory).sort()) {
+    const edges = inventory[name]!;
+    const named = new Set(edges.filter((e) => !isSelfEdge(e)).map(identity));
+    sorted[name] = edges.filter((e) => !isSelfEdge(e) || !named.has(identity(e))).sort();
+  }
 
   return { manager: found.manager, marker: found.marker, markerHash, inventory: sorted };
 }
