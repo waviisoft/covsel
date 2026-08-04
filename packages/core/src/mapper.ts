@@ -16,6 +16,7 @@ import {
   toRepoRelative,
 } from './paths.js';
 import type { CoveredBlock, CoveredFile } from './schema.js';
+import { projectRanges } from './project.js';
 import { SourceMapResolver } from './source-map.js';
 
 /**
@@ -388,31 +389,99 @@ export class V8FileMapper implements Mapper {
    * treats a file with no recorded blocks as file-level, so such a source is
    * matched whole — over-selecting rather than under-selecting until then.
    */
+  /**
+   * Blocks for a script whose bytes are not the bytes on disk — a bundle, or
+   * anything a transform fused — by projecting its ranges through its source map.
+   *
+   * The text every step reads is the file as it stands now, not the
+   * `sourcesContent` the build published: a block hash has to describe the file
+   * a diff will be taken against, or it matches nothing. A source the map names
+   * that is not in this repository, or cannot be read, contributes no blocks,
+   * which leaves it at file granularity — coarser, and over-selecting.
+   */
+  private async projectedBlocks(
+    script: ScriptCoverage,
+    ranges: ExecRegion[],
+  ): Promise<{ rel: string; blocks: ReturnType<typeof selectExecutedBlocks> }[]> {
+    const resolved = await this.resolver.resolveProjectable({
+      url: script.url,
+      ...(script.source !== undefined ? { source: script.source } : {}),
+    });
+    if (resolved.kind !== 'mapped') return [];
+
+    const texts = new Map<string, string | undefined>();
+    const textOf = (name: string): string | undefined => {
+      if (texts.has(name)) return texts.get(name);
+      const rel = resolved.located.get(name);
+      let text: string | undefined;
+      if (rel !== undefined) {
+        try {
+          text = readFileSync(`${this.cwd}/${rel}`, 'utf8');
+        } catch {
+          text = undefined;
+        }
+      }
+      texts.set(name, text);
+      return text;
+    };
+
+    const { regions } = projectRanges({
+      map: resolved.map,
+      generated: resolved.generated,
+      ranges,
+      sourceText: textOf,
+    });
+
+    const out: { rel: string; blocks: ReturnType<typeof selectExecutedBlocks> }[] = [];
+    for (const [name, list] of regions) {
+      const rel = resolved.located.get(name);
+      const text = textOf(name);
+      if (rel === undefined || text === undefined) continue;
+      if (!this.isSource(rel)) continue;
+      out.push({ rel, blocks: selectExecutedBlocks(text, rel, list) });
+    }
+    return out;
+  }
+
   async toBlocks(raw: RawCoverage): Promise<CoveredBlock[]> {
     const out: CoveredBlock[] = [];
     const seen = new Set<string>();
     for (const script of raw.scripts as ScriptCoverage[]) {
-      const resolved = this.sourcePath(script.url);
-      if (!resolved) continue;
       const executed = script.functions.some((fn) => fn.ranges.some((r) => r.count > 0));
       if (!executed) continue;
-      let source: string;
-      try {
-        source = readFileSync(resolved.abs, 'utf8');
-      } catch {
-        continue;
-      }
-      const regions: ExecRegion[] = [];
+      const ranges: ExecRegion[] = [];
       for (const fn of script.functions) {
         for (const r of fn.ranges) {
-          regions.push({ start: r.startOffset, end: r.endOffset, count: r.count });
+          ranges.push({ start: r.startOffset, end: r.endOffset, count: r.count });
         }
       }
-      for (const block of selectExecutedBlocks(source, resolved.rel, regions)) {
-        const key = `${resolved.rel}\0${block.hash}`;
-        if (seen.has(key)) continue;
-        seen.add(key);
-        out.push({ file: resolved.rel, blockHash: block.hash });
+
+      const resolved = this.sourcePath(script.url);
+      if (resolved) {
+        // The bytes that executed are the bytes on disk, so the offsets index
+        // the file directly.
+        let source: string;
+        try {
+          source = readFileSync(resolved.abs, 'utf8');
+        } catch {
+          continue;
+        }
+        for (const block of selectExecutedBlocks(source, resolved.rel, ranges)) {
+          const key = `${resolved.rel}\0${block.hash}`;
+          if (seen.has(key)) continue;
+          seen.add(key);
+          out.push({ file: resolved.rel, blockHash: block.hash });
+        }
+        continue;
+      }
+
+      for (const { rel, blocks } of await this.projectedBlocks(script, ranges)) {
+        for (const block of blocks) {
+          const key = `${rel}\0${block.hash}`;
+          if (seen.has(key)) continue;
+          seen.add(key);
+          out.push({ file: rel, blockHash: block.hash });
+        }
       }
     }
     return out.sort(byFileThenHash);

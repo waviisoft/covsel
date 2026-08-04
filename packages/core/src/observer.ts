@@ -13,6 +13,16 @@ export interface ScriptCoverage {
     functionName?: string;
     ranges: { startOffset: number; endOffset: number; count: number }[];
   }[];
+  /**
+   * The script as it executed, when the observation carried it.
+   *
+   * A `NODE_V8_COVERAGE` dump does not: its scripts are files, and the mapper
+   * reads them from disk. Coverage taken through a browser does — Chromium
+   * returns each script's text alongside its ranges — and for a bundle that text
+   * is the only copy of what those offsets index, since nothing on disk matches
+   * it.
+   */
+  source?: string;
 }
 
 export interface ProcessObserverInit {

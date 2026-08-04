@@ -24,10 +24,10 @@ import { stripUrlQuery, toRepoRelative } from './paths.js';
  * the caller to fail on, because a source silently missing from an entry is the
  * hole this whole mechanism exists to close.
  *
- * Only the `sources` list is read here. Projecting the executed ranges through
- * the mappings lives in `project.ts`; the recorder does not yet call it, so a
- * mapped script still credits every source it was built from, which
- * over-selects rather than under-selects.
+ * `resolve` reads only the `sources` list, and caches that answer.
+ * `resolveProjectable` returns the map and the script text with it, for the
+ * mapper to project the executed ranges through `project.ts` — and caches
+ * nothing, because those are the things this cache exists not to hold.
  */
 
 /** The parts of a source map covsel reads. */
@@ -66,6 +66,29 @@ export interface ScriptRef {
  */
 export type ResolvedScript =
   | { kind: 'mapped'; sources: string[]; unresolved: string[] }
+  | { kind: 'unmapped'; reason: string };
+
+/**
+ * A resolved script with everything needed to project its coverage: the map, the
+ * text the V8 offsets index, and where each of the map's sources lives in this
+ * repository.
+ *
+ * Separate from `ResolvedScript` because it is never cached. The resolver keeps
+ * only answers, deliberately — holding every script's text would grow with the
+ * size of the build — and this carries exactly the things it declines to keep.
+ * Callers use it and drop it.
+ */
+export type ProjectableScript =
+  | {
+      kind: 'mapped';
+      sources: string[];
+      unresolved: string[];
+      map: RawSourceMap;
+      /** The script as it executed, which the V8 range offsets index. */
+      generated: string;
+      /** Each of the map's source names, as it names them, to its repo-relative path. */
+      located: Map<string, string>;
+    }
   | { kind: 'unmapped'; reason: string };
 
 /** Where scripts a runner executed by URL can be found on disk. */
@@ -289,15 +312,37 @@ export class SourceMapResolver {
       const cached = this.resolved.get(script.url);
       if (cached !== undefined) return cached;
     }
-    const result = await this.resolveUncached(script.url, script.source);
+    const full = await this.resolveFull(script.url, script.source);
+    const result: ResolvedScript =
+      full.kind === 'mapped'
+        ? { kind: 'mapped', sources: full.sources, unresolved: full.unresolved }
+        : full;
     if (script.source === undefined) this.resolved.set(script.url, result);
     return result;
   }
 
-  private async resolveUncached(
+  /**
+   * The same resolution, keeping the map and the script text so a caller can
+   * project the script's coverage ranges onto its original sources.
+   *
+   * Never cached, in either direction: what it carries is what the cache exists
+   * not to hold. A script resolved this way is loaded again if it is also
+   * resolved for its sources — bounded work, and the price of not retaining
+   * every script in the build.
+   */
+  async resolveProjectable(script: ScriptRef): Promise<ProjectableScript> {
+    return this.resolveFull(script.url, script.source);
+  }
+
+  /**
+   * Resolve a script the whole way: its sources, and the map and text behind
+   * them. `resolve` narrows this to the cacheable answer; the projection path
+   * takes it as it is.
+   */
+  private async resolveFull(
     url: string,
     source: string | undefined,
-  ): Promise<ResolvedScript> {
+  ): Promise<ProjectableScript> {
     // The query stays on for loading: a dev server's `?worker_file` or `?raw`
     // names a different resource, not a decoration on this one.
     const text = source ?? (await this.load(url));
@@ -339,6 +384,7 @@ export class SourceMapResolver {
 
     const sources: string[] = [];
     const unresolved: string[] = [];
+    const located = new Map<string, string>();
     const seen = new Set<string>();
     for (const named of namedSources(map)) {
       const outcome = this.locate(named, mapUrl ?? url);
@@ -347,11 +393,22 @@ export class SourceMapResolver {
         if (!unresolved.includes(named.path)) unresolved.push(named.path);
         continue;
       }
+      // Kept whether or not this is the first sighting of the file: two of a
+      // map's names can resolve to one repo path, and the projection looks the
+      // path up by the name its segments carry.
+      located.set(named.path, outcome.rel);
       if (seen.has(outcome.rel)) continue;
       seen.add(outcome.rel);
       sources.push(outcome.rel);
     }
-    return { kind: 'mapped', sources: sources.sort(), unresolved };
+    return {
+      kind: 'mapped',
+      sources: sources.sort(),
+      unresolved,
+      map,
+      generated: text ?? '',
+      located,
+    };
   }
 
   /**

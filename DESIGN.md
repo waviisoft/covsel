@@ -133,11 +133,15 @@ Fanning coverage back out is done from the mapping segments themselves rather
 than through an off-the-shelf istanbul conversion, which was measured to lose the
 cases that matter: those conversions carry named functions only, so an executed
 arrow handler vanishes, and they attribute unmapped bundler-injected code to the
-map's first source. Both drop blocks, and a dropped block skips a test. That
-projection lives in `@covsel/core` as a primitive the recorder does not call, so
-what a mapped bundle credits today is every source it was built from rather than
-the ranges that executed -- coarse, and over-selecting, which is the safe
-direction to be coarse in.
+map's first source. Both drop blocks, and a dropped block skips a test. The
+mapper projects a source-mapped script's ranges this way, so a bundle credits the
+blocks that executed rather than every source it was built from. A source the
+projection refuses -- code the build inlined into several callers, a file whose
+text no longer matches the map, a span a range does not own -- contributes no
+block and stays at file granularity, which over-selects rather than skipping it.
+Block text is read from the file as it stands, never from the map's published
+`sourcesContent`, because a hash has to describe the file a diff will be taken
+against.
 
 The consequence is that covsel covers the Node/unit/integration case. Coverage of
 code executing inside a browser is not something it can observe today.
