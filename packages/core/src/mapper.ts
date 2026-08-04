@@ -16,6 +16,7 @@ import {
   toRepoRelative,
 } from './paths.js';
 import type { CoveredBlock, CoveredFile } from './schema.js';
+import { projectRanges } from './project.js';
 import { SourceMapResolver } from './source-map.js';
 
 /**
@@ -376,43 +377,138 @@ export class V8FileMapper implements Mapper {
   }
 
   /**
-   * Block-level coverage for direct-execution runners. V8 range offsets index
-   * the source *as executed*, matched here against the on-disk file — sound only
-   * when they are the same bytes (plain JS, or position-preserving type
-   * stripping). Runners that transform sources before executing them (Vitest,
-   * Jest, ts-node/tsx) must record blocks through their own adapter, which reads
-   * the runner's source-mapped coverage instead.
+   * Blocks for a script whose bytes are not the bytes on disk — a bundle, or
+   * anything a transform fused — by projecting its ranges through its source map.
    *
-   * A script recorded through its source map therefore contributes no blocks:
-   * projecting its ranges onto the original sources is separate work. Selection
-   * treats a file with no recorded blocks as file-level, so such a source is
-   * matched whole — over-selecting rather than under-selecting until then.
+   * A map's line and column numbers describe its sources **as they stood at
+   * build time**, and projecting them onto the files as they stand now is only
+   * sound while the two are the same text. Nothing about a drifted map announces
+   * itself: build-time line 40 simply lands on whatever is at line 40 today, so a
+   * range that never ran can come to cover a function that did, and the block for
+   * it disappears. That turns a file selection would have matched whole into one
+   * it matches by blocks and then misses — the one failure this project forbids.
+   *
+   * So a source is projected only while the build's published `sourcesContent`
+   * still matches the file, and a source the build published nothing for is not
+   * projected at all, because there is nothing to check the coordinates against.
+   * Either way it contributes no blocks and stays at file granularity, which is
+   * what it had before any of this existed.
+   *
+   * Block text is then read from disk rather than from that published copy: with
+   * the two confirmed identical it is the same bytes, and reading the file is
+   * what keeps the hash describing what a diff will be taken against.
+   */
+  private async projectedBlocks(
+    script: ScriptCoverage,
+    ranges: ExecRegion[],
+  ): Promise<{ rel: string; blocks: ReturnType<typeof selectExecutedBlocks> }[]> {
+    // A script the project accepted as unmappable is one it told covsel not to
+    // read. `attributeBuiltScript` honours that before resolving anything, and
+    // reaching past it here would spend the I/O — a request per test file, for an
+    // http script — that the setting exists to decline.
+    if (this.isAllowedUnmappable(this.label(script.url))) return [];
+
+    // Vendored code, the runtime's own scripts, anything outside the repository:
+    // accounted for by what they are rather than by a map, and their maps could
+    // only name sources the source filter rejects anyway. Skipped before any
+    // resolution, because a dump holds hundreds of them and each would otherwise
+    // cost a read of the script and a failed look for a sidecar map, per test
+    // file — and for an http script, a request.
+    if (this.isAccountedForAsItStands(script.url)) return [];
+
+    const resolved = await this.resolver.resolveProjectable({
+      url: script.url,
+      ...(script.source !== undefined ? { source: script.source } : {}),
+    });
+    if (resolved.kind !== 'mapped') return [];
+
+    /** The file behind a source name, when the map may still be read against it. */
+    const confirmed = new Map<string, { rel: string; text: string } | undefined>();
+    const fileFor = (name: string): { rel: string; text: string } | undefined => {
+      if (confirmed.has(name)) return confirmed.get(name);
+      let answer: { rel: string; text: string } | undefined;
+      const located = resolved.located.get(name);
+      if (located !== undefined && this.isSource(located.rel)) {
+        try {
+          const text = readFileSync(`${this.cwd}/${located.rel}`, 'utf8');
+          if (located.content === text) answer = { rel: located.rel, text };
+        } catch {
+          answer = undefined;
+        }
+      }
+      confirmed.set(name, answer);
+      return answer;
+    };
+
+    const { regions } = projectRanges({
+      map: resolved.map,
+      generated: resolved.generated,
+      ranges,
+      sourceText: (name) => fileFor(name)?.text,
+    });
+
+    const out: { rel: string; blocks: ReturnType<typeof selectExecutedBlocks> }[] = [];
+    for (const [name, list] of regions) {
+      const file = fileFor(name);
+      if (file === undefined) continue;
+      out.push({
+        rel: file.rel,
+        blocks: selectExecutedBlocks(file.text, file.rel, list),
+      });
+    }
+    return out;
+  }
+
+  /**
+   * Block-level coverage. A script that *is* a file in the repository is matched
+   * against that file directly, because the offsets V8 reports index the bytes
+   * on disk — true for plain JS and position-preserving type stripping. Anything
+   * else executed bytes nobody wrote, and is projected through its source map by
+   * `projectedBlocks`, which refuses whatever it cannot stand behind.
+   *
+   * Runners that transform sources before executing them (Vitest, Jest) record
+   * blocks through their own adapter, which reads the runner's already
+   * source-mapped coverage rather than coming through here at all.
    */
   async toBlocks(raw: RawCoverage): Promise<CoveredBlock[]> {
     const out: CoveredBlock[] = [];
     const seen = new Set<string>();
     for (const script of raw.scripts as ScriptCoverage[]) {
-      const resolved = this.sourcePath(script.url);
-      if (!resolved) continue;
       const executed = script.functions.some((fn) => fn.ranges.some((r) => r.count > 0));
       if (!executed) continue;
-      let source: string;
-      try {
-        source = readFileSync(resolved.abs, 'utf8');
-      } catch {
-        continue;
-      }
-      const regions: ExecRegion[] = [];
+      const ranges: ExecRegion[] = [];
       for (const fn of script.functions) {
         for (const r of fn.ranges) {
-          regions.push({ start: r.startOffset, end: r.endOffset, count: r.count });
+          ranges.push({ start: r.startOffset, end: r.endOffset, count: r.count });
         }
       }
-      for (const block of selectExecutedBlocks(source, resolved.rel, regions)) {
-        const key = `${resolved.rel}\0${block.hash}`;
-        if (seen.has(key)) continue;
-        seen.add(key);
-        out.push({ file: resolved.rel, blockHash: block.hash });
+
+      const resolved = this.sourcePath(script.url);
+      if (resolved) {
+        // The bytes that executed are the bytes on disk, so the offsets index
+        // the file directly.
+        let source: string;
+        try {
+          source = readFileSync(resolved.abs, 'utf8');
+        } catch {
+          continue;
+        }
+        for (const block of selectExecutedBlocks(source, resolved.rel, ranges)) {
+          const key = `${resolved.rel}\0${block.hash}`;
+          if (seen.has(key)) continue;
+          seen.add(key);
+          out.push({ file: resolved.rel, blockHash: block.hash });
+        }
+        continue;
+      }
+
+      for (const { rel, blocks } of await this.projectedBlocks(script, ranges)) {
+        for (const block of blocks) {
+          const key = `${rel}\0${block.hash}`;
+          if (seen.has(key)) continue;
+          seen.add(key);
+          out.push({ file: rel, blockHash: block.hash });
+        }
       }
     }
     return out.sort(byFileThenHash);
