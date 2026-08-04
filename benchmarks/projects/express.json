@@ -1,0 +1,20 @@
+{
+  "name": "express",
+  "repo": "expressjs/express",
+  "ref": "0210be90ad9909a130624b24f72b666d86de9e2a",
+  "adapter": "@covsel/adapter-generic",
+  "adapterName": "generic",
+  "install": ["npm", "install", "--no-audit", "--no-fund"],
+  "runner": [
+    "./node_modules/.bin/mocha",
+    "--require",
+    "test/support/env",
+    "--reporter",
+    "dot"
+  ],
+  "covsel": {
+    "testGlobs": ["test/**/*.js"],
+    "sourceGlobs": ["lib/**/*.js"]
+  },
+  "rationale": "Mocha over plain JavaScript, and small enough that its whole suite runs in seconds. It is the precision case rather than the speed case: express is six source files, so every test loads nearly all of them and file-level selection has almost nothing to narrow."
+}

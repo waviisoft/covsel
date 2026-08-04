@@ -47,7 +47,10 @@ export default defineConfig({
         },
         {
           text: 'Under the hood',
-          items: [{ text: 'Architecture', link: '/guide/architecture' }],
+          items: [
+            { text: 'Architecture', link: '/guide/architecture' },
+            { text: 'Benchmarks', link: '/guide/benchmarks' },
+          ],
         },
       ],
     },

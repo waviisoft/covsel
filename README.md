@@ -102,6 +102,29 @@ have run_. Every design tension resolves toward over-selection:
 **We never skip a test whose behavior your change could alter -- and when we
 can't be sure, we run it.**
 
+## Does it actually work?
+
+Measured on two real projects, through the generic wrap with no runner
+integration. Each edits one function body, and compares what covsel selected
+against what file-level selection would have picked for the same edit:
+
+| Project                                         | Test files | File level | covsel   | Full suite -> selected |
+| ----------------------------------------------- | ---------- | ---------- | -------- | ---------------------- |
+| [express](https://github.com/expressjs/express) | 91         | 87 (96%)   | 13 (14%) | 3.8s -> 1.6s           |
+| [fastify](https://github.com/fastify/fastify)   | 193        | 185 (96%)  | 33 (17%) | 45.3s -> 11.0s         |
+
+File-level selection picks almost the whole suite on either project, because
+every test in a web framework loads nearly all of `lib/`. Block granularity is
+what turns that into a result.
+
+express is also the honest counter-example: its whole suite runs in under four
+seconds and recording the map costs thirteen times that, so there is no time
+saving there worth having. covsel pays off when a suite is slow enough that the
+saving outruns what recording cost.
+
+Method, caveats, and how to run it yourself:
+[Benchmarks](https://waviisoft.github.io/covsel/guide/benchmarks).
+
 ## Supported runners
 
 Runners that execute source directly (`node --test`, Mocha on plain JavaScript)
