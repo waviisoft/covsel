@@ -1,4 +1,4 @@
-import { mkdtempSync, rmSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, rmSync, symlinkSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
@@ -34,14 +34,32 @@ afterEach(() => {
   for (const dir of dirs.splice(0)) rmSync(dir, { recursive: true, force: true });
 });
 
-/** A vendored package, installed the way a flat `node_modules` holds one. */
+/**
+ * A vendored package, installed the way pnpm holds one: the real directory in
+ * the store, a symlink to it from `node_modules`.
+ *
+ * The store is not decoration here. An identity covsel will vouch for comes from
+ * a store entry name, since that is the only part of a layout that moves when the
+ * package's contents do -- a flat `node_modules` offers nothing but a path and a
+ * declared version, and `pnpm patch` moves neither. Node resolves the symlink and
+ * V8 reports the realpath, which is the store path, so attribution reads the same
+ * name either way.
+ */
 function installPackage(cwd: string, name: string, version: string, body: string): void {
+  const dir = `${storeEntry(name, version)}/node_modules/${name}`;
   write(
     cwd,
-    `node_modules/${name}/package.json`,
+    `${dir}/package.json`,
     `${JSON.stringify({ name, version, main: 'index.js', type: 'module' })}\n`,
   );
-  write(cwd, `node_modules/${name}/index.js`, body);
+  write(cwd, `${dir}/index.js`, body);
+  mkdirSync(join(cwd, 'node_modules'), { recursive: true });
+  symlinkSync(join('..', dir), join(cwd, 'node_modules', name));
+}
+
+/** The store entry pnpm gives one resolved package, repo-relative. */
+function storeEntry(name: string, version: string): string {
+  return `node_modules/.pnpm/${name}@${version}`;
 }
 
 /**
@@ -148,10 +166,10 @@ describe('recording what was installed', () => {
     // Edges rather than versions: which resolver got which copy, so a patch or
     // an importer moving between two installed versions is visible.
     expect(map.dependencies?.inventory['left-pad']).toEqual([
-      '.:node_modules/left-pad@1.3.0',
+      `.:${storeEntry('left-pad', '1.3.0')}`,
     ]);
     expect(map.dependencies?.inventory['right-pad']).toEqual([
-      '.:node_modules/right-pad@2.0.0',
+      `.:${storeEntry('right-pad', '2.0.0')}`,
     ]);
   }, 120_000);
 
@@ -247,7 +265,7 @@ describe('what the generic recorder may claim about the command it was handed', 
 
     const map = await record(cwd);
     expect(map.dependencies?.inventory['left-pad']).toEqual([
-      '.:node_modules/left-pad@1.3.0',
+      `.:${storeEntry('left-pad', '1.3.0')}`,
     ]);
     expect(packagesOf(map, 'test/a.test.mjs')).toContain('left-pad');
   }, 120_000);

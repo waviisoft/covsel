@@ -193,6 +193,24 @@ describe('fail-open acceptance', () => {
     expect(result.tests).toEqual(['test/a.test.mjs', 'test/b.test.mjs']);
   });
 
+  // The other half of a dependency change, and the half no lockfile shows. These
+  // decide how a lockfile becomes a `node_modules` — pnpm's `hoist-pattern`
+  // fills the directory that resolves undeclared imports, `.pnpmfile.cjs`
+  // rewrites manifests at install time — so editing one moves what a source's
+  // `import` resolves to while the lockfile does not change by a byte. Spelled
+  // out for the same reason as the lockfiles above: what is under test is that
+  // the default list holds these names.
+  it.each(['.npmrc', '.pnpmfile.cjs', '.yarnrc.yml', '.yarnrc', 'bunfig.toml'])(
+    '3g. a %s change alone forces a full run',
+    async (config_file) => {
+      write(config_file, 'hoist-pattern[]=\n');
+      const result = await selectAffected({ cwd, config });
+      expect(result.fullRun).toBe(true);
+      expect(result.reason).toContain(`sentinel changed: ${config_file}`);
+      expect(result.tests).toEqual(['test/a.test.mjs', 'test/b.test.mjs']);
+    },
+  );
+
   it('4. a brand-new test file always runs, even absent from the map', async () => {
     write('test/c.test.mjs', FILES['test/a.test.mjs']!);
     const result = await selectAffected({ cwd, config });

@@ -54,6 +54,59 @@ function manifest(name: string, version: string, extra: object = {}): string {
   return `${JSON.stringify({ name, version, main: 'index.js', ...extra })}\n`;
 }
 
+/** Where pnpm keeps a package: inside its store entry, under its own name. */
+function storeDir(name: string, version: string): string {
+  return `node_modules/.pnpm/${name.replace('/', '+')}@${version}/node_modules/${name}`;
+}
+
+/**
+ * Install a package the way pnpm does: the real directory inside a store entry,
+ * a symlink to it from `node_modules`, and whatever files the case supplies.
+ *
+ * Every identity covsel records is a store entry name, so a fixture that puts a
+ * package anywhere else is describing a layout that falls open — which several
+ * cases below assert on purpose, and which the rest have no wish to be testing.
+ */
+function install(
+  cwd: string,
+  name: string,
+  version: string,
+  files: Record<string, string> = {},
+): void {
+  const dir = storeDir(name, version);
+  mkdirp(cwd, dir);
+  writeFileSync(join(cwd, dir, 'package.json'), manifest(name, version));
+  for (const [rel, body] of Object.entries(files)) {
+    const abs = join(cwd, dir, rel);
+    mkdirSync(dirname(abs), { recursive: true });
+    writeFileSync(abs, body);
+  }
+}
+
+/**
+ * Link an installed package into one `node_modules`, the way an importer that
+ * depends on it has it. Relative, like pnpm's own links, and climbing out of a
+ * scope directory when the name has one.
+ */
+function linkInto(cwd: string, nodeModulesRel: string, name: string, version: string) {
+  const up = '../'.repeat(
+    nodeModulesRel.split('/').length + (name.includes('/') ? 1 : 0),
+  );
+  link(cwd, `${nodeModulesRel}/${name}`, `${up}${storeDir(name, version)}`);
+}
+
+/** A pnpm project holding one store-linked package, files and all. */
+function pnpmProjectWith(
+  name: string,
+  version: string,
+  files: Record<string, string> = {},
+): string {
+  const cwd = pnpmProject({});
+  install(cwd, name, version, files);
+  linkInto(cwd, 'node_modules', name, version);
+  return cwd;
+}
+
 /**
  * The package names an inventory holds. Most cases here are about which
  * packages are in it at all; the edges each one resolved through are the
@@ -106,7 +159,7 @@ describe('readInstalledInventory', () => {
       // pnpm writes a byte-identical copy of pnpm-lock.yaml into the store on
       // every install, so comparing the two is the whole freshness proof: no
       // parsing, and a lockfile pulled but not installed cannot match.
-      const cwd = pnpmProject({});
+      const cwd = pnpmProjectWith('left-pad', '1.3.0');
 
       const inventory = readInstalledInventory(cwd);
 
@@ -115,25 +168,23 @@ describe('readInstalledInventory', () => {
       expect(inventory?.markerHash).toBe(hashString('lockfileVersion: 9.0\n'));
     });
 
-    it('reads npm hidden lockfile', () => {
-      const cwd = project({ 'node_modules/.package-lock.json': '{"lockfileVersion":3}' });
-
-      expect(readInstalledInventory(cwd)?.manager).toBe('npm');
-      expect(readInstalledInventory(cwd)?.marker).toBe('node_modules/.package-lock.json');
-    });
-
-    it('reads yarn classic integrity file', () => {
-      const cwd = project({ 'node_modules/.yarn-integrity': '{"systemParams":"linux"}' });
-
-      expect(readInstalledInventory(cwd)?.manager).toBe('yarn');
-    });
-
-    it('reads yarn berry node-modules state', () => {
+    it.each([
+      ['npm', 'node_modules/.package-lock.json', '{"lockfileVersion":3}'],
+      ['yarn classic', 'node_modules/.yarn-integrity', '{"systemParams":"linux"}'],
+      ['yarn berry', 'node_modules/.yarn-state.yml', '__metadata:\n  version: 1'],
+    ])('has no inventory for a %s tree, which has no store', (_manager, marker, body) => {
+      // Their marker is found -- that half works, and is what a content signal
+      // for these layouts would build on. What stops them is the layout itself:
+      // packages sit directly in `node_modules`, so the only identity available
+      // is a path and a declared version, and a version does not move when a
+      // package is patched in place. Every package is refused, nothing is left
+      // to vouch for, and the answer is none.
       const cwd = project({
-        'node_modules/.yarn-state.yml': '__metadata:\n  version: 1',
+        [marker]: body,
+        'node_modules/left-pad/package.json': manifest('left-pad', '1.3.0'),
       });
 
-      expect(readInstalledInventory(cwd)?.manager).toBe('yarn-berry');
+      expect(readInstalledInventory(cwd)).toBeUndefined();
     });
 
     it('has no inventory for a manager that leaves no marker', () => {
@@ -166,17 +217,13 @@ describe('readInstalledInventory', () => {
 
   describe('what is installed', () => {
     it('records a package and the version it is installed at', () => {
-      const cwd = pnpmProject({
-        'node_modules/left-pad/package.json': manifest('left-pad', '1.3.0'),
-      });
+      const cwd = pnpmProjectWith('left-pad', '1.3.0');
 
       expect(names(cwd)).toEqual(['left-pad']);
     });
 
     it('keeps a scope with the name', () => {
-      const cwd = pnpmProject({
-        'node_modules/@scope/pkg/package.json': manifest('@scope/pkg', '2.0.0'),
-      });
+      const cwd = pnpmProjectWith('@scope/pkg', '2.0.0');
 
       expect(names(cwd)).toEqual(['@scope/pkg']);
     });
@@ -274,23 +321,22 @@ describe('readInstalledInventory', () => {
       ]);
     });
 
-    it('finds a dependency bundled inside another', () => {
-      const cwd = pnpmProject({
-        'node_modules/outer/package.json': manifest('outer', '1.0.0'),
-        'node_modules/outer/node_modules/inner/package.json': manifest('inner', '0.1.0'),
-      });
+    it('descends into a node_modules nested inside a package', () => {
+      // The npm and yarn shape, which pnpm also produces for a dependency it
+      // cannot hoist. What is nested here is a link back into the store, so the
+      // package it reaches still has an identity; a real directory nested the
+      // same way would not, and falls open (see the bundled case below).
+      const cwd = pnpmProjectWith('outer', '1.0.0');
+      install(cwd, 'inner', '0.1.0');
+      linkInto(cwd, `${storeDir('outer', '1.0.0')}/node_modules`, 'inner', '0.1.0');
 
       expect(names(cwd)).toEqual(['inner', 'outer']);
     });
 
     it('finds a workspace package own node_modules', () => {
-      const cwd = pnpmProject({
-        'packages/app/package.json': '{"name":"app"}',
-        'packages/app/node_modules/local-only/package.json': manifest(
-          'local-only',
-          '3.0.0',
-        ),
-      });
+      const cwd = pnpmProject({ 'packages/app/package.json': '{"name":"app"}' });
+      install(cwd, 'local-only', '3.0.0');
+      linkInto(cwd, 'packages/app/node_modules', 'local-only', '3.0.0');
 
       expect(names(cwd)).toEqual(['local-only']);
     });
@@ -299,10 +345,11 @@ describe('readInstalledInventory', () => {
       // A directory whose manifest disagrees with it. Coverage attribution reads
       // the path, so the inventory reads the path too.
       const cwd = pnpmProject({
-        'node_modules/aliased/package.json': manifest('the-real-name', '1.0.0'),
+        [`${storeDir('pkg', '1.0.0')}/package.json`]: manifest('the-real-name', '1.0.0'),
       });
+      linkInto(cwd, 'node_modules', 'pkg', '1.0.0');
 
-      expect(names(cwd)).toEqual(['aliased']);
+      expect(names(cwd)).toEqual(['pkg']);
     });
 
     it('ignores the package managers own bookkeeping', () => {
@@ -423,12 +470,13 @@ describe('readInstalledInventory', () => {
       const cwd = pnpmProject({
         'packages/lib/package.json': manifest('lib', '1.0.0'),
         'packages/app/package.json': manifest('app', '1.0.0'),
-        'packages/lib/node_modules/dep/package.json': manifest('dep', '1.0.0'),
       });
+      install(cwd, 'dep', '1.0.0');
+      linkInto(cwd, 'packages/lib/node_modules', 'dep', '1.0.0');
       link(cwd, 'packages/app/node_modules/lib', '../../lib');
 
       expect(edgesOf(cwd, 'dep')).toEqual([
-        'packages/lib:packages/lib/node_modules/dep@1.0.0',
+        `packages/lib:${storeDir('dep', '1.0.0').replace(/\/node_modules\/dep$/, '')}`,
       ]);
     });
 
@@ -450,9 +498,12 @@ describe('readInstalledInventory', () => {
       expect(names(cwd)).toEqual([]);
     });
 
-    it('keeps a bundled copy distinct from its namesake under another parent', () => {
-      // The npm and yarn shape the non-store identity exists for: one name, two
-      // copies, each inside a different dependent.
+    it('leaves out a bundled dependency, which has no name but its path', () => {
+      // The npm and yarn shape: one name, two copies, each inside a different
+      // dependent, and neither in a store. Path and version are all there is to
+      // go on, and a version does not move when `pnpm patch` rewrites the files
+      // -- so recording either copy would be recording a claim covsel cannot
+      // stand behind.
       const cwd = pnpmProject({
         'node_modules/one/package.json': manifest('one', '1.0.0'),
         'node_modules/one/node_modules/dep/package.json': manifest('dep', '1.0.0'),
@@ -460,10 +511,7 @@ describe('readInstalledInventory', () => {
         'node_modules/two/node_modules/dep/package.json': manifest('dep', '2.0.0'),
       });
 
-      expect(edgesOf(cwd, 'dep')).toEqual([
-        'node_modules/one:node_modules/one/node_modules/dep@1.0.0',
-        'node_modules/two:node_modules/two/node_modules/dep@2.0.0',
-      ]);
+      expect(edgesOf(cwd, 'dep')).toEqual([]);
     });
 
     it('keeps a copy the walk reached only through a link it had to drop', () => {
@@ -550,14 +598,53 @@ describe('readInstalledInventory', () => {
       expect(edges.filter((e) => e.includes('outside'))).toEqual([]);
     });
 
-    it('identifies a package outside any store by where it sits and what it says', () => {
-      // A hoisted tree, or a bundled dependency. The path alone does not say
-      // which code is there, so the version comes along.
+    it('leaves out a package sitting outside any store', () => {
+      // What `node-linker=hoisted` gives every package, and what npm and yarn
+      // give all of them. There is no store entry to take an identity from, and
+      // the path plus the declared version is not a content signal.
       const cwd = pnpmProject({
         'node_modules/flat/package.json': manifest('flat', '2.1.0'),
       });
 
-      expect(edgesOf(cwd, 'flat')).toEqual(['.:node_modules/flat@2.1.0']);
+      expect(edgesOf(cwd, 'flat')).toEqual([]);
+    });
+
+    it('reports no inventory at all for a tree with no store', () => {
+      // The whole of a hoisted tree reaches the case above, so nothing is left
+      // to vouch for. Reported as no inventory rather than an empty one: both
+      // have to fall open, and a consumer that overlooks the empty case diffs
+      // nothing against nothing, concludes nothing changed, and skips the suite.
+      const cwd = pnpmProject({
+        'node_modules/flat/package.json': manifest('flat', '2.1.0'),
+        'node_modules/other/package.json': manifest('other', '1.0.0'),
+      });
+
+      expect(readInstalledInventory(cwd)).toBeUndefined();
+    });
+
+    it('is unmoved by a patch that leaves the version alone, and says so', () => {
+      // The reproduction from covsel/covsel#95, in the shape a fixture can
+      // state: `pnpm patch` rewrites a package's files and its version stays
+      // put. Under the default linker the store entry carries the patch hash,
+      // so the identity moves and the change is visible.
+      const patched = pnpmProject({
+        'node_modules/.pnpm/is-odd@3.0.1_patch_hash=00bb/node_modules/is-odd/package.json':
+          manifest('is-odd', '3.0.1'),
+      });
+      link(
+        patched,
+        'node_modules/is-odd',
+        '.pnpm/is-odd@3.0.1_patch_hash=00bb/node_modules/is-odd',
+      );
+      const plain = pnpmProject({
+        'node_modules/.pnpm/is-odd@3.0.1/node_modules/is-odd/package.json': manifest(
+          'is-odd',
+          '3.0.1',
+        ),
+      });
+      link(plain, 'node_modules/is-odd', '.pnpm/is-odd@3.0.1/node_modules/is-odd');
+
+      expect(edgesOf(patched, 'is-odd')).not.toEqual(edgesOf(plain, 'is-odd'));
     });
   });
 
@@ -692,17 +779,16 @@ describe('readInstalledInventory', () => {
     it('keeps a JS wrapper around a native addon', () => {
       // The wrapper executes, and V8 reports it, so covsel does see this
       // package run even though the work happens in the binary it opens.
-      const cwd = pnpmProject({
-        'node_modules/wrapper/package.json': manifest('wrapper', '1.0.0'),
-        'node_modules/wrapper/index.js': 'process.dlopen();\n',
+      const cwd = pnpmProjectWith('wrapper', '1.0.0', {
+        'index.js': 'process.dlopen();\n',
       });
 
       expect(names(cwd)).toEqual(['wrapper']);
     });
 
     it('keeps a package whose entry point is written without an extension', () => {
-      const cwd = pnpmProject({
-        'node_modules/extensionless/package.json': `${JSON.stringify({
+      const cwd = pnpmProjectWith('extensionless', '1.0.0', {
+        'package.json': `${JSON.stringify({
           name: 'extensionless',
           version: '1.0.0',
           main: './lib/index',
@@ -713,8 +799,8 @@ describe('readInstalledInventory', () => {
     });
 
     it('keeps a package that declares only an exports map', () => {
-      const cwd = pnpmProject({
-        'node_modules/modern/package.json': `${JSON.stringify({
+      const cwd = pnpmProjectWith('modern', '1.0.0', {
+        'package.json': `${JSON.stringify({
           name: 'modern',
           version: '1.0.0',
           exports: { '.': { import: './dist/index.js', require: './dist/index.cjs' } },
@@ -725,12 +811,9 @@ describe('readInstalledInventory', () => {
     });
 
     it('keeps a package that declares nothing but ships an index', () => {
-      const cwd = pnpmProject({
-        'node_modules/implicit/package.json': `${JSON.stringify({
-          name: 'implicit',
-          version: '1.0.0',
-        })}\n`,
-        'node_modules/implicit/index.js': 'module.exports = 1;\n',
+      const cwd = pnpmProjectWith('implicit', '1.0.0', {
+        'package.json': `${JSON.stringify({ name: 'implicit', version: '1.0.0' })}\n`,
+        'index.js': 'module.exports = 1;\n',
       });
 
       expect(names(cwd)).toEqual(['implicit']);
