@@ -44,12 +44,19 @@ project with its own lockfile is walked like any other — and two stores name
 their entries independently. Comparing bare names would let a change in one
 cancel out a change in the other.
 
-Two shapes are deliberately left out of the inventory, and so keep falling open.
 A package whose store entry names a directory rather than its contents — a
 `file:` or `link:` dependency, copied into the store under a name built from the
 path it came from — can have its source edited and reinstalled without the
-identity moving. And a store entry's link to its own package carries nothing
-that another edge does not already say, so it is skipped; that was a third of
-the edges recorded on this repository.
+identity moving. Those are left out of the inventory and keep falling open, and
+so is anything such an entry resolved, since otherwise the path it is named for
+(which may sit outside the repository entirely) is written into a map that gets
+published.
+
+A store entry's link to its own package is dropped where another edge already
+names that copy, which is most of the time — a third of the edges recorded on
+this repository. Not always, though: when the link that reached the entry was
+itself dropped, as an aliased install's is, the self-edge is the only thing
+naming that copy, and discarding it would lose the package rather than a
+redundancy.
 
 `changedPackages` is unchanged; it compares the same shape it always did.

@@ -466,6 +466,90 @@ describe('readInstalledInventory', () => {
       ]);
     });
 
+    it('keeps a copy the walk reached only through a link it had to drop', () => {
+      // An aliased install: `aliased` points at `real@2.0.0`, and the alias is
+      // dropped because attribution can only ever produce `real`. What is left
+      // naming that copy is the store entry's link to its own package, so
+      // discarding self-edges outright loses the copy entirely -- and with it
+      // any notice that it moved. `pretty-format` ships exactly this shape.
+      const cwd = pnpmProject({
+        'node_modules/.pnpm/real@1.0.0/node_modules/real/package.json': manifest(
+          'real',
+          '1.0.0',
+        ),
+        'node_modules/.pnpm/real@2.0.0/node_modules/real/package.json': manifest(
+          'real',
+          '2.0.0',
+        ),
+      });
+      link(cwd, 'node_modules/real', '.pnpm/real@1.0.0/node_modules/real');
+      link(cwd, 'node_modules/aliased', '.pnpm/real@2.0.0/node_modules/real');
+
+      expect(edgesOf(cwd, 'real')).toEqual([
+        '.:node_modules/.pnpm/real@1.0.0',
+        'node_modules/.pnpm/real@2.0.0:node_modules/.pnpm/real@2.0.0',
+      ]);
+    });
+
+    it('drops the self-edge only where another edge already names that copy', () => {
+      const cwd = pnpmProject({
+        'node_modules/.pnpm/dep@1.0.0/node_modules/dep/package.json': manifest(
+          'dep',
+          '1.0.0',
+        ),
+      });
+      link(cwd, 'node_modules/dep', '.pnpm/dep@1.0.0/node_modules/dep');
+
+      expect(edgesOf(cwd, 'dep')).toEqual(['.:node_modules/.pnpm/dep@1.0.0']);
+    });
+
+    it('keeps a package under a scope that spells a specifier protocol', () => {
+      // pnpm writes `/` as `+` in a scoped name, so `@link/core` becomes the
+      // store entry `@link+core@1.0.0`. Reading that as a `link:` dependency
+      // drops a perfectly ordinary registry package.
+      const cwd = pnpmProject({
+        'node_modules/.pnpm/@link+core@1.0.0/node_modules/@link/core/package.json':
+          manifest('@link/core', '1.0.0'),
+      });
+      link(
+        cwd,
+        'node_modules/@link/core',
+        '../.pnpm/@link+core@1.0.0/node_modules/@link/core',
+      );
+
+      expect(names(cwd)).toEqual(['@link/core']);
+    });
+
+    it('records nothing resolved by a store entry that names a directory', () => {
+      // The entry is named for the path it was copied from, which for a
+      // `file:../../shared` dependency is a directory outside the repository.
+      // The identity half already refuses it; the resolver half has to as well,
+      // or that path is written into a map that gets published.
+      const cwd = pnpmProject({
+        'node_modules/.pnpm/vendored@file+..+outside+lib/node_modules/vendored/package.json':
+          manifest('vendored', '1.0.0'),
+        'node_modules/.pnpm/dep@1.0.0/node_modules/dep/package.json': manifest(
+          'dep',
+          '1.0.0',
+        ),
+      });
+      link(
+        cwd,
+        'node_modules/vendored',
+        '.pnpm/vendored@file+..+outside+lib/node_modules/vendored',
+      );
+      // `dep` is an ordinary registry package, so its own identity is fine. It
+      // is the entry that resolved it that names somebody's home directory.
+      link(
+        cwd,
+        'node_modules/.pnpm/vendored@file+..+outside+lib/node_modules/dep',
+        '../../dep@1.0.0/node_modules/dep',
+      );
+
+      const edges = Object.values(readInstalledInventory(cwd)?.inventory ?? {}).flat();
+      expect(edges.filter((e) => e.includes('outside'))).toEqual([]);
+    });
+
     it('identifies a package outside any store by where it sits and what it says', () => {
       // A hoisted tree, or a bundled dependency. The path alone does not say
       // which code is there, so the version comes along.

@@ -185,7 +185,33 @@ function storeEntryOf(rel: string): string | undefined {
  * nobody has looked at -- but the alternative refuses every specifier covsel has
  * not seen, and that refuses the registry case this exists to serve.
  */
-const UNPINNED_SPECIFIER = /@(?:file|link)\+/;
+const UNPINNED_SPECIFIER = /^(?:file|link)\+/;
+
+/**
+ * The specifier half of a store entry name -- what follows the package name.
+ *
+ * Read positionally rather than by searching for a marker anywhere in the
+ * string, because pnpm spells `/` as `+` in scoped names and in resolved peers
+ * alike: a package under an `@link` scope is `@link+core@1.0.0`, and a peer on
+ * one is `my-lib@1.0.0_@link+core@1.0.0`. Both contain the text a careless
+ * check would read as a `link:` dependency.
+ */
+function specifierOf(entryPath: string): string {
+  const entry = entryPath.slice(entryPath.lastIndexOf('/') + 1);
+  const at = entry.startsWith('@') ? entry.indexOf('@', 1) : entry.indexOf('@');
+  return at === -1 ? '' : entry.slice(at + 1);
+}
+
+/** An edge from a store entry to the package that entry holds. */
+function isSelfEdge(edge: string): boolean {
+  const at = edge.indexOf(':');
+  return edge.slice(0, at) === edge.slice(at + 1);
+}
+
+/** Whether a store entry names where a package came from rather than what it is. */
+function namesALocation(entryPath: string): boolean {
+  return UNPINNED_SPECIFIER.test(specifierOf(entryPath));
+}
 
 /**
  * What a package resolved to, as something two recordings can compare.
@@ -200,7 +226,7 @@ const UNPINNED_SPECIFIER = /@(?:file|link)\+/;
 function identityOf(resolved: string, version: string): string | undefined {
   const entry = storeEntryOf(resolved);
   if (entry === undefined) return `${resolved}@${version}`;
-  return UNPINNED_SPECIFIER.test(entry) ? undefined : entry;
+  return namesALocation(entry) ? undefined : entry;
 }
 
 /**
@@ -414,13 +440,11 @@ export function readInstalledInventory(cwd: string): InstalledInventory | undefi
     // that both stay installed, and in each case the code a test runs moved.
     const identity = identityOf(resolved, version);
     // No identity means the entry names a location rather than contents, so
-    // this package has to fall open rather than be vouched for.
-    if (identity === undefined) continue;
-    // A store entry links to its own package, and that edge carries nothing:
-    // resolver and identity are the same string, and every other edge that
-    // reaches the package already names the identity. A third of the edges on
-    // this repository were these.
-    if (resolver === identity) continue;
+    // this package has to fall open rather than be vouched for. The resolver
+    // half is refused for the same reason and one more: a `file:` dependency's
+    // entry is named for the path it was copied from, which may sit outside the
+    // repository entirely, and the map is a published artifact.
+    if (identity === undefined || namesALocation(resolver)) continue;
     const edge = `${resolver}:${identity}`;
     const edges = (inventory[name] ??= []);
     if (!edges.includes(edge)) edges.push(edge);
@@ -428,9 +452,22 @@ export function readInstalledInventory(cwd: string): InstalledInventory | undefi
   // Insertion order is `readdirSync` order, which differs between filesystems.
   // The map is compared byte for byte across shards and across runs, so the
   // ordering has to come from the names rather than from the host.
+  //
+  // A store entry links to its own package, and that edge usually says nothing
+  // another edge does not -- a third of the edges on this repository were
+  // these. Usually, not always: when the link that reached the entry was itself
+  // dropped, as an aliased install's is, the self-edge is the only thing naming
+  // that copy. Deciding that per name, once every edge is in, is the difference
+  // between dropping a redundancy and dropping a package -- the unconditional
+  // version lost the whole of `react-is` here, and with it any notice that one
+  // of its copies had moved.
+  const identity = (edge: string): string => edge.slice(edge.indexOf(':') + 1);
   const sorted: Record<string, string[]> = {};
-  for (const name of Object.keys(inventory).sort())
-    sorted[name] = inventory[name]!.sort();
+  for (const name of Object.keys(inventory).sort()) {
+    const edges = inventory[name]!;
+    const named = new Set(edges.filter((e) => !isSelfEdge(e)).map(identity));
+    sorted[name] = edges.filter((e) => !isSelfEdge(e) || !named.has(identity(e))).sort();
+  }
 
   return { manager: found.manager, marker: found.marker, markerHash, inventory: sorted };
 }
