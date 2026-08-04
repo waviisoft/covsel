@@ -283,14 +283,33 @@ describe('covsel init — installing', () => {
     ['pnpm', 'pnpm-lock.yaml'],
     ['yarn', 'yarn.lock'],
     ['npm', 'package-lock.json'],
+    ['npm', 'npm-shrinkwrap.json'],
+    // bun writes the binary lockfile in older versions and the text one in
+    // newer, so a project has one name or the other and both mean bun.
+    ['bun', 'bun.lock'],
     ['bun', 'bun.lockb'],
-  ])('detects %s from its lockfile', async (manager, lockfile) => {
+  ])('detects %s from %s', async (manager, lockfile) => {
     const cwd = project({
       'package.json': pkg({ devDependencies: { vitest: '^3.0.0' } }),
       [lockfile]: '',
     });
 
     expect((await plan(cwd)).packageManager).toBe(manager);
+  });
+
+  it('reads a shrinkwrap beside a bun lockfile as bun', async () => {
+    // The shrinkwrap case above cannot fail on its own: an unrecognised tree
+    // falls back to npm, so it would pass with no shrinkwrap in the table at
+    // all. This is the tree that pins where the name sits — a bun project that
+    // once published a shrinkwrap is still a bun project, and reading it as npm
+    // would offer to install an adapter with the wrong command.
+    const cwd = project({
+      'package.json': pkg({ devDependencies: { vitest: '^3.0.0' } }),
+      'npm-shrinkwrap.json': '',
+      'bun.lockb': '',
+    });
+
+    expect((await plan(cwd)).packageManager).toBe('bun');
   });
 
   it('prefers a declared packageManager over the lockfile', async () => {

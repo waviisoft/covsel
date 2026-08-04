@@ -115,9 +115,11 @@ at all.
 
 covsel's answer to that last case is to refuse rather than guess. A script that
 executed and resolves to no source in the repository **fails the recording**,
-naming the script, and no map is written -- because an entry that credits nothing
-is read afterwards as a test that covers nothing, and that skips it on every
-diff. Maps are looked for everywhere a build publishes one (a `sourceMappingURL`
+naming the script, and no map is written -- because every test behind that bundle
+would credit nothing, and a map whose entries credit nothing narrows nothing. (An
+entry crediting nothing is not read as a test that covers nothing: selection
+treats it as unknown coverage and runs it. That keeps the tests safe; it does not
+make a recording that measured none of its suite worth keeping.) Maps are looked for everywhere a build publishes one (a `sourceMappingURL`
 comment, an inline `data:` URI, the conventional `<script>.map` neighbour, over
 HTTP, and in a build directory served URLs map onto), and a source fetched
 without a disk-relative anchor is confirmed against `sourcesContent` before it is

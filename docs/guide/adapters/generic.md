@@ -58,6 +58,14 @@ universal.
   maps: a script covsel cannot map back to a source fails the recording rather
   than crediting nothing. See
   [a script that cannot be mapped](/guide/fail-open#a-script-that-cannot-be-mapped).
+- A generic recording records **no package information**. Whether a run executes
+  all of its code in the process tree covsel spawns is a fact about your command,
+  and an adapter that wraps whatever you hand it cannot know one — so it does not
+  claim to have watched your dependencies, and the map holds no opinion about
+  them. A dependency change is answered by the lockfile sentinel instead, which
+  the default `sentinels` cover for npm, pnpm, yarn, and bun — if your package
+  manager writes some other lockfile, add it to `sentinels` so a change to it
+  still runs everything.
 - Discovery, source globs, and sentinels are controlled by
   [configuration](/guide/getting-started#configuration); zero-config works out
   of the box.

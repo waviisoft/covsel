@@ -76,10 +76,11 @@ export interface RecordedTest {
    * Names of the installed packages this execution ran code in, sorted.
    *
    * Set exactly when the recorder declares `observesPackages` — on every unit
-   * then, empty array included, and on none otherwise. Recording refuses the
-   * mismatch either way, because an entry that is silent about packages for a
-   * recorder that claims to watch them would be read as a test running no
-   * vendored code at all.
+   * then, empty array included, and on none otherwise. Recording refuses either
+   * mismatch, though not with the same force: a declaring recorder whose unit is
+   * silent fails the recording, because that entry would be read as a test
+   * running no vendored code at all, while packages reported by a recorder that
+   * has not claimed to watch them are only dropped.
    */
   packages?: string[];
 }

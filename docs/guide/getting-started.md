@@ -142,6 +142,19 @@ covsel status
 shows the store path, the map's age and size, whether any sentinel changed since
 record, and whether the next `affected` would be a full run.
 
+A map covsel cannot use is not a missing one, and `status` says which it is
+looking at:
+
+```
+map:        /repo/.covsel/map.json
+exists:     yes, but not usable (schema v3, covsel reads v4 -- re-record)
+next:       full run (schema v3, covsel reads v4 -- re-record)
+```
+
+The commonest cause is an upgrade: the map schema is versioned, and a covsel
+that reads a newer version rejects everything recorded under an older one.
+Re-record and the file is usable again.
+
 ### Ask about one file
 
 `status` describes the map as a whole and `affected` answers what a diff
@@ -209,7 +222,7 @@ Selection needs no configuration once an adapter is installed. To refine, add a 
   "testGlobs": ["**/*.{test,spec}.?(c|m)[jt]s?(x)"],
   "sourceGlobs": ["**/*"], // repo minus node_modules/dist/coverage/.covsel and tests
   "alwaysRun": ["**/fixtures/**"], // test files that must always run
-  "sentinels": ["package.json", "pnpm-lock.yaml", "tsconfig*.json"],
+  "sentinels": ["package.json", "pnpm-lock.yaml", "tsconfig*.json"], // replaces the defaults below
   "granularity": "block", // "block" (function-level) | "file"
   "store": {
     "dir": ".covsel",
@@ -218,8 +231,23 @@ Selection needs no configuration once an adapter is installed. To refine, add a 
 }
 ```
 
-Any change matching `sentinels` forces a full run; see
+Any change matching `sentinels` forces a full run. A change to this file itself
+forces one when it moves a value covsel reads — a reworded comment or a
+reformatted array does not, because the map records the values it was recorded
+under and compares against those. See
 [the fail-open guarantee](/guide/fail-open).
+
+The default `sentinels` list is `package.json`, `tsconfig*.json`, and every
+lockfile covsel recognises -- `pnpm-lock.yaml`, `yarn.lock`,
+`package-lock.json`, `npm-shrinkwrap.json`, `bun.lock`, and `bun.lockb`. The
+lockfiles matter because a dependency change is the one change covsel cannot see
+any other way: code under `node_modules` is outside what a recording maps, so
+nothing in the map moves when a dependency version does.
+
+Setting `sentinels` **replaces** that list rather than adding to it, so restate
+whatever you still want. Dropping your lockfile from it means a `bun update` or
+a lockfile-maintenance pull request selects against a map recorded before the
+bump.
 
 ### Bundled code
 
@@ -248,6 +276,14 @@ matter). Editing one function then selects only the tests that actually ran it,
 even when several tests import the same file; a top-level edit, or anything
 covsel can't parse into blocks, falls back to selecting every test on that file.
 Set `"granularity": "file"` to record and select at whole-file granularity only.
+
+A function's hash covers its own signature and its own statements, with the
+bodies of the functions nested inside it left out. That is what keeps the
+granularity function-level in component code: a click handler defined inside a
+component is the component's closure to build and the handler's body to run, so
+editing the handler selects the tests that clicked it rather than every test that
+rendered the component. Changing the handler's _signature_ does select the
+component's tests, because constructing it is the component's own code.
 
 `block` and `file` are the only values. Any other one fails at config load naming
 those two, rather than quietly recording at a granularity you did not ask for.

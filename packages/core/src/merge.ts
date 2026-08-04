@@ -1,4 +1,5 @@
 import { agreedScope } from './combine.js';
+import { changedConfigFields, type RecordedConfig } from './config.js';
 import {
   type CoverageMap,
   type CoveredBlock,
@@ -34,6 +35,28 @@ function byKey(a: string, b: string): number {
  * describe different resolutions of the same names, and a merged inventory
  * would vouch for a package at a version half the entries never ran.
  */
+/**
+ * The configuration every shard agrees it recorded under, if there is one.
+ *
+ * A merged map claims one configuration for every entry in it, and shards that
+ * disagree have no single answer to make that claim with: one shard's entries
+ * were measured under `sourceGlobs` the other's were not, and a merged map
+ * naming either would vouch for entries recorded under the other. A shard with
+ * no recorded configuration says nothing about its own, which is the same
+ * absence.
+ *
+ * Dropping it costs a full run on the next config change, which is what a map
+ * without one gets anyway.
+ */
+function agreedConfig(maps: CoverageMap[]): RecordedConfig | undefined {
+  const first = maps[0]?.config;
+  if (first === undefined) return undefined;
+  const identical = maps.every(
+    (m) => m.config !== undefined && changedConfigFields(first, m.config).length === 0,
+  );
+  return identical ? first : undefined;
+}
+
 function agreedDependencies(maps: CoverageMap[]): MapDependencies | undefined {
   const first = maps[0]?.dependencies;
   if (first === undefined) return undefined;
@@ -70,7 +93,10 @@ function agreedDependencies(maps: CoverageMap[]): MapDependencies | undefined {
  *
  * Every ambiguity resolves toward selecting more later:
  *  - Entries union by test id, and an id seen in several shards unions its
- *    covered files and blocks.
+ *    covered files and blocks — unless one of them credits no file at all, which
+ *    is a shard saying it could not see where the test ran rather than one
+ *    measuring it covering nothing. The merged entry then credits nothing too,
+ *    and selection runs it.
  *  - Granularity drops to `file` unless every contributing map recorded blocks;
  *    a map that is only partly block-aware must not narrow selection by blocks.
  *  - `recordedAt` is the oldest shard's, because the result is only as fresh as
@@ -111,9 +137,21 @@ export function mergeMaps(maps: CoverageMap[]): CoverageMap {
           byKey,
         );
       }
-      const files = new Map<string, CoveredFile>();
-      for (const f of [...existing.files, ...entry.files]) files.set(f.file, f);
-      existing.files = [...files.values()].sort((a, b) => byKey(a.file, b.file));
+      // Files carry an unknown state of their own, and it is the empty list: a
+      // shard that credits a test with nothing did not measure it covering
+      // nothing, it failed to see where the test ran. Unioning that with a
+      // shard that saw something yields an entry claiming exactly what the
+      // seeing shard saw — a claim neither shard made, and one that reads as a
+      // measurement, so everything the blind shard's run executed is skipped on
+      // a map that looks healthy. Selection runs an entry crediting nothing, so
+      // keeping it empty is what carries the doubt across the merge.
+      if (existing.files.length === 0 || entry.files.length === 0) {
+        existing.files = [];
+      } else {
+        const files = new Map<string, CoveredFile>();
+        for (const f of [...existing.files, ...entry.files]) files.set(f.file, f);
+        existing.files = [...files.values()].sort((a, b) => byKey(a.file, b.file));
+      }
       // Blocks narrow selection, so they may only survive when both sides know
       // them. If either shard recorded none for this test, its coverage of the
       // test is unknown at block level and the entry falls back to file level.
@@ -152,6 +190,8 @@ export function mergeMaps(maps: CoverageMap[]): CoverageMap {
   const sentinelHashes: Record<string, string> = {};
   for (const map of usable) Object.assign(sentinelHashes, map.sentinelHashes);
 
+  const config = agreedConfig(usable);
+
   // An inventory is only meaningful when every entry says which packages it
   // ran: one that does not would be read as a test running no vendored code,
   // and every dependency it really uses would go unselected on a bump. Keeping
@@ -168,6 +208,7 @@ export function mergeMaps(maps: CoverageMap[]): CoverageMap {
     ...(commit ? { commit } : {}),
     recordedAt,
     sentinelHashes,
+    ...(config ? { config } : {}),
     observed,
     ...(dependencies ? { dependencies } : {}),
     entries,

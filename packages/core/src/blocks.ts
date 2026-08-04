@@ -110,10 +110,27 @@ function functionName(node: ts.Node): string {
 /**
  * Parse a source file into content-hashed blocks: one `<module>` block for the
  * top-level skeleton (every outermost function body blanked out, so signature
- * and top-level changes register here) plus one block per function (signature +
- * body, so a body edit changes only that function's hash). The module block
- * always sorts first. Parsing is error-tolerant; malformed input still yields
- * blocks rather than throwing.
+ * and top-level changes register here) plus one block per function (its own
+ * signature and statements, with the bodies of the functions nested inside it
+ * blanked in turn, so a body edit changes only that function's hash however deep
+ * it is). The module block always sorts first. Parsing is error-tolerant;
+ * malformed input still yields blocks rather than throwing.
+ *
+ * The same rule at every depth is what keeps block granularity from collapsing
+ * to component granularity: a handler defined inside a component is the
+ * component's closure to build and the handler's body to run, so the handler's
+ * signature stays with the parent and only its body is blanked out of it.
+ *
+ * Blanking a body out of the parent is only sound while the child block covers
+ * that body *distinguishably*, which is why a block is hashed under its position
+ * in the nesting — the chain of enclosing functions, each with an index among
+ * the same-named blocks of its scope. Without it, two sibling callbacks that
+ * share a name (`<anonymous>` is the common case: two `useEffect` calls in one
+ * component) hash to each other's values when their bodies are exchanged, and
+ * since blocks are compared as a multiset, reordering them registers as no
+ * change to any block in the file — a real behavior change that selects nothing.
+ * The cost is that inserting or moving a same-named sibling shifts the indices
+ * after it and re-selects their tests, which is the safe direction.
  */
 export function extractBlocks(source: string, fileName = 'file.ts'): SourceBlock[] {
   const sf = ts.createSourceFile(
@@ -126,35 +143,61 @@ export function extractBlocks(source: string, fileName = 'file.ts'): SourceBlock
 
   const blocks: SourceBlock[] = [];
   const outermostBodySpans: [number, number][] = [];
-  let functionDepth = 0;
 
-  const visit = (node: ts.Node): void => {
+  /** Where a block sits in the nesting, which is part of what it is hashed as. */
+  interface Scope {
+    /** Qualified name of the enclosing block, or empty at the top level. */
+    prefix: string;
+    /** Blocks of each name emitted in this scope so far, for the index. */
+    counts: Map<string, number>;
+  }
+
+  /**
+   * Walk `node`, appending the bodies of the outermost functions found beneath
+   * it to `enclosing` — which is the exclusion list of whatever block contains
+   * them, module or function alike — and qualifying the blocks it emits under
+   * `scope`. Both are threaded through nodes that are not functions, since those
+   * neither blank anything nor open a scope of their own: a method of a class
+   * declared in a function belongs to that function on both counts.
+   */
+  const visit = (node: ts.Node, enclosing: [number, number][], scope: Scope): void => {
     if (isFunctionLike(node)) {
       const body = (node as { body?: ts.Node }).body;
+      if (body) enclosing.push([body.getStart(sf), body.getEnd()]);
       const name = functionName(node);
+      // Taken in source order, before the walk descends, so the index says where
+      // the block sits among its same-named siblings rather than when it was
+      // emitted.
+      const index = scope.counts.get(name) ?? 0;
+      scope.counts.set(name, index + 1);
+      const qualified = `${scope.prefix}${name}#${index}`;
+      // Children first, since this block's own text is canonicalized with their
+      // bodies blanked. The slot keeps the emitted order parent-before-child:
+      // the block list reads as the file does, and the module block sorts first.
+      const slot = blocks.length;
+      const nested: [number, number][] = [];
+      // One scope for all the children, so the index counts siblings rather
+      // than restarting at every one of them.
+      const inner: Scope = { prefix: `${qualified}>`, counts: new Map() };
+      ts.forEachChild(node, (child) => visit(child, nested, inner));
       const text = canonicalize(
         source,
         node.getStart(sf),
         node.getEnd(),
         literalSpans(node, sf),
-        [],
+        nested,
       );
-      blocks.push({
+      blocks.splice(slot, 0, {
         name,
-        hash: hashString(`${name} ${text}`),
+        hash: hashString(`${qualified} ${text}`),
         probe: body ? body.getStart(sf) : node.getStart(sf),
       });
-      if (functionDepth === 0 && body) {
-        outermostBodySpans.push([body.getStart(sf), body.getEnd()]);
-      }
-      functionDepth += 1;
-      ts.forEachChild(node, visit);
-      functionDepth -= 1;
       return;
     }
-    ts.forEachChild(node, visit);
+    ts.forEachChild(node, (child) => visit(child, enclosing, scope));
   };
-  ts.forEachChild(sf, visit);
+  const topLevel: Scope = { prefix: '', counts: new Map() };
+  ts.forEachChild(sf, (node) => visit(node, outermostBodySpans, topLevel));
 
   const moduleText = canonicalize(
     source,

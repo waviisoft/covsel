@@ -53,6 +53,8 @@ const MARKERS: readonly { manager: string; marker: string }[] = [
 /** Extensions an entry point can carry that no V8 coverage will ever report. */
 const OPAQUE_ENTRY = /\.(node|wasm|json)$/;
 
+const VENDOR_DIR = 'node_modules';
+
 /**
  * What a package could load first, as its manifest declares it.
  *
@@ -119,12 +121,45 @@ function subdirectories(dir: string): string[] {
 }
 
 /**
+ * The `node_modules` holding a store entry's own dependencies, if this package
+ * lives in pnpm's virtual store.
+ *
+ * pnpm keeps each resolved package in its own store entry, and that entry's
+ * `node_modules` holds the package itself alongside a symlink per dependency:
+ *
+ *     node_modules/.pnpm/is-odd@3.0.1/node_modules/
+ *       is-odd                                      <- the package
+ *       is-number -> ../../is-number@6.0.0/node_modules/is-number
+ *
+ * So the store is a graph to be followed from what the project depends on, not
+ * a directory to be listed. Following it is what keeps transitive dependencies
+ * in the inventory once the store is no longer enumerated wholesale.
+ */
+function storeSiblings(cwd: string, packageRealAbs: string): string | undefined {
+  const rel = toRepoRelative(cwd, packageRealAbs);
+  if (rel === undefined) return undefined;
+  const segments = rel.split('/');
+  const vendor = segments.lastIndexOf(VENDOR_DIR);
+  // `<...>/.pnpm/<entry>/node_modules/<name>`: the store marker sits two above
+  // the `node_modules` the package is in.
+  if (vendor < 2 || segments[vendor - 2] !== '.pnpm') return undefined;
+  return segments.slice(0, vendor + 1).join('/');
+}
+
+/**
  * Every package directory reachable from one `node_modules`, as repo-relative
  * paths.
  *
- * Enumerated structurally rather than by walking the tree: a `node_modules` is
- * two levels deep in the shapes that matter and tens of thousands of files deep
- * overall, and only the package roots are of any interest.
+ * Reachability, not contents. pnpm never prunes its virtual store, so a package
+ * removed from the project stays on disk indefinitely; listing the store would
+ * keep reporting it as installed, and a dependency that was *dropped* would
+ * then look like no change at all -- skipping the tests whose imports it just
+ * broke. Nothing links to an orphan, so following links from what the project
+ * actually depends on leaves it out.
+ *
+ * Enumerated structurally rather than by walking the tree: only package roots
+ * are of any interest, and an installed tree is tens of thousands of files
+ * deep.
  */
 function packageDirs(
   cwd: string,
@@ -148,25 +183,40 @@ function packageDirs(
 
   for (const name of subdirectories(join(cwd, nodeModulesRel))) {
     const rel = `${nodeModulesRel}/${name}`;
-    if (name === '.pnpm') {
-      // pnpm's virtual store: one directory per resolved package, each holding
-      // a real `node_modules` with the package inside it.
-      for (const entry of subdirectories(join(cwd, rel))) {
-        packageDirs(cwd, `${rel}/${entry}/node_modules`, out, visited);
-      }
-      continue;
-    }
-    if (name.startsWith('.')) continue; // .bin, .cache, and the markers
+    // `.pnpm`, `.bin`, `.cache`, and the markers. The store is reached through
+    // the packages that depend on its entries, never by listing it.
+    if (name.startsWith('.')) continue;
     if (name.startsWith('@')) {
       for (const scoped of subdirectories(join(cwd, rel))) {
-        out.push(`${rel}/${scoped}`);
-        packageDirs(cwd, `${rel}/${scoped}/node_modules`, out, visited);
+        recordPackage(cwd, `${rel}/${scoped}`, out, visited);
       }
       continue;
     }
-    out.push(rel);
-    packageDirs(cwd, `${rel}/node_modules`, out, visited);
+    recordPackage(cwd, rel, out, visited);
   }
+}
+
+/** One package, plus everything reachable from it. */
+function recordPackage(
+  cwd: string,
+  dir: string,
+  out: string[],
+  visited: Set<string>,
+): void {
+  out.push(dir);
+  // A dependency bundled inside this package, the npm and yarn shape.
+  packageDirs(cwd, `${dir}/node_modules`, out, visited);
+  // Its dependencies as pnpm arranges them, which are siblings rather than
+  // children. Resolved from the realpath, because the entry covsel is looking
+  // at is usually the symlink pointing into the store.
+  let realAbs: string;
+  try {
+    realAbs = realpathSync(join(cwd, dir));
+  } catch {
+    return;
+  }
+  const siblings = storeSiblings(cwd, realAbs);
+  if (siblings !== undefined) packageDirs(cwd, siblings, out, visited);
 }
 
 /**

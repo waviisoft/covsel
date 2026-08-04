@@ -5,12 +5,15 @@ have run_. So every design tension resolves toward **over-selection**:
 
 - New or changed test files **always run**, and so does any discovered test the
   map says nothing about — unknown coverage never reads as "covers nothing".
+  So does a test whose entry credits **no source at all**: the entry is there,
+  but nothing a diff can carry will ever match it.
 - Changes to **sentinel files** (`package.json`, tsconfig, lockfile, test setup)
   invalidate the map and trigger a **full run**.
-- Changes to **covsel's own config** trigger a **full run**, whatever your
-  `sentinels` say. A map means what it means only under the config it was
-  recorded with — narrowing `sourceGlobs`, for instance, stops changes outside
-  the new globs counting at all, and nothing else would notice.
+- Changes to the **values in covsel's own config** trigger a **full run**,
+  whatever your `sentinels` say. A map means what it means only under the config
+  it was recorded with — narrowing `sourceGlobs`, for instance, stops changes
+  outside the new globs counting at all, and nothing else would notice. See
+  [what a config change is measured against](#what-a-config-change-is-measured-against).
 - A stale, unreadable, or wrong-schema map means a **full run**, never a skipped
   one.
 - A map whose recorded commit this checkout does not have, or that records no
@@ -22,8 +25,8 @@ have run_. So every design tension resolves toward **over-selection**:
   ran.
 - An executed script the recorder **cannot map back to any source** fails the
   recording, and no map is written. A bundle with no source map covers nothing
-  that can be named, and an entry that credits nothing is read as a test that
-  covers nothing.
+  that can be named, so every test behind it would credit nothing — a recording
+  that measured none of the suite it just ran, wearing a healthy map's clothes.
 - Non-JS dependencies coverage can't see (fixtures, snapshots, templates) are
   handled by user-declared `alwaysRun` globs.
 
@@ -80,6 +83,53 @@ it could not see fails the recording: that contradiction resolved the other way
 turns a recorder's own admission that it is blind somewhere into a map asserting
 it was watching.
 
+## A test that covered nothing
+
+An entry with an empty file list reads to a selector exactly like a test that
+covers nothing: no changed path matches it, so nothing ever selects it. The two
+situations behind it are opposites, though. Either the test really executes
+nothing — rare, and usually a test asserting on constants — or, far more often,
+**the recorder could not see what it executed**, because the test drives its
+subject in a child process, a worker, or a browser its coverage mechanism does
+not reach.
+
+A recorder declares its blind spots in `observed`, but that is one scope for the
+whole run, and it cannot say "this adapter sees everything except what these
+particular tests do". So the empty entry falls straight through it. covsel
+resolves it the same way it resolves a discovered test with no entry at all:
+**an entry crediting nothing is unknown coverage, not measured absence**, and
+the test file runs on every selection until it credits something. A test that
+genuinely covers nothing then runs when it need not, which is the cheap way to
+be wrong.
+
+The whole file runs, not just the unit that credits nothing. A recorder that
+could not see one test of a file has not earned trust in what it recorded for
+the tests beside it. Merging shard maps preserves it too: a test one shard
+credits with nothing keeps crediting nothing, instead of inheriting the coverage
+another shard happened to see.
+
+Recording says so as it happens, and `status` counts it afterwards, because a
+test that always runs is a cost you should be able to see:
+
+```
+  recorded test/built-artifact.test.js (1 tests, 0 sources)
+  NO SOURCES test/built-artifact.test.js: 1 of 1 unit(s) recorded no covered
+  source; nothing they executed was seen, so this file is selected on every run
+```
+
+```
+entries:    31
+unmeasured: 3 entry(ies) cover no source -- their test files are selected on every run
+```
+
+`covsel explain <test file>` says the same thing about one test, and
+distinguishes it from a test the map does not record at all — both always run,
+for related but different reasons.
+
+Recording is **not** refused over this. A test that legitimately covers nothing
+is allowed to exist, and failing the run would leave the project with no map at
+all over something selection handles safely.
+
 ## A script that cannot be mapped
 
 This rule belongs to the recorders that observe raw V8 coverage — the generic
@@ -92,9 +142,11 @@ build published no source map, there is no way back to the sources behind it,
 and the honest answer is that the recording failed — not that those tests cover
 nothing. This is reachable from a stock bundler setup: `vite build` emits no
 source map unless you ask for one, and `sourcemap: 'hidden'` writes the map but
-strips the comment pointing at it. Recording against such a build used to
-produce entries that existed and credited nothing, so editing the file every
-test executes selected zero tests.
+strips the comment pointing at it. Recording against such a build produces
+entries that exist and credit nothing — and while selection now runs those
+rather than skipping them, a map whose entries all credit nothing narrows
+nothing at all. Refusing it names the build that caused it, at the one moment
+the cause is visible.
 
 So a script that executed and resolves to no source in your repository fails the
 recording, naming the script, and no map is written. covsel looks for the map in
@@ -186,6 +238,48 @@ it:
 map beside `discovered: 0 test file(s)` is the one combination worth noticing at a
 glance.
 
+## What a config change is measured against
+
+A map is meaningful only under the configuration it was recorded with, which is
+a statement about that configuration's **values**. So the map records them, and
+selection compares the values in force against the ones it holds. A full run
+follows when a field differs, and `covsel status` names which:
+
+```
+next:       full run -- configuration changed since the map was recorded: sourceGlobs
+```
+
+That is a sharper question than "did the config file change", in both
+directions. Reword a comment, reformat an array, move a key — the file changed
+and the map still means exactly what it meant, so selection narrows as usual.
+Compute a value from the environment, or change one and change it back across
+the commit the map was recorded on — no file changed and the map does not mean
+what selection is about to read, so it falls open.
+
+This applies to the config file on its own account, ahead of and without
+consulting `sentinels`. If you also list the file in `sentinels`, that listing
+wins and every change to it forces a full run: covsel's defaults name no config
+file, so listing one is a deliberate declaration — and you may have a reason
+covsel cannot see from the values, such as a test that loads the file as data.
+Drop it from the list to get the narrowing; nothing is lost by doing so, because
+this check runs whatever the list says.
+
+Every sentinel keeps its unconditional full run for the same reason it exists:
+covsel cannot read your `tsconfig.json` or your test setup for meaning, and does
+not guess.
+
+Four fields are left out of the comparison, because a change to one cannot leave
+the map meaning something other than what selection reads from it: `alwaysRun`
+and `sentinels` are applied from the configuration in force on every run, `store`
+says where the map is kept rather than what it says, and `adapter` names the
+recorder, whose every consequence for selection is written into the map by the
+recording itself. Everything else is compared, including any field added later.
+
+A map recorded before covsel recorded its configuration carries none, and falls
+open on any change to a config file — the behavior every map had before this
+existed. So does a map merged from shards that disagreed about the configuration
+they were recorded under.
+
 ## How the map enforces it
 
 The persisted map is a **versioned contract**. Bumping the schema version
@@ -211,6 +305,12 @@ if (!isUsableMap(loaded)) {
 This is the difference between a toy and something a team trusts in CI: the
 failure mode is _wasted CI minutes_, never _a real regression that shipped
 green_.
+
+Selection never asks _why_ a map is unusable — an unusable map runs everything
+however it got that way — but `covsel status` does, and reports the map as
+present and rejected rather than as missing. The reason it prints comes from the
+same check `isUsableMap` is defined by, so what `status` explains and what
+selection acts on cannot come apart.
 
 ## In watch mode
 

@@ -1,6 +1,16 @@
 import { describe, expect, it } from 'vitest';
 
-import { type CoverageMap, MAP_SCHEMA_VERSION, mergeMaps } from '../src/index.js';
+import {
+  type CoverageMap,
+  type CovselConfigInput,
+  MAP_SCHEMA_VERSION,
+  mergeMaps,
+  recordedConfig,
+  resolveConfig,
+} from '../src/index.js';
+
+/** The configuration a shard would have recorded, from the values it was given. */
+const recorded = (input: CovselConfigInput) => recordedConfig(resolveConfig(input));
 
 function shard(over: Partial<CoverageMap> = {}): CoverageMap {
   return {
@@ -111,6 +121,33 @@ describe('mergeMaps', () => {
   it('drops the commit when shards disagree, so selection cannot trust a stale base', () => {
     const merged = mergeMaps([shard({ commit: 'aaa' }), shard({ commit: 'bbb' })]);
     expect(merged.commit).toBeUndefined();
+  });
+
+  it('keeps the recorded config when shards agree, however it was written', () => {
+    const merged = mergeMaps([
+      shard({ config: recorded({ sourceGlobs: ['src/**'] }) }),
+      // The same values reached by a different route: `sentinels` is not part of
+      // what a map records, so the shards recorded under one configuration and
+      // the merged map may say so.
+      shard({ config: recorded({ sourceGlobs: ['src/**'], sentinels: ['a.json'] }) }),
+    ]);
+    expect(merged.config).toEqual(recorded({ sourceGlobs: ['src/**'] }));
+  });
+
+  it('drops the recorded config when shards disagree, so a config change falls open', () => {
+    const merged = mergeMaps([
+      shard({ config: recorded({ sourceGlobs: ['src/**'] }) }),
+      shard({ config: recorded({ sourceGlobs: ['lib/**'] }) }),
+    ]);
+    expect(merged.config).toBeUndefined();
+  });
+
+  it('drops the recorded config when any shard has none', () => {
+    const merged = mergeMaps([
+      shard({ config: recorded({ sourceGlobs: ['src/**'] }) }),
+      shard(),
+    ]);
+    expect(merged.config).toBeUndefined();
   });
 
   it('ignores unusable shards and throws when nothing is usable', () => {

@@ -141,19 +141,68 @@ describe('readInstalledInventory', () => {
     });
 
     it('reads through pnpm virtual store', () => {
+      // The real shape: the package lives in the store and the project links to
+      // it. The link is what makes it installed -- a store entry nothing points
+      // at is an orphan pnpm has not got round to deleting.
       const cwd = pnpmProject({
         'node_modules/.pnpm/left-pad@1.3.0/node_modules/left-pad/package.json': manifest(
           'left-pad',
           '1.3.0',
         ),
       });
+      link(cwd, 'node_modules/left-pad', '.pnpm/left-pad@1.3.0/node_modules/left-pad');
 
       expect(readInstalledInventory(cwd)?.inventory).toEqual({ 'left-pad': ['1.3.0'] });
     });
 
+    it('follows a store entry to the dependencies it holds as siblings', () => {
+      // pnpm keeps a package's dependencies beside it rather than beneath it,
+      // so transitive dependencies are only found by following the links out of
+      // each store entry.
+      const cwd = pnpmProject({
+        'node_modules/.pnpm/is-odd@3.0.1/node_modules/is-odd/package.json': manifest(
+          'is-odd',
+          '3.0.1',
+        ),
+        'node_modules/.pnpm/is-number@6.0.0/node_modules/is-number/package.json':
+          manifest('is-number', '6.0.0'),
+      });
+      link(cwd, 'node_modules/is-odd', '.pnpm/is-odd@3.0.1/node_modules/is-odd');
+      link(
+        cwd,
+        'node_modules/.pnpm/is-odd@3.0.1/node_modules/is-number',
+        '../../is-number@6.0.0/node_modules/is-number',
+      );
+
+      expect(readInstalledInventory(cwd)?.inventory).toEqual({
+        'is-odd': ['3.0.1'],
+        'is-number': ['6.0.0'],
+      });
+    });
+
+    it('leaves out a store entry nothing depends on any more', () => {
+      // pnpm never prunes its store, so a removed dependency stays on disk.
+      // Reporting it as installed would make a removal look like no change at
+      // all, and the tests whose imports it just broke would be skipped.
+      const cwd = pnpmProject({
+        'node_modules/.pnpm/kept@1.0.0/node_modules/kept/package.json': manifest(
+          'kept',
+          '1.0.0',
+        ),
+        'node_modules/.pnpm/dropped@2.0.0/node_modules/dropped/package.json': manifest(
+          'dropped',
+          '2.0.0',
+        ),
+      });
+      link(cwd, 'node_modules/kept', '.pnpm/kept@1.0.0/node_modules/kept');
+
+      expect(readInstalledInventory(cwd)?.inventory).toEqual({ kept: ['1.0.0'] });
+    });
+
     it('collects every version a name is installed at', () => {
-      // Two copies of one name is ordinary, and a bump to either has to be
-      // visible. Recording one version would let the other move unnoticed.
+      // Two copies of one name is ordinary: the project depends on one, and
+      // something it depends on needs another. A bump to either has to be
+      // visible, so recording one version would let the other move unnoticed.
       const cwd = pnpmProject({
         'node_modules/.pnpm/left-pad@1.3.0/node_modules/left-pad/package.json': manifest(
           'left-pad',
@@ -163,10 +212,24 @@ describe('readInstalledInventory', () => {
           'left-pad',
           '1.1.0',
         ),
+        'node_modules/.pnpm/old-consumer@1.0.0/node_modules/old-consumer/package.json':
+          manifest('old-consumer', '1.0.0'),
       });
+      link(cwd, 'node_modules/left-pad', '.pnpm/left-pad@1.3.0/node_modules/left-pad');
+      link(
+        cwd,
+        'node_modules/old-consumer',
+        '.pnpm/old-consumer@1.0.0/node_modules/old-consumer',
+      );
+      link(
+        cwd,
+        'node_modules/.pnpm/old-consumer@1.0.0/node_modules/left-pad',
+        '../../left-pad@1.1.0/node_modules/left-pad',
+      );
 
       expect(readInstalledInventory(cwd)?.inventory).toEqual({
         'left-pad': ['1.1.0', '1.3.0'],
+        'old-consumer': ['1.0.0'],
       });
     });
 

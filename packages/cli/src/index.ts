@@ -612,6 +612,17 @@ async function cmdRecord(argv: string[]): Promise<number> {
     onEvent: (e) => {
       if (e.kind === 'recorded') {
         err(`  recorded ${e.file} (${e.tests} tests, ${e.sources} sources)\n`);
+        // A count of zero sources printed as ordinary progress is how this went
+        // unnoticed: it reads like any other line. Named here, at the moment it
+        // is recorded, because the cause is almost always visible from the test
+        // itself -- it drives its subject somewhere the recorder cannot watch.
+        if (e.unmeasured !== undefined) {
+          err(
+            `  NO SOURCES ${e.file}: ${e.unmeasured} of ${e.tests} unit(s) recorded no ` +
+              `covered source in this repository, so nothing a diff carries can ` +
+              `match them and this file is selected on every run\n`,
+          );
+        }
         // Every allowed script is coverage this entry does not have. Saying so
         // on each recording is what keeps the accommodation from becoming the
         // silent hole it exists to replace.
@@ -649,6 +660,18 @@ async function cmdRecord(argv: string[]): Promise<number> {
     return 1;
   }
   err(`covsel record: wrote ${result.recorded} entries to ${result.mapPath}\n`);
+  if (result.unmeasured !== undefined) {
+    // Said again at the end, because the per-file line above scrolls past in a
+    // suite of any size. Selection is already safe here -- these run whatever
+    // the diff -- so this is about the CI minutes they cost until whatever the
+    // recorder could not watch is brought into view.
+    err(
+      `covsel record: ${result.unmeasured.length} recorded unit(s) cover no source, ` +
+        `so their test files are selected on every run: ${[
+          ...new Set(result.unmeasured.map((t) => t.file)),
+        ].join(', ')}\n`,
+    );
+  }
   if (result.unanchored) {
     // Said here rather than left for selection to explain later: the map is
     // correct about what it saw, and deliberately claims no commit, so every
@@ -828,7 +851,18 @@ async function cmdStatus(): Promise<number> {
   const config = await loadConfig(cwd);
   const s = await computeStatus({ cwd, config });
   out(`map:        ${s.mapPath}\n`);
-  out(`exists:     ${s.exists ? 'yes' : 'no'}\n`);
+  // A file that is there and cannot be used is neither "yes" nor "no": reported
+  // as "no" it sends its reader looking for a map that is sitting at the path
+  // printed on the line above.
+  out(
+    `exists:     ${
+      s.mapState === 'usable'
+        ? 'yes'
+        : s.mapState === 'absent'
+          ? 'no'
+          : `yes, but not usable (${s.unusableReason ?? 'covsel cannot read it'})`
+    }\n`,
+  );
   if (s.discoveredTestCount !== undefined) {
     out(
       `discovered: ${s.discoveredTestCount} test file(s)${
@@ -836,7 +870,7 @@ async function cmdStatus(): Promise<number> {
       }\n`,
     );
   }
-  if (s.exists) {
+  if (s.mapState === 'usable') {
     const ageMin = s.ageMs !== undefined ? Math.round(s.ageMs / 60000) : undefined;
     out(
       `recorded:   ${s.recordedAt ?? 'unknown'}${ageMin !== undefined ? ` (${ageMin}m ago)` : ''}\n`,
@@ -850,6 +884,14 @@ async function cmdStatus(): Promise<number> {
       }\n`,
     );
     out(`entries:    ${s.entryCount ?? 0}\n`);
+    // Only when there are any: a line reading 0 on every healthy map is noise,
+    // and this is worth noticing when it appears.
+    if (s.unmeasuredEntryCount !== undefined && s.unmeasuredEntryCount > 0) {
+      out(
+        `unmeasured: ${s.unmeasuredEntryCount} entry(ies) cover no source -- every ` +
+          'test file with one is selected on every run\n',
+      );
+    }
     out(`sources:    ${s.coveredFileCount ?? 0}\n`);
     if (s.coveredBlockCount !== undefined) out(`blocks:     ${s.coveredBlockCount}\n`);
     out(
@@ -904,7 +946,7 @@ function printExplainHeader(r: ExplainResult): void {
       : 'observed:   yes (the recording could see this path)\n',
   );
   if (r.forcesFullRun !== undefined) {
-    out(`full run:   a change here forces one -- ${r.forcesFullRun}\n`);
+    out(`full run:   ${r.forcesFullRun.why}\n`);
   }
   if (r.alwaysRun) {
     out('alwaysRun:  yes -- this test runs whatever the diff says\n');
@@ -927,7 +969,7 @@ function printCoveredBy(r: ExplainResult, all: boolean): void {
     out(
       r.observed === false
         ? 'covered by: nothing recorded, and the recording could not observe it\n'
-        : r.forcesFullRun !== undefined
+        : r.forcesFullRun?.always === true
           ? 'covered by: no recorded test covers this file -- a change to it runs\n' +
             '            everything anyway, for the reason above\n'
           : 'covered by: no recorded test covers this file -- a change to it selects\n' +
@@ -999,6 +1041,22 @@ function printCovers(r: ExplainResult, all: boolean): void {
     return;
   }
   out(`covers:     ${test.units.length} recorded unit(s)\n`);
+  if (test.unmeasured) {
+    // The recorded-but-blind case. Without this the unit list below reads as a
+    // measurement -- "0 source(s)" beside a healthy map -- and the reader has
+    // no way to tell it from a test that really executes nothing.
+    //
+    // "selected on every run" only holds for a file selection can still find:
+    // it draws these from discovery, so an entry outliving its test file, or
+    // one left behind by a narrowed `testGlobs`, selects nothing at all.
+    out(
+      r.present
+        ? '            a unit here covers no source, so nothing the map holds can\n' +
+            '            narrow this file and it is selected on every run\n'
+        : '            a unit here covers no source, and the file is not in the\n' +
+            '            working tree, so there is nothing left for covsel to run\n',
+    );
+  }
   const shown = all ? test.units : test.units.slice(0, EXPLAIN_LIMIT);
   for (const unit of shown) {
     const name = unit.test.name ?? '(whole file)';
@@ -1025,11 +1083,17 @@ async function cmdExplain(argv: string[]): Promise<number> {
     return 1;
   }
 
-  if (!result.mapExists) {
+  if (result.mapState !== 'usable') {
     // Nothing to index, which is an answer rather than an error: with no map
     // every test runs, so nothing about this path is being decided by coverage.
+    // Which kind of nothing still matters — a rejected map is a file to go and
+    // re-record, not one to go looking for.
     out(`path:       ${result.file}\n`);
-    out(`map:        ${result.mapPath} (none recorded)\n`);
+    out(
+      `map:        ${result.mapPath} ${
+        result.mapState === 'absent' ? '(none recorded)' : '(not usable)'
+      }\n`,
+    );
     out(
       `nothing to explain -- ${result.noMapReason ?? 'no usable map recorded'}, so\n` +
         'the next selection is a full run\n',

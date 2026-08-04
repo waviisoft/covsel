@@ -57,8 +57,12 @@ executed.
 
 - Requires `@vitest/coverage-v8`. Without it, `record` refuses before running
   anything and names the install command — Vitest would otherwise run the whole
-  suite and simply write no report, and an entry crediting nothing would read as
-  a test that covers nothing.
+  suite and simply write no report, leaving every entry crediting nothing and a
+  map that narrows nothing.
+- A test that drives its subject in a child process, a worker, or a browser
+  records **zero sources**, since Vitest's coverage provider only sees the
+  worker running the test. `record` names each one, and covsel selects those
+  test files on every run rather than reading the silence as "covers nothing".
 - Granularity is per **file**: editing a source runs every test in a file that
   executed it.
 - A runnable end-to-end example lives in

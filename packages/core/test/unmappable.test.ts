@@ -18,13 +18,15 @@ import {
 /**
  * The guard for a map entry that exists and says nothing. A test whose bundle
  * cannot be resolved back to original sources records zero covered files, which
- * is indistinguishable from a test that genuinely covers nothing — and selection
- * reads it the second way. The entry exists, so the unmapped-test guard does not
- * fire, and editing the file every test executes selects nothing at all.
+ * is indistinguishable from a test that genuinely covers nothing.
  *
- * Nothing downstream of recording can recover that difference — an entry that
- * credits nothing and a test that covers nothing are the same bytes — which is
- * why the failure belongs at record time and these tests assert on recording.
+ * Selection is safe either way — an entry crediting nothing is unknown coverage
+ * there, and its test file runs on every selection — but safe is not the same as
+ * useful: a recording where every entry is that entry has measured none of the
+ * suite it just ran, and would narrow nothing while looking healthy. Nothing
+ * downstream can recover which case it is, since the two are the same bytes, so
+ * the failure belongs at record time where the missing source map is still
+ * visible, and these tests assert on recording.
  *
  * The fixture is the shape a default `vite build` leaves behind: tests that
  * exercise their sources only through a bundle, with the build's source maps

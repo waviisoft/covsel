@@ -12,6 +12,7 @@ import {
   type MapEntry,
   MAP_SCHEMA_VERSION,
   MODULE_BLOCK,
+  recordedConfig,
   recordMap,
   resolveConfig,
   selectAffected,
@@ -297,14 +298,49 @@ describe('explain: a source file', () => {
   });
 
   it("says covsel's own config forces a full run, though it is not a sentinel", async () => {
-    // The policy forces a full run on a config change without going through the
-    // sentinel list, so reading sentinels alone would report the file that
-    // invalidates the whole map as one a change to selects nothing.
+    // The policy asks about a config change without going through the sentinel
+    // list, so reading sentinels alone would report the file that decides what
+    // the whole map means as one a change to selects nothing. This map records
+    // no configuration, so any change to the file forces the run.
     const cwd = project({ 'covsel.json': '{}\n' }, { entries: [covered] });
 
     const r = await explainPath({ cwd, config, path: 'covsel.json' });
 
-    expect(r.forcesFullRun).toBeTruthy();
+    expect(r.forcesFullRun?.always).toBe(true);
+    expect(r.forcesFullRun?.why).toContain('no values to compare against');
+  });
+
+  it('says a config change is judged by its values when the map records them', async () => {
+    const cwd = project(
+      { 'covsel.json': '{}\n' },
+      { entries: [covered], config: recordedConfig(config) },
+    );
+
+    const r = await explainPath({ cwd, config, path: 'covsel.json' });
+
+    // Not unconditional: a reworded comment moves no value, and telling a reader
+    // it runs the whole suite would be describing behavior covsel no longer has.
+    expect(r.forcesFullRun?.always).toBe(false);
+    expect(r.forcesFullRun?.why).toContain('moves a value covsel reads');
+  });
+
+  it('reports a config file the project listed as a sentinel as always forcing one', async () => {
+    // The listing is a deliberate declaration, and selection honors it ahead of
+    // the values — so explain has to say what selection will do, not what the
+    // values alone would.
+    const cwd = project(
+      { 'covsel.json': '{}\n' },
+      { entries: [covered], config: recordedConfig(config) },
+    );
+
+    const r = await explainPath({
+      cwd,
+      config: { ...config, sentinels: ['covsel.json'] },
+      path: 'covsel.json',
+    });
+
+    expect(r.forcesFullRun?.always).toBe(true);
+    expect(r.forcesFullRun?.why).toContain('sentinel');
   });
 
   it('reports a path under an excluded directory as one discovery never sees', async () => {
@@ -413,7 +449,7 @@ describe('explain: nothing to explain', () => {
     const r = await explainPath({ cwd, config, path: 'src/math.js' });
 
     expect(r.ok).toBe(true);
-    expect(r.mapExists).toBe(false);
+    expect(r.mapState).toBe('absent');
     expect(r.noMapReason).toBeTruthy();
   });
 

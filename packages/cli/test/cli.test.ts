@@ -935,6 +935,59 @@ describe('an adapter that cannot record', () => {
   });
 });
 
+describe('covsel status on a map it cannot use', () => {
+  /** Put `contents` at the path status prints, verbatim. */
+  function writeMapFile(cwd: string, contents: string): void {
+    mkdirSync(join(cwd, '.covsel'), { recursive: true });
+    writeFileSync(join(cwd, '.covsel', 'map.json'), contents);
+  }
+
+  it('does not print the path of a file and then say it is not there', async () => {
+    const { out } = await inProject({ 'package.json': pkg({}) }, async (cwd) => {
+      writeMapFile(
+        cwd,
+        JSON.stringify({
+          schemaVersion: MAP_SCHEMA_VERSION - 1,
+          granularity: 'file',
+          recordedAt: new Date().toISOString(),
+          sentinelHashes: {},
+          observed: ['**'],
+          entries: [],
+        }),
+      );
+      return captureStdout(() => main(['status']));
+    });
+
+    expect(out).toMatch(/exists: +yes, but not usable/);
+    expect(out).not.toMatch(/exists: +no/);
+    expect(out).toContain(`covsel reads v${MAP_SCHEMA_VERSION}`);
+    expect(out).toContain('re-record');
+  });
+
+  it('says no when there really is no map', async () => {
+    const { out } = await inProject({ 'package.json': pkg({}) }, () =>
+      captureStdout(() => main(['status'])),
+    );
+
+    expect(out).toMatch(/exists: +no/);
+  });
+
+  it('does not describe a map it could not read', async () => {
+    // The recorded-at, granularity, and entry counts below the header all come
+    // from a map that parsed; printing them for one that did not would be the
+    // same lie in the other direction.
+    const { out } = await inProject({ 'package.json': pkg({}) }, async (cwd) => {
+      writeMapFile(cwd, '{ "schemaVersion": ');
+      return captureStdout(() => main(['status']));
+    });
+
+    expect(out).toMatch(/exists: +yes, but not usable/);
+    expect(out).toContain('not valid JSON');
+    expect(out).not.toContain('granularity');
+    expect(out).not.toContain('entries:');
+  });
+});
+
 describe('the persisted adapter', () => {
   it('is what a command uses when no flag is given', async () => {
     const { code, err } = await inProject(
@@ -1206,5 +1259,64 @@ describe('covsel explain', () => {
     );
     expect(code).toBe(1);
     expect(err).toContain('expected a path');
+  });
+
+  it('says a recorded test covering no source is selected every run', async () => {
+    const { code, out } = await inProject(
+      { 'package.json': pkg({}), 'child.test.js': '' },
+      (cwd) => {
+        writeEntries(cwd, [{ test: { file: 'child.test.js' }, files: [] }]);
+        return capture(() => main(['explain', 'child.test.js']));
+      },
+    );
+    expect(code).toBe(0);
+    // Not the unrecorded wording: the map does record this one, and a reader
+    // has to be able to tell the two apart.
+    expect(out).toContain('1 recorded unit(s)');
+    expect(out).toContain('covers no source');
+    expect(out).toContain('selected on every run');
+  });
+});
+
+/**
+ * A map entry that credits nothing is unselectable by any diff, so selection
+ * runs its test file whatever changed. That makes it a cost rather than a hole
+ * — and a silent one, since the entry looks like any other in the map. These
+ * cover the two places covsel says so out loud.
+ */
+describe('an entry that covers no source', () => {
+  it('is counted by status rather than folded into the entry count', async () => {
+    const { code, out } = await inProject(
+      { 'package.json': pkg({}), 'child.test.js': '' },
+      (cwd) => {
+        writeEntries(cwd, [
+          { test: { file: 'child.test.js' }, files: [] },
+          {
+            test: { file: 'add.test.js' },
+            files: [{ file: 'math.js', fileHash: 'sha256:math' }],
+          },
+        ]);
+        return capture(() => main(['status']));
+      },
+    );
+    expect(code).toBe(0);
+    expect(out).toContain('entries:    2');
+    expect(out).toContain('unmeasured: 1');
+  });
+
+  it('leaves status quiet when every entry measured something', async () => {
+    const { out } = await inProject(
+      { 'package.json': pkg({}), 'math.js': 'export const x = 1;\n' },
+      (cwd) => {
+        writeEntries(cwd, [
+          {
+            test: { file: 'add.test.js' },
+            files: [{ file: 'math.js', fileHash: 'sha256:math' }],
+          },
+        ]);
+        return capture(() => main(['status']));
+      },
+    );
+    expect(out).not.toContain('unmeasured');
   });
 });

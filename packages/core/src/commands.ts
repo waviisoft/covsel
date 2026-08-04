@@ -8,6 +8,7 @@ import {
   CONFIG_FILES,
   type CovselConfig,
   type CovselConfigInput,
+  recordedConfig,
   resolveConfig,
 } from './config.js';
 import { discoverTestFiles, isTestFile } from './discover.js';
@@ -40,13 +41,41 @@ import {
   type TestId,
 } from './schema.js';
 import { FileSelector } from './selector.js';
-import { LocalStore } from './store.js';
+import { LocalStore, type StoredMap } from './store.js';
 
 export interface GenericRecorderInit {
   command: string[];
   cwd: string;
   config: MapperConfig & Pick<CovselConfig, 'granularity'>;
   env?: NodeJS.ProcessEnv;
+  /**
+   * The caller's assertion that this command executes everything under test
+   * inside the Node process tree covsel starts, so the coverage dump holds every
+   * script the run loaded.
+   *
+   * It is what makes `observesPackages` sound, and it is not something this
+   * recorder can establish. A command arrives here as an argv somebody typed,
+   * and one that drives a browser, shells out to another runtime, or runs its
+   * tests in a container looks exactly like one that does not. Set it only when
+   * you know this run: a caller that wrote the command, and knows the suite it
+   * names executes nothing outside that tree.
+   *
+   * It is never a blanket answer for a runner. The claim is about where the code
+   * under test runs, not about how the runner loads it — a runner that executes
+   * its own sources directly can still be pointed at a spec that drives a
+   * browser, and an adapter vouching for every project that uses it would make
+   * the same guess this input exists to refuse.
+   *
+   * Left unset, entries carry no packages and the map no inventory, so the
+   * recording holds no opinion about dependencies and a change to one is left to
+   * the lockfile sentinel, which the default `sentinels` cover for every package
+   * manager covsel recognises.
+   *
+   * It does not widen `observes`, which is `**` either way: what an unvouched
+   * command hides is a process boundary, and a repo-path scope cannot describe
+   * one.
+   */
+  runsInNodeProcessTree?: boolean;
 }
 
 /** The whole-file recorder: ProcessObserver (NODE_V8_COVERAGE) piped into the V8 mapper. */
@@ -58,15 +87,27 @@ export function createGenericRecorder(init: GenericRecorderInit): Recorder {
   });
   const mapper = new V8FileMapper({ cwd: init.cwd, config: init.config });
   const wantBlocks = init.config.granularity !== 'file';
+  // Only the caller can answer whether the command runs everything under test in
+  // the tree covsel spawns, so only the caller's answer is used.
+  const observesPackages = init.runsInNodeProcessTree === true;
   return {
-    // NODE_V8_COVERAGE is inherited by child processes and dumps every script
-    // they load, so anything the run executes anywhere in the process tree is
-    // visible to this recorder wherever it lives in the repo.
+    // Bounded by that same process tree. NODE_V8_COVERAGE is inherited by child
+    // processes and dumps every script they load, so anything the run executes
+    // in the tree is visible to this recorder wherever it lives in the repo. A
+    // command that executes code outside it — a browser, another runtime — is
+    // not, and no scope can say so: globs name where in the repo a path is,
+    // never which process ran it.
     observes: OBSERVES_EVERYTHING,
     // The same dump is what makes packages visible: it holds every script the
     // process tree loaded, vendored code included, before any coverage provider
-    // has had the chance to filter `node_modules` out of it.
-    observesPackages: true,
+    // has had the chance to filter `node_modules` out of it. But only for what
+    // ran in that tree, and this recorder is handed a command rather than
+    // knowing one. Reading the claim off the command name would be a guess
+    // dressed as evidence, and reading it off the dump could only ever refute
+    // it — vendored code in the dump is equally consistent with having missed
+    // every package that ran somewhere else. So the claim belongs to whoever
+    // chose the command, and is absent until they make it.
+    ...(observesPackages ? { observesPackages: true } : {}),
     async record(testFile: string) {
       await observer.startTest({ file: testFile });
       const raw = await observer.endTest({ file: testFile });
@@ -77,12 +118,33 @@ export function createGenericRecorder(init: GenericRecorderInit): Recorder {
           test: { file: testFile },
           files,
           blocks,
-          packages: await mapper.toPackages(raw),
+          // Attributed exactly when it is claimed. A list nobody stands behind
+          // is dropped by recording anyway, and a unit carrying one while its
+          // recorder is silent contradicts what a unit's packages mean.
+          ...(observesPackages ? { packages: await mapper.toPackages(raw) } : {}),
         },
       ];
     },
     unmappableAllowed: () => mapper.takeAllowedUnmappable(),
   };
+}
+
+/**
+ * True when an entry's recording measured nothing — it credits no source file.
+ *
+ * Read off `files` alone, because that is what selection matches a diff
+ * against: blocks only refine a file that already matched, so an entry with
+ * blocks and no files is just as unselectable as one with neither. The question
+ * this answers is not "did the test do anything" but "can any change to this
+ * repository ever select it", and for an entry crediting no file the answer is
+ * no, whatever else the entry carries.
+ *
+ * Takes anything holding a file list so that recording, status and selection
+ * ask the question in one place: a unit reported as measuring nothing is
+ * exactly the entry selection will later have to run unconditionally.
+ */
+export function measuredNothing(entry: Pick<MapEntry, 'files'>): boolean {
+  return entry.files.length === 0;
 }
 
 /**
@@ -111,7 +173,7 @@ function hashSentinels(cwd: string, sentinels: string[]): Record<string, string>
 function assembleMap(
   entries: MapEntry[],
   cwd: string,
-  config: Pick<CovselConfig, 'sentinels' | 'granularity'>,
+  config: CovselConfig,
   recordedAt: string,
   observed: readonly string[],
   dirty: boolean,
@@ -143,6 +205,10 @@ function assembleMap(
     ...(commit ? { commit } : {}),
     recordedAt,
     sentinelHashes: hashSentinels(cwd, config.sentinels),
+    // What the entries below mean, stated rather than left to be inferred from a
+    // later diff: a selection made under different values is reading the map for
+    // something it never measured.
+    config: recordedConfig(config),
     observed: [...observed],
     ...(dependencies ? { dependencies } : {}),
     entries,
@@ -155,6 +221,12 @@ export interface RecordEvent {
   /** Number of test units recorded from this file (per-test recorders yield many). */
   tests?: number;
   sources?: number;
+  /**
+   * Units recorded from this file that credit no source at all. Present only
+   * when there were any: each is a test selection can say nothing about, so it
+   * will run on every selection until the recorder can see what it executes.
+   */
+  unmeasured?: number;
   reason?: string;
   /**
    * Scripts this file executed that could not be mapped back to any source and
@@ -178,6 +250,19 @@ export interface RecordResult {
    * rather than only when selection later declines to narrow.
    */
   unanchored?: boolean;
+  /**
+   * Units whose entry credits no source, across the whole recording. Present
+   * only when there were any.
+   *
+   * Recording them is not an error — a test that only asserts on constants
+   * legitimately covers nothing, and refusing the map would leave the project
+   * with none at all over something selection can handle safely. But a test
+   * covsel cannot narrow on is worth saying out loud at the moment it is
+   * recorded, because the usual cause is a recorder that could not watch where
+   * the test ran, and the fix for that is a different adapter or a different
+   * test, not a re-recording.
+   */
+  unmeasured?: TestId[];
   /**
    * Why recording failed as a whole, as opposed to per test file. Present only
    * for a failure that belongs to the run rather than to anything in it — today,
@@ -263,7 +348,7 @@ function packageClaimMismatch(
 async function recordWholeRun(init: {
   recorder: Recorder;
   testFiles: readonly string[];
-  ingest: (units: readonly RecordedUnit[]) => number;
+  ingest: (units: readonly RecordedUnit[]) => { sources: number; blind: number };
   onEvent?: (event: RecordEvent) => void;
 }): Promise<{ failures: { file: string; reason: string }[]; error?: string }> {
   const { recorder, testFiles, ingest, onEvent } = init;
@@ -303,12 +388,13 @@ async function recordWholeRun(init: {
       continue;
     }
     try {
-      const sources = ingest(forFile);
+      const { sources, blind } = ingest(forFile);
       onEvent?.({
         kind: 'recorded',
         file,
         tests: forFile.length,
         sources,
+        ...(blind > 0 ? { unmeasured: blind } : {}),
         ...(allowed.length > 0 ? { allowedUnmappable: allowed } : {}),
       });
     } catch (err) {
@@ -372,6 +458,7 @@ export async function recordMap(init: RecordInit): Promise<RecordResult> {
   const entries: MapEntry[] = [];
   const failures: { file: string; reason: string }[] = [];
   const scopes: (readonly string[])[] = [];
+  const unmeasured: TestId[] = [];
 
   const wantBlocks = config.granularity !== 'file';
   const observesPackages = recorder.observesPackages === true;
@@ -381,7 +468,7 @@ export async function recordMap(init: RecordInit): Promise<RecordResult> {
    * they credited. Shared by both recording modes so neither can be held to a
    * weaker rule than the other. Throws on the first unit that breaks one.
    */
-  const ingest = (units: readonly RecordedUnit[]): number => {
+  const ingest = (units: readonly RecordedUnit[]): { sources: number; blind: number } => {
     for (const unit of units) {
       const overclaimed = overclaimedGlobs(unit, recorder.observes);
       if (overclaimed.length > 0) {
@@ -394,19 +481,31 @@ export async function recordMap(init: RecordInit): Promise<RecordResult> {
       if (mismatch !== undefined) throw new Error(mismatch);
     }
     let sources = 0;
+    let blind = 0;
     for (const unit of units) {
       entries.push({
         test: unit.test,
         files: unit.files,
         ...(wantBlocks && unit.blocks.length > 0 ? { blocks: unit.blocks } : {}),
+        // Kept only when the recorder stands behind it: a list from one that
+        // does not is declined rather than trusted. `!== undefined` rather
+        // than truthiness, because `[]` is the measurement "ran no vendored
+        // code" and turning that into silence is what skips tests.
         ...(observesPackages && unit.packages !== undefined
           ? { packages: unit.packages }
           : {}),
       });
+      // A unit combined from several observation windows knows the scope those
+      // windows add up to, which is what its entry was really watched for; a
+      // unit from a single window is covered by the recorder's declaration.
       scopes.push(unit.observes ?? recorder.observes);
       sources += unit.files.length;
+      if (measuredNothing(unit)) {
+        blind += 1;
+        unmeasured.push(unit.test);
+      }
     }
-    return sources;
+    return { sources, blind };
   };
 
   if (typeof recorder.recordRun === 'function') {
@@ -443,13 +542,14 @@ export async function recordMap(init: RecordInit): Promise<RecordResult> {
     for (const file of testFiles) {
       try {
         const units = await recorder.record(file);
-        const sources = ingest(units);
+        const { sources, blind } = ingest(units);
         const allowed = recorder.unmappableAllowed?.() ?? [];
         init.onEvent?.({
           kind: 'recorded',
           file,
           tests: units.length,
           sources,
+          ...(blind > 0 ? { unmeasured: blind } : {}),
           ...(allowed.length > 0 ? { allowedUnmappable: allowed } : {}),
         });
       } catch (err) {
@@ -500,6 +600,7 @@ export async function recordMap(init: RecordInit): Promise<RecordResult> {
     mapPath: store.path(),
     testFiles,
     map,
+    ...(unmeasured.length > 0 ? { unmeasured } : {}),
     // Keyed on the dirty tree specifically, not on the absence of a commit. A
     // repository with no commits yet also has no commit to stamp, and telling
     // someone their uncommitted changes caused it would be a lie.
@@ -673,11 +774,31 @@ export async function selectAffected(init: SelectInit): Promise<AffectedResult> 
   const mapped = new Set(map!.entries.map((e) => e.test.file));
   const unmapped = testFiles.filter((f) => !mapped.has(f));
 
+  // An entry that credits nothing is the same claim in a different shape, and
+  // gets the same answer. It is not the rare test that genuinely executes no
+  // code: far more often the recorder could not see what the test executed,
+  // because the test drives its subject in a child process, a worker, or a
+  // browser its coverage mechanism does not reach. A recorder declares its blind
+  // spots in `observed`, but that is one scope for the whole run and cannot say
+  // "everything except what these particular tests do", so the empty entry falls
+  // straight through it and no changed path can ever match it.
+  //
+  // The whole file runs, not the unit that credits nothing: a recorder that
+  // could not see one unit of a file has not earned trust in what it recorded
+  // for the units beside it. A test that really covers nothing then runs when it
+  // need not, which is the cheap way to be wrong.
+  const unmeasured = new Set(
+    map!.entries.filter(measuredNothing).map((e) => e.test.file),
+  );
+
   // Files that must run in full supersede any per-test selection for that file.
   const wholeFile = new Set<string>([
     ...mandatory.map((t) => t.file),
     ...alwaysRun,
     ...unmapped,
+    // Drawn from discovery, like `unmapped`: an entry may outlive the test file
+    // it names, and there is nothing to run for a file that is no longer there.
+    ...testFiles.filter((f) => unmeasured.has(f)),
   ]);
   const selected: TestId[] = [...wholeFile].map((file) => ({ file }));
   const seen = new Set<string>();
@@ -832,7 +953,19 @@ export async function runAffected(
 
 export interface StatusResult {
   mapPath: string;
-  exists: boolean;
+  /**
+   * Whether the store holds a map covsel can use, one it cannot, or no file at
+   * all. The three are one decision to selection — anything but `usable` runs
+   * everything — and three different answers to someone asking why, which is
+   * the question this command exists to answer.
+   */
+  mapState: StoredMap['state'];
+  /**
+   * Why the stored map cannot be used, when `mapState` is `unusable`. Never the
+   * grounds for a decision, only the sentence that saves a reader from looking
+   * for a file that is right where covsel said it was.
+   */
+  unusableReason?: string;
   /**
    * Test files discovery found. Zero means covsel has nothing to select between,
    * whatever the map says, so it is reported alongside the map rather than
@@ -845,6 +978,13 @@ export interface StatusResult {
   /** Globs the recording was able to observe execution within. */
   observed?: string[];
   entryCount?: number;
+  /**
+   * Entries crediting no source at all. They are part of `entryCount` and they
+   * measure nothing, so counting them separately is the only way a map that
+   * narrows for half its tests is told apart from one that narrows for all of
+   * them. Each such test is selected on every run.
+   */
+  unmeasuredEntryCount?: number;
   coveredFileCount?: number;
   coveredBlockCount?: number;
   changedSentinels: string[];
@@ -892,7 +1032,11 @@ function nextSelection(
 export async function computeStatus(init: StatusInit): Promise<StatusResult> {
   const { cwd, config } = init;
   const store = new LocalStore({ cwd, dir: config.store.dir });
-  const map = await store.read();
+  // The diagnostic read, because this command reports rather than decides. What
+  // it decides is still the selection read's answer: nothing below narrows
+  // anything unless the map came back usable.
+  const stored = store.inspect();
+  const map = stored.state === 'usable' ? stored.map : undefined;
   const now = init.now ?? Date.now();
 
   // Discovery is what `affected` would select from, so a status that did not
@@ -917,17 +1061,33 @@ export async function computeStatus(init: StatusInit): Promise<StatusResult> {
   if (!map) {
     return {
       mapPath: store.path(),
-      exists: false,
+      mapState: stored.state,
+      ...(stored.state === 'unusable' ? { unusableReason: stored.reason } : {}),
       discoveredTestCount: discovered.length,
       changedSentinels: [],
       nextIsFullRun: true,
-      ...(noTests !== undefined ? { nextFullRunReason: noTests } : {}),
+      // Always a reason now. Falling back to a generic "the map cannot be
+      // trusted" left the one user who most needs to know — the one whose map
+      // was rejected for a schema bump — with no hint that re-recording is the
+      // fix, and a reading in which the map was lost.
+      //
+      // A rejected map answers in its own words, the same words `explain` uses,
+      // rather than through the shared wording: "no usable map recorded" is what
+      // an absent map is called, and saying it about a file that is sitting
+      // right there is the misreport this all exists to stop.
+      nextFullRunReason:
+        noTests ??
+        (stored.state === 'unusable'
+          ? stored.reason
+          : fullRunReason(config, undefined, [])),
     };
   }
 
   const coveredFiles = new Set<string>();
   const coveredBlocks = new Set<string>();
+  let unmeasuredEntries = 0;
   for (const entry of map.entries) {
+    if (measuredNothing(entry)) unmeasuredEntries += 1;
     for (const f of entry.files) coveredFiles.add(f.file);
     for (const b of entry.blocks ?? []) coveredBlocks.add(`${b.file}\0${b.blockHash}`);
   }
@@ -949,13 +1109,14 @@ export async function computeStatus(init: StatusInit): Promise<StatusResult> {
 
   return {
     mapPath: store.path(),
-    exists: true,
+    mapState: 'usable',
     discoveredTestCount: discovered.length,
     recordedAt: map.recordedAt,
     ageMs: now - Date.parse(map.recordedAt),
     granularity: map.granularity,
     observed: [...map.observed],
     entryCount: map.entries.length,
+    unmeasuredEntryCount: unmeasuredEntries,
     coveredFileCount: coveredFiles.size,
     ...(coveredBlocks.size > 0 ? { coveredBlockCount: coveredBlocks.size } : {}),
     changedSentinels,
@@ -1034,6 +1195,31 @@ export interface TestExplanation {
    * unknown rather than empty, so selection always runs it.
    */
   unrecorded: boolean;
+  /**
+   * True when a unit recorded here credits no source. That entry claims nothing
+   * a diff can be matched against, which is unknown coverage wearing a
+   * recorded entry's clothes — so, like an unrecorded test, this file always
+   * runs. Reported separately because the two look nothing alike in the map and
+   * a reader chasing "why does this always run" has to be able to tell which
+   * one they have.
+   */
+  unmeasured: boolean;
+}
+
+/**
+ * Why a change to one path forces a full run, and whether it always does.
+ *
+ * Sentinels always do: covsel cannot attribute a change in one to any test, so
+ * the whole suite is the only sound answer. Its own config does not, since the
+ * question there is whether the change moved a value covsel reads — and telling
+ * a reader "a change here runs everything" when a reworded comment does nothing
+ * of the sort is the drift this separation exists to prevent.
+ */
+export interface FullRunTrigger {
+  /** True when any change to the path forces a full run, whatever it changed. */
+  always: boolean;
+  /** The whole answer, as a sentence: what a change does, and why. */
+  why: string;
 }
 
 export interface ExplainResult {
@@ -1046,8 +1232,12 @@ export interface ExplainResult {
   /** The path, repo-relative, or as given when it could not be resolved. */
   file: string;
   mapPath: string;
-  /** True when a usable map is in the store. */
-  mapExists: boolean;
+  /**
+   * Whether the store holds a map covsel can use, one it cannot, or no file at
+   * all. Anything but `usable` means there is nothing to explain — and which of
+   * the two it is decides whether the reader should go looking for the file.
+   */
+  mapState: StoredMap['state'];
   /** Why there is nothing to explain, when no usable map is stored. */
   noMapReason?: string;
   recordedAt?: string;
@@ -1061,12 +1251,10 @@ export interface ExplainResult {
    */
   observed?: boolean;
   /**
-   * Why a change to this path on its own forces a full run, when one does.
-   * Sentinels are not the only way that happens — a change to covsel's own
-   * config invalidates the map without going through the sentinel list — so
-   * this names the reason rather than reporting the glob match.
+   * What a change to this path on its own does to the next run, when it does
+   * anything at all.
    */
-  forcesFullRun?: string;
+  forcesFullRun?: FullRunTrigger;
   /** True when an alwaysRun glob matches, so this test runs whatever the diff. */
   alwaysRun: boolean;
   /** True when the configured test globs match this path. */
@@ -1140,12 +1328,15 @@ export async function explainPath(init: ExplainInit): Promise<ExplainResult> {
   const { cwd, config } = init;
   const store = new LocalStore({ cwd, dir: config.store.dir });
   const mapPath = store.path();
+  // Read as a diagnostic, like status: this command answers questions about the
+  // map, so "there is no usable map" is an answer that has to say which kind.
+  const stored = store.inspect();
   const fail = (file: string, error: string): ExplainResult => ({
     ok: false,
     error,
     file,
     mapPath,
-    mapExists: false,
+    mapState: stored.state,
     present: false,
     alwaysRun: false,
     isTestPath: false,
@@ -1180,24 +1371,58 @@ export async function explainPath(init: ExplainInit): Promise<ExplainResult> {
   const alwaysRun = matchesAny(rel, config.alwaysRun);
   const excluded = isExcludedRel(rel);
   // A sentinel is not the only path a change to which invalidates the map:
-  // covsel's own config decides what the map means, and the policy forces a
-  // full run on it without consulting the sentinel list.
-  const forcesFullRun = matchesAny(rel, config.sentinels)
-    ? 'it is a sentinel, so a change to it invalidates the map'
-    : (CONFIG_FILES as readonly string[]).includes(rel)
-      ? "it is covsel's own configuration, and the map means what it means only " +
-        'under the config it was recorded with'
-      : undefined;
+  // covsel's own config decides what the map means, and the policy asks about it
+  // without consulting the sentinel list. The sentinel answer is reported first
+  // even for a config file, because it is the one that holds: a project that
+  // listed the file said any change to it runs everything, and selection honors
+  // that ahead of anything the values say.
+  const isConfigFile = (CONFIG_FILES as readonly string[]).includes(rel);
+  const fullRunTrigger = (
+    recorded: CoverageMap | undefined,
+  ): FullRunTrigger | undefined => {
+    if (matchesAny(rel, config.sentinels)) {
+      return {
+        always: true,
+        why:
+          'a change here forces one -- it is a sentinel, so a change to it ' +
+          'invalidates the map',
+      };
+    }
+    if (!isConfigFile) return undefined;
+    return recorded?.config !== undefined
+      ? {
+          always: false,
+          why:
+            'a change here forces one only when it moves a value covsel reads ' +
+            "-- it is covsel's own configuration, and the map records the " +
+            'values it was recorded under',
+        }
+      : {
+          always: true,
+          why:
+            "a change here forces one -- it is covsel's own configuration, and " +
+            'the map records no values to compare against',
+        };
+  };
 
-  const map = await store.read();
+  // The diagnostic read, as in `status`: which kind of nothing there is to
+  // explain is part of the answer. What decides anything is still the usable
+  // map, or the absence of one.
+  const map = stored.state === 'usable' ? stored.map : undefined;
+  const forcesFullRun = fullRunTrigger(map);
   if (map === undefined) {
     if (!present) return fail(rel, `${rel} is not in ${cwd}`);
     return {
       ok: true,
       file: rel,
       mapPath,
-      mapExists: false,
-      noMapReason: fullRunReason(config, undefined, []),
+      mapState: stored.state,
+      // A map that was rejected says so in its own words; one that is not there
+      // gets the wording every other command uses for the same state.
+      noMapReason:
+        stored.state === 'unusable'
+          ? stored.reason
+          : fullRunReason(config, undefined, []),
       present,
       ...(forcesFullRun !== undefined ? { forcesFullRun } : {}),
       alwaysRun,
@@ -1308,7 +1533,7 @@ export async function explainPath(init: ExplainInit): Promise<ExplainResult> {
     ok: true,
     file: rel,
     mapPath,
-    mapExists: true,
+    mapState: 'usable',
     recordedAt: map.recordedAt,
     granularity: map.granularity,
     present,
@@ -1320,6 +1545,20 @@ export async function explainPath(init: ExplainInit): Promise<ExplainResult> {
     nextIsFullRun: next.fullRun,
     ...(next.reason !== undefined ? { nextFullRunReason: next.reason } : {}),
     ...(source !== undefined ? { source } : {}),
-    ...(wantTest ? { test: { units, unrecorded: units.length === 0 } } : {}),
+    ...(wantTest
+      ? {
+          test: {
+            units,
+            unrecorded: units.length === 0,
+            // Asked of the entries through the same predicate selection uses,
+            // rather than re-derived from the sources listed above: explain
+            // exists to account for what the selector did, so it may not answer
+            // this from its own copy of the question.
+            unmeasured: map.entries.some(
+              (e) => e.test.file === rel && measuredNothing(e),
+            ),
+          },
+        }
+      : {}),
   };
 }
