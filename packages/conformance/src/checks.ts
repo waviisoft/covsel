@@ -69,7 +69,23 @@ async function recordOneFile(
   if (typeof recorder.record === 'function') return recorder.record(testFile);
   if (typeof recorder.recordRun === 'function') {
     const units = await recorder.recordRun([testFile]);
-    return units.filter((unit) => unit.test.file === testFile);
+    const forFile = units.filter((unit) => unit.test.file === testFile);
+    // A run asked about one file that comes back saying nothing about it is the
+    // shortfall the kit exists to catch. Silently returning an empty list would
+    // let the checks downstream pass by observing nothing — and a mismatch in
+    // path form, which is how an adapter reporting absolute spec paths fails,
+    // looks exactly like this.
+    if (forFile.length === 0) {
+      throw new Error(
+        `asked to record ${testFile}, this recorder's run reported ` +
+          `${units.length} unit(s), none of them for that file` +
+          (units.length > 0
+            ? ` (it reported ${[...new Set(units.map((u) => u.test.file))].join(', ')} — ` +
+              `unit test files must be repo-relative, as covsel discovers them)`
+            : ''),
+      );
+    }
+    return forFile;
   }
   throw new Error(
     'this recorder implements neither `record` nor `recordRun`, so there is no ' +
@@ -282,7 +298,7 @@ async function record(
   const result = await recordMap({ cwd: project.cwd, config: project.config, recorder });
   if (!result.ok || !result.map) {
     throw new Error(
-      `recording failed: ${result.failures.map((f) => `${f.file}: ${f.reason}`).join('; ')}`,
+      `recording failed: ${result.error ?? result.failures.map((f) => `${f.file}: ${f.reason}`).join('; ')}`,
     );
   }
   return result.map;

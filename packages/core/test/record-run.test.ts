@@ -156,10 +156,12 @@ describe('a recorder that records the whole run at once', () => {
   it('reports one recorded event per test file, as the per-file path does', async () => {
     const { cwd, config } = fixture();
     const events: { kind: string; file?: string; tests?: number }[] = [];
+    // Reported profile-first, so an implementation emitting events in the order
+    // the run reported would not produce discovery order by accident.
     const recorder = runRecorder(() => [
+      unitFor('test/profile.test.mjs', 'src/profile.mjs', 'shows'),
       unitFor('test/cart.test.mjs', 'src/cart.mjs', 'adds'),
       unitFor('test/cart.test.mjs', 'src/cart.mjs', 'removes'),
-      unitFor('test/profile.test.mjs', 'src/profile.mjs', 'shows'),
     ]);
 
     await recordMap({ cwd, config, recorder, onEvent: (e) => events.push(e) });
@@ -178,7 +180,86 @@ describe('a recorder that records the whole run at once', () => {
     const result = await recordMap({ cwd, config, recorder });
 
     expect(result.ok).toBe(false);
-    expect(result.error ?? result.failures[0]?.reason).toMatch(/record/i);
+    // The branch's own message, not merely "something mentioning record": a
+    // TypeError from calling an absent `record` is also ok:false, also writes no
+    // map, and also matches /record/, so a looser assertion constrains nothing.
+    expect(result.error).toMatch(/neither `record` nor `recordRun`/);
+    expect(existsSync(result.mapPath)).toBe(false);
+  });
+
+  it('keeps units for a file discovery never found, and still records the rest', async () => {
+    const { cwd, config } = fixture();
+    const recorder = runRecorder((testFiles) => [
+      ...testFiles.map((f) => unitFor(f, 'src/cart.mjs')),
+      // A spec the runner executed that covsel's testGlobs do not match. Kept
+      // rather than refused: selection never consults it, and failing a whole
+      // recording over a discovery disagreement is the harsher reading.
+      unitFor('e2e/checkout.spec.mjs', 'src/profile.mjs'),
+    ]);
+
+    const result = await recordMap({ cwd, config, recorder });
+
+    expect(result.ok).toBe(true);
+    expect(result.map!.entries.map((e) => e.test.file)).toContain(
+      'e2e/checkout.spec.mjs',
+    );
+  });
+
+  it('fails the recording when an undiscovered file’s unit breaks a rule', async () => {
+    const { cwd, config } = fixture();
+    const recorder = runRecorder(
+      (testFiles) => [
+        ...testFiles.map((f) => unitFor(f, 'src/cart.mjs')),
+        {
+          ...unitFor('e2e/checkout.spec.mjs', 'src/profile.mjs'),
+          observes: ['server/**'],
+        },
+      ],
+      { observes: ['src/**'] },
+    );
+
+    const result = await recordMap({ cwd, config, recorder });
+
+    expect(result.ok).toBe(false);
+    expect(result.failures.map((f) => f.file)).toEqual(['e2e/checkout.spec.mjs']);
+    expect(existsSync(result.mapPath)).toBe(false);
+  });
+
+  it('reports what the run let through unmapped against the run, not against every file', async () => {
+    const { cwd, config } = fixture();
+    const events: { kind: string; file?: string; allowedUnmappable?: string[] }[] = [];
+    const recorder = runRecorder(
+      (testFiles) => testFiles.map((f) => unitFor(f, 'src/cart.mjs')),
+      {
+        unmappableAllowed: () => ['dist/bundle.mjs'],
+      },
+    );
+
+    await recordMap({ cwd, config, recorder, onEvent: (e) => events.push(e) });
+
+    // One invocation covered the whole suite, so naming the script on each
+    // file's event would claim every file executed it.
+    const naming = events.filter((e) => e.allowedUnmappable !== undefined);
+    expect(naming).toHaveLength(1);
+    expect(naming[0]!.file).toBe('(the run)');
+  });
+
+  it('reports a run that resolves to something that is not a list of units', async () => {
+    const { cwd, config } = fixture();
+    const recorder = {
+      observes: OBSERVES_EVERYTHING,
+      async recordRun() {
+        return undefined;
+      },
+    } as unknown as Recorder;
+
+    // An adapter built against an older core, or one missing a `return`. It must
+    // be reported the way any other recording failure is, not escape as an
+    // unhandled rejection that loses covsel's own messaging.
+    const result = await recordMap({ cwd, config, recorder });
+
+    expect(result.ok).toBe(false);
+    expect(result.error).toBeDefined();
     expect(existsSync(result.mapPath)).toBe(false);
   });
 

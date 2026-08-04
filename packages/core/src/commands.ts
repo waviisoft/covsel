@@ -332,6 +332,9 @@ function packageClaimMismatch(
   return undefined;
 }
 
+/** What a report belongs to when it belongs to the run rather than to one file. */
+const THE_RUN = '(the run)';
+
 /**
  * Drive a recorder that records the whole suite in one invocation, and reconcile
  * what came back against what was asked for.
@@ -347,33 +350,49 @@ function packageClaimMismatch(
  */
 async function recordWholeRun(init: {
   recorder: Recorder;
+  recordRun: (testFiles: readonly string[]) => Promise<RecordedUnit[]>;
   testFiles: readonly string[];
   ingest: (units: readonly RecordedUnit[]) => { sources: number; blind: number };
   onEvent?: (event: RecordEvent) => void;
 }): Promise<{ failures: { file: string; reason: string }[]; error?: string }> {
-  const { recorder, testFiles, ingest, onEvent } = init;
-  let units: RecordedUnit[];
+  const { recorder, recordRun, testFiles, ingest, onEvent } = init;
+  const byFile = new Map<string, RecordedUnit[]>();
   try {
-    units = await recorder.recordRun!(testFiles);
+    const units = await recordRun(testFiles);
+    // Grouped inside the `try`, so a recorder that resolves to something that is
+    // not a list of units is reported the way the per-file path reports it,
+    // rather than escaping `recordMap` as an unhandled rejection that loses
+    // every message covsel would otherwise print.
+    for (const unit of units) {
+      const list = byFile.get(unit.test.file);
+      if (list === undefined) byFile.set(unit.test.file, [unit]);
+      else list.push(unit);
+    }
   } catch (err) {
     // The suite is one unit of success: a run that died partway leaves coverage
     // for the tests it reached, and nothing afterwards can tell that apart from
     // a complete recording.
     const reason = err instanceof Error ? err.message : String(err);
     recorder.unmappableAllowed?.();
-    onEvent?.({ kind: 'failed', file: '(the run)', reason });
+    onEvent?.({ kind: 'failed', file: THE_RUN, reason });
     return { failures: [], error: reason };
   }
 
-  const byFile = new Map<string, RecordedUnit[]>();
-  for (const unit of units) {
-    const list = byFile.get(unit.test.file);
-    if (list === undefined) byFile.set(unit.test.file, [unit]);
-    else list.push(unit);
-  }
-
   const failures: { file: string; reason: string }[] = [];
+  // Reported against the run rather than against each file. One invocation
+  // covered the whole suite, so what it let through unmapped belongs to the run;
+  // attaching the list to every file's event would name a script that all but
+  // one of them never executed.
   const allowed = recorder.unmappableAllowed?.() ?? [];
+  if (allowed.length > 0) {
+    onEvent?.({
+      kind: 'recorded',
+      file: THE_RUN,
+      tests: 0,
+      sources: 0,
+      allowedUnmappable: allowed,
+    });
+  }
   // Every file covsel discovered, in its order, so the report reads the same as
   // the per-file path's regardless of what order the run reported in.
   for (const file of testFiles) {
@@ -395,7 +414,6 @@ async function recordWholeRun(init: {
         tests: forFile.length,
         sources,
         ...(blind > 0 ? { unmeasured: blind } : {}),
-        ...(allowed.length > 0 ? { allowedUnmappable: allowed } : {}),
       });
     } catch (err) {
       const reason = err instanceof Error ? err.message : String(err);
@@ -511,6 +529,7 @@ export async function recordMap(init: RecordInit): Promise<RecordResult> {
   if (typeof recorder.recordRun === 'function') {
     const outcome = await recordWholeRun({
       recorder,
+      recordRun: recorder.recordRun.bind(recorder),
       testFiles,
       ingest,
       ...(init.onEvent ? { onEvent: init.onEvent } : {}),

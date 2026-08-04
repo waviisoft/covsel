@@ -818,7 +818,11 @@ async function cmdWatch(argv: string[]): Promise<number> {
           ? { ok: true }
           : {
               ok: false,
-              reason: `${result.failures.length} test file(s) failed to record`,
+              // `error` when the recording failed as a whole — a run-mode
+              // recorder whose single invocation threw has no per-file failures,
+              // and reporting "0 test file(s) failed" reads like nothing did.
+              reason:
+                result.error ?? `${result.failures.length} test file(s) failed to record`,
             };
       }
     : undefined;
