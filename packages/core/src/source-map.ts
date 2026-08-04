@@ -86,8 +86,16 @@ export type ProjectableScript =
       map: RawSourceMap;
       /** The script as it executed, which the V8 range offsets index. */
       generated: string;
-      /** Each of the map's source names, as it names them, to its repo-relative path. */
-      located: Map<string, string>;
+      /**
+       * Each of the map's source names, as it names them, to where it lives and
+       * what the build published for it.
+       *
+       * `content` is what makes the map's *coordinates* checkable. Its line and
+       * column numbers describe the file as it stood at build time, and a caller
+       * projecting them onto the file as it stands now is only entitled to do so
+       * while the two are the same text.
+       */
+      located: Map<string, { rel: string; content?: string }>;
     }
   | { kind: 'unmapped'; reason: string };
 
@@ -384,7 +392,7 @@ export class SourceMapResolver {
 
     const sources: string[] = [];
     const unresolved: string[] = [];
-    const located = new Map<string, string>();
+    const located = new Map<string, { rel: string; content?: string }>();
     const seen = new Set<string>();
     for (const named of namedSources(map)) {
       const outcome = this.locate(named, mapUrl ?? url);
@@ -396,7 +404,10 @@ export class SourceMapResolver {
       // Kept whether or not this is the first sighting of the file: two of a
       // map's names can resolve to one repo path, and the projection looks the
       // path up by the name its segments carry.
-      located.set(named.path, outcome.rel);
+      located.set(named.path, {
+        rel: outcome.rel,
+        ...(named.content !== undefined ? { content: named.content } : {}),
+      });
       if (seen.has(outcome.rel)) continue;
       seen.add(outcome.rel);
       sources.push(outcome.rel);

@@ -135,12 +135,18 @@ cases that matter: those conversions carry named functions only, so an executed
 arrow handler vanishes, and they attribute unmapped bundler-injected code to the
 map's first source. Both drop blocks, and a dropped block skips a test. The
 mapper projects a source-mapped script's ranges this way, so a bundle credits the
-blocks that executed rather than every source it was built from. A source the
-projection refuses -- code the build inlined into several callers, a file whose
-text no longer matches the map, a span a range does not own -- contributes no
-block and stays at file granularity, which over-selects rather than skipping it.
-Block text is read from the file as it stands, never from the map's published
-`sourcesContent`, because a hash has to describe the file a diff will be taken
+blocks that executed rather than every source it was built from.
+
+A map's coordinates describe its sources as they stood at build time, so they are
+read against a file only while the build's published `sourcesContent` still
+matches it -- a file edited since then would take build-time line 40 to whatever
+sits at line 40 now, quietly moving a never-ran range over a function that ran.
+A source that fails that check, or that the build published nothing for, is not
+projected at all. Neither is code the build inlined into several callers, or a
+span a range does not own. Each of those contributes no block and stays at file
+granularity, which over-selects rather than skipping it. Block text is then read
+from the file as it stands, not from the published copy, because a hash has to
+describe the file a diff will be taken
 against.
 
 The consequence is that covsel covers the Node/unit/integration case. Coverage of

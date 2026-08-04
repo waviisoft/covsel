@@ -98,7 +98,9 @@ function fixture(): { cwd: string; mapper: V8FileMapper; bundle: string } {
     bundle,
     mapper: new V8FileMapper({
       cwd,
-      config: resolveConfig({ sourceGlobs: ['src/**'] }),
+      // No network from a unit test: without this a fixture that drifts into an
+      // unparseable map falls through to fetching a `.map` neighbour.
+      config: resolveConfig({ sourceGlobs: ['src/**'], sourceMaps: { http: false } }),
     }),
   };
 }
@@ -145,30 +147,31 @@ describe('blocks for a source-mapped script', () => {
       .map((b) => hashesFor('src/b.ts', B_SOURCE).get(b.blockHash));
 
     expect(inA).toContain('fromA');
-    expect(inB).not.toContain('fromB');
+    // Not merely "fromB is absent": under a projection that credited the wrong
+    // source, b would have no blocks at all and that would pass too.
+    expect(inB).toEqual(['<module>']);
   });
 
-  it('takes the block text from the file on disk, not the map’s sourcesContent', async () => {
-    // A hash has to describe the file a diff will be taken against. The build's
-    // published copy is what the bundle was made from, which is the wrong text
-    // the moment anyone edits the source.
+  it('records nothing for a source the map no longer describes', async () => {
+    // The map's line and column numbers describe the file as it stood at build
+    // time. Grow the file and build-time line 2 lands on whatever is at line 2
+    // now — so a range that never ran can cover a function that did, and the
+    // block for it disappears. Nothing about that announces itself, which is why
+    // the check is the published text rather than anything in the projection.
     const { cwd, mapper, bundle } = fixture();
-    const { extractBlocks } = await import('../src/index.js');
-    const edited = A_SOURCE.replace('return 1;', 'return 11;');
-    write(cwd, 'src/a.ts', edited);
+    write(cwd, 'src/a.ts', `export function added() {\n  return 0;\n}\n${A_SOURCE}`);
 
     const blocks = await mapper.toBlocks(coverageFor(`file://${bundle}`));
 
-    const current = new Set(extractBlocks(edited, 'src/a.ts').map((b) => b.hash));
-    const recorded = blocks.filter((b) => b.file === 'src/a.ts').map((b) => b.blockHash);
-    expect(recorded.length).toBeGreaterThan(0);
-    expect(recorded.every((h) => current.has(h))).toBe(true);
+    // No blocks means file granularity, which selects the test on any change to
+    // the file — coarse, and never the wrong answer.
+    expect(blocks.filter((b) => b.file === 'src/a.ts')).toEqual([]);
   });
 
   it('projects a script whose text the observation carried, with nothing on disk', async () => {
     // The browser case: the bundle was served, never written to the repository,
     // and the only copy of what the offsets index came back with the coverage.
-    const { cwd, mapper } = fixture();
+    const { mapper } = fixture();
     const map = {
       version: 3,
       sources: ['src/a.ts'],
@@ -196,7 +199,13 @@ describe('blocks for a source-mapped script', () => {
       ],
     });
 
-    expect(blocks.map((b) => b.file)).toContain('src/a.ts');
-    expect(cwd).toBeDefined();
+    // The range given is `fromA` alone, so naming it is what distinguishes a
+    // real projection from one emitting any region at all — every source with a
+    // region gets a `<module>` block for free.
+    const { extractBlocks } = await import('../src/index.js');
+    const names = new Map(
+      extractBlocks(A_SOURCE, 'src/a.ts').map((b) => [b.hash, b.name]),
+    );
+    expect(blocks.map((b) => names.get(b.blockHash))).toContain('fromA');
   });
 });
