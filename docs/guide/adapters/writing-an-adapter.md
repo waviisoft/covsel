@@ -32,11 +32,26 @@ Two capabilities are required:
 1. **`formatSelection(tests)`** -- selected test ids as the runner's input. At
    file level that is a deduplicated file list, which is what `covsel affected`
    prints and what `covsel run` appends to your command.
-2. **`createRecorder({ command, cwd, config })`** -- a `Recorder` whose
-   `record(testFile)` returns one `RecordedUnit` per test it observed: a single
-   whole-file unit, or one unit per individual test for runners you can hook per
-   test. It also declares `observes`, the globs it is able to see execution
-   within.
+2. **`createRecorder({ command, cwd, config })`** -- a `Recorder` that returns
+   one `RecordedUnit` per test it observed: a single whole-file unit, or one unit
+   per individual test for runners you can hook per test. It also declares
+   `observes`, the globs it is able to see execution within.
+
+   A recorder records one of two ways, and implements exactly one of them:
+
+   - **`record(testFile)`** drives the runner once per test file. Right when a
+     process per file is cheap, which it is for every runner covsel ships an
+     adapter for.
+   - **`recordRun(testFiles)`** drives the runner once for the whole suite and
+     returns the units for all of it. For a runner whose startup cost is paid per
+     invocation -- a browser, an application server -- paying it per file turns
+     recording into something nobody runs twice.
+
+   Recording reconciles a whole-run recorder's units against the files it asked
+   for, and a file the run never reported fails the recording: a test file
+   missing from the report cannot be told apart from one that covers nothing, and
+   covering nothing means never being selected again. Report the units with the
+   same repo-relative paths covsel asked about, or every file looks unreported.
 
 Two more are optional, and omitting one means "covsel's default is right for my
 runner":
@@ -54,8 +69,11 @@ runner":
    `testGlobs`. Only needed when your runner's tests are not `*.test.*` sources;
    cucumber's are `.feature` files, so its adapter supplies `['**/*.feature']`.
 
-The compiler holds you to this: a missing required capability is an error in
-your own package's build, not something a reviewer has to spot.
+The compiler holds you to `formatSelection` and `createRecorder`: a missing one
+is an error in your own package's build, not something a reviewer has to spot.
+Which way a recorder records is a runtime question rather than a type-level one,
+since it implements one of two optional methods -- a recorder offering neither
+compiles, and `covsel record` refuses it, naming it as an adapter bug.
 
 How you get coverage is your choice, and it is the only genuinely
 runner-specific decision:

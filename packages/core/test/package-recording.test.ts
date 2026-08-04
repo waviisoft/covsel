@@ -170,7 +170,7 @@ describe('recording what was installed', () => {
     const blind: Recorder = {
       observes: OBSERVES_EVERYTHING,
       async record(file) {
-        const units = await base.record(file);
+        const units = await base.record!(file);
         return units.map(({ packages: _drop, ...unit }) => unit);
       },
     };
@@ -209,7 +209,7 @@ describe('what the generic recorder may claim about the command it was handed', 
   });
 
   it('leaves its units silent about packages rather than reporting what it cannot stand behind', async () => {
-    const units = await handed(fixture()).record('test/a.test.mjs');
+    const units = await handed(fixture()).record!('test/a.test.mjs');
 
     expect(units).toHaveLength(1);
     // The silence is a choice, not an empty recording: this unit saw the test

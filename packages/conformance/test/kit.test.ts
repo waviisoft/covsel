@@ -4,6 +4,7 @@ import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 
 import {
+  type RecordedUnit,
   type Adapter,
   createGenericRecorder,
   extractBlocks,
@@ -158,12 +159,7 @@ function forwardPackageClaim(real: Recorder): { observesPackages?: boolean } {
 }
 
 /** The honest adapter, recording through it and then damaging what it reported. */
-const derive = (
-  damage: (
-    unit: Awaited<ReturnType<Recorder['record']>>[number],
-    cwd: string,
-  ) => Awaited<ReturnType<Recorder['record']>>[number],
-): Adapter => ({
+const derive = (damage: (unit: RecordedUnit, cwd: string) => RecordedUnit): Adapter => ({
   ...probeAdapter,
   createRecorder(init) {
     const real = probeAdapter.createRecorder(init);
@@ -171,7 +167,7 @@ const derive = (
       observes: real.observes,
       ...forwardPackageClaim(real),
       async record(file) {
-        return (await real.record(file)).map((unit) => damage(unit, init.cwd));
+        return (await real.record!(file)).map((unit) => damage(unit, init.cwd));
       },
     };
   },
@@ -198,7 +194,7 @@ const partialView = (observes: readonly string[]): Adapter => ({
       observes,
       ...forwardPackageClaim(real),
       async record(file) {
-        return (await real.record(file)).map((unit) => ({
+        return (await real.record!(file)).map((unit) => ({
           ...unit,
           files: unit.files.filter((f) => inView(f.file)),
           blocks: unit.blocks.filter((b) => inView(b.file)),
@@ -226,6 +222,64 @@ describe('the conformance kit', () => {
       failures.map((f) => `${f.check}: ${f.detail}`),
       'a conforming adapter must pass every check',
     ).toEqual([]);
+  }, 180_000);
+
+  it('passes an adapter that records the whole run in one invocation', async () => {
+    // The same honest recorder, driven the other way: no `record` at all, one
+    // `recordRun` that answers for every file it is asked about. The kit has to
+    // certify this mode too, or the adapters that need it cannot be certified.
+    const wholeRun: Adapter = {
+      ...probeAdapter,
+      createRecorder(init) {
+        const real = probeAdapter.createRecorder(init);
+        return {
+          observes: real.observes,
+          ...forwardPackageClaim(real),
+          async recordRun(testFiles) {
+            const units: RecordedUnit[] = [];
+            for (const file of testFiles) units.push(...(await real.record!(file)));
+            return units;
+          },
+        };
+      },
+    };
+
+    const results = await runAdapterConformance({ ...conformingSpec, adapter: wholeRun });
+    const failures = results.filter((r) => !r.ok);
+    expect(
+      failures.map((f) => `${f.check}: ${f.detail}`),
+      'a conforming whole-run adapter must pass every check',
+    ).toEqual([]);
+  }, 180_000);
+
+  it('fails a whole-run recorder that says nothing about the file it was asked for', async () => {
+    // How an adapter reporting absolute spec paths fails. Without a guard the
+    // filter returns nothing and the checks downstream pass by observing
+    // nothing at all.
+    const mislabelled: Adapter = {
+      ...probeAdapter,
+      createRecorder(init) {
+        const real = probeAdapter.createRecorder(init);
+        return {
+          observes: real.observes,
+          ...forwardPackageClaim(real),
+          async recordRun(testFiles) {
+            const units: RecordedUnit[] = [];
+            for (const file of testFiles) units.push(...(await real.record!(file)));
+            return units.map((unit) => ({
+              ...unit,
+              test: { ...unit.test, file: `${init.cwd}/${unit.test.file}` },
+            }));
+          },
+        };
+      },
+    };
+
+    const results = await runAdapterConformance({
+      ...conformingSpec,
+      adapter: mislabelled,
+    });
+    expect(results.some((r) => !r.ok)).toBe(true);
   }, 180_000);
 
   it('fails an adapter whose formatSelection does not deduplicate', async () => {
