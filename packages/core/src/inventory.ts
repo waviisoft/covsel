@@ -227,9 +227,9 @@ function namesALocation(entryPath: string): boolean {
  * nothing, when the layout offers no way to tell one copy from another.
  *
  * A store entry names itself, store and all, and that name is a content signal:
- * a registry tarball's pins its version, a git specifier's the commit, a patched
- * package's the patch hash. Two recordings that disagree about it disagree about
- * which code is there.
+ * a registry tarball pins its version, a git specifier its commit, a patched
+ * package its patch hash. Two recordings that disagree about that name disagree
+ * about which code is there.
  *
  * Outside a store there is no such name. A hoisted tree (`node-linker=hoisted`)
  * and a bundled dependency both put the package directly in a `node_modules`,

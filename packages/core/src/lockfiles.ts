@@ -68,6 +68,13 @@ export const LOCKFILE_NAMES: readonly string[] = LOCKFILES.map(([name]) => name)
  * inventory can only compare what it walked, and the whole difficulty is that
  * these files move what is reachable. A full run needs no such reasoning.
  *
+ * Two names for pnpm's hook file, for the same reason `LOCKFILES` carries two
+ * for bun: it was `pnpmfile.js` up to v6 and `.pnpmfile.cjs` from v7, and
+ * covering only the name you have heard of leaves the other exposed exactly as
+ * if neither were listed. The cost of a name nobody uses is a full run for a
+ * project that keeps a stray file of that name; the cost of a missing one is a
+ * skipped test.
+ *
  * The `pnpm` block in `package.json` belongs to this set too, and is already
  * covered by `package.json` being a sentinel.
  *
@@ -79,7 +86,8 @@ export const LOCKFILE_NAMES: readonly string[] = LOCKFILES.map(([name]) => name)
  */
 export const INSTALL_CONFIG_NAMES: readonly string[] = [
   '.npmrc', // npm and pnpm both read it
-  '.pnpmfile.cjs', // pnpm's install-time hooks
+  '.pnpmfile.cjs', // pnpm's install-time hooks, v7 onwards
+  'pnpmfile.js', // what pnpm called the same file up to v6
   '.yarnrc.yml', // yarn berry
   '.yarnrc', // yarn classic
   'bunfig.toml', // bun

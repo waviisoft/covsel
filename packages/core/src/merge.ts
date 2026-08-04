@@ -80,12 +80,20 @@ function agreedDependencies(maps: CoverageMap[]): MapDependencies | undefined {
     });
     if (shared) inventory[name] = [...versions];
   }
-  return {
-    manager: first.manager,
-    marker: first.marker,
-    markerHash: first.markerHash,
-    inventory,
-  };
+  // An intersection that kept nothing is dropped whole, so a merged map cannot
+  // present a shape recording never produces: `readInstalledInventory` reports an
+  // inventory vouching for nothing as no inventory, precisely so that consumers
+  // have one absence to honour rather than two. Reachable only where shards agree
+  // on their marker and share not one package name -- but merging is where a
+  // safety rule is easiest to lose, since nothing here recorded anything.
+  return Object.keys(inventory).length === 0
+    ? undefined
+    : {
+        manager: first.manager,
+        marker: first.marker,
+        markerHash: first.markerHash,
+        inventory,
+      };
 }
 
 /**

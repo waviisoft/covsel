@@ -200,16 +200,20 @@ describe('fail-open acceptance', () => {
   // `import` resolves to while the lockfile does not change by a byte. Spelled
   // out for the same reason as the lockfiles above: what is under test is that
   // the default list holds these names.
-  it.each(['.npmrc', '.pnpmfile.cjs', '.yarnrc.yml', '.yarnrc', 'bunfig.toml'])(
-    '3g. a %s change alone forces a full run',
-    async (config_file) => {
-      write(config_file, 'hoist-pattern[]=\n');
-      const result = await selectAffected({ cwd, config });
-      expect(result.fullRun).toBe(true);
-      expect(result.reason).toContain(`sentinel changed: ${config_file}`);
-      expect(result.tests).toEqual(['test/a.test.mjs', 'test/b.test.mjs']);
-    },
-  );
+  it.each([
+    '.npmrc',
+    '.pnpmfile.cjs',
+    'pnpmfile.js',
+    '.yarnrc.yml',
+    '.yarnrc',
+    'bunfig.toml',
+  ])('3g. a %s change alone forces a full run', async (installConfig) => {
+    write(installConfig, 'hoist-pattern[]=\n');
+    const result = await selectAffected({ cwd, config });
+    expect(result.fullRun).toBe(true);
+    expect(result.reason).toContain(`sentinel changed: ${installConfig}`);
+    expect(result.tests).toEqual(['test/a.test.mjs', 'test/b.test.mjs']);
+  });
 
   it('4. a brand-new test file always runs, even absent from the map', async () => {
     write('test/c.test.mjs', FILES['test/a.test.mjs']!);

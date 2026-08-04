@@ -88,7 +88,12 @@ function install(
  * depends on it has it. Relative, like pnpm's own links, and climbing out of a
  * scope directory when the name has one.
  */
-function linkInto(cwd: string, nodeModulesRel: string, name: string, version: string) {
+function linkInto(
+  cwd: string,
+  nodeModulesRel: string,
+  name: string,
+  version: string,
+): void {
   const up = '../'.repeat(
     nodeModulesRel.split('/').length + (name.includes('/') ? 1 : 0),
   );

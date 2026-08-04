@@ -446,6 +446,19 @@ describe('merging shard maps', () => {
     expect(merged.dependencies?.inventory).toEqual({ ok: ['1.0.0'] });
   });
 
+  it('drops the inventory when the intersection keeps no name at all', () => {
+    // Recording never produces a present-but-empty inventory -- one vouching for
+    // nothing is reported as none, so consumers have a single absence to honour
+    // -- and merging must not reintroduce the shape by the back door. Shards that
+    // agree on their marker and share not one name are the way in.
+    const merged = mergeMaps([
+      shard('a.mjs', [], dependencies('sha256:same', { lodash: ['4.0.0'] })),
+      shard('b.mjs', [], dependencies('sha256:same', { lodash: ['3.0.0'] })),
+    ]);
+
+    expect(merged.dependencies).toBeUndefined();
+  });
+
   it('drops the inventory when the shards installed different trees', () => {
     const merged = mergeMaps([
       shard('a.mjs', [], dependencies('sha256:one', { 'left-pad': ['1.3.0'] })),
