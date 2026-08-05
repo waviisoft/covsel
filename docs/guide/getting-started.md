@@ -139,8 +139,9 @@ node --test $(covsel affected)
 covsel status
 ```
 
-shows the store path, the map's age and size, whether any sentinel changed since
-record, and whether the next `affected` would be a full run.
+shows the store path, the map's age and size, the commit it was recorded on,
+whether any sentinel changed since record, and whether the next `affected` would
+be a full run.
 
 A map covsel cannot use is not a missing one, and `status` says which it is
 looking at:

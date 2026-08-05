@@ -110,7 +110,13 @@ function fallOpen(cwd: string, config: CovselConfig, reason: string): AffectedRe
     // Even the test list is unknown: the runner still gets an unfiltered run.
     tests = [];
   }
-  return { fullRun: true, reason, tests, selected: tests.map((file) => ({ file })) };
+  return {
+    fullRun: true,
+    reason,
+    tests,
+    selected: tests.map((file) => ({ file })),
+    discovered: tests.length,
+  };
 }
 
 /**
