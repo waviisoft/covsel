@@ -5,6 +5,7 @@ import { join } from 'node:path';
 import { afterAll, afterEach, beforeAll, describe, expect, it } from 'vitest';
 
 import {
+  computeStatus,
   type CoverageMap,
   createGenericRecorder,
   FileSelector,
@@ -213,6 +214,50 @@ describe('fail-open acceptance', () => {
     expect(result.fullRun).toBe(true);
     expect(result.reason).toContain(`sentinel changed: ${installConfig}`);
     expect(result.tests).toEqual(['test/a.test.mjs', 'test/b.test.mjs']);
+  });
+
+  it('3h. a deleted test file is never named by a selection', async () => {
+    // Its entry outlives it, still credited with the sources it covered, so
+    // changing one of them would otherwise select a path the checkout does not
+    // have. Nothing is skipped by that -- but what happens next stops being
+    // covsel's decision and becomes the runner's, and the runners disagree:
+    // vitest ignores the path and runs one fewer file than the selection named,
+    // while a runner that treats an unknown path as an error goes red over a
+    // stale entry.
+    rmSync(join(cwd, 'test/a.test.mjs'));
+    write('src/a.mjs', `${FILES['src/a.mjs']}// touch\n`);
+
+    const result = await selectAffected({ cwd, config });
+
+    expect(result.fullRun).toBe(false);
+    expect(result.tests).not.toContain('test/a.test.mjs');
+    expect(result.selected.map((t) => t.file)).not.toContain('test/a.test.mjs');
+  });
+
+  it('3i. deleting a test does not deselect the others that cover its sources', async () => {
+    // The narrowing has to stop at the file that is gone. `src/shared.mjs` is
+    // covered by both tests, and the survivor still runs for it.
+    rmSync(join(cwd, 'test/a.test.mjs'));
+    write('src/shared.mjs', `${FILES['src/shared.mjs']}// touch\n`);
+
+    const result = await selectAffected({ cwd, config });
+
+    expect(result.fullRun).toBe(false);
+    expect(result.tests).toEqual(['test/b.test.mjs']);
+  });
+
+  it('3j. status counts the entries a deleted test left behind', async () => {
+    // Selection drops them silently, which is right and also means nothing else
+    // in the report would say the map has drifted from the suite rather than
+    // from the sources. That is what makes it worth counting: a map still
+    // describing tests the project removed is a map due to be recorded again.
+    rmSync(join(cwd, 'test/a.test.mjs'));
+
+    const status = await computeStatus({ cwd, config });
+
+    expect(status.entryCount).toBe(2);
+    expect(status.staleEntryCount).toBe(1);
+    expect(status.discoveredTestCount).toBe(1);
   });
 
   it('4. a brand-new test file always runs, even absent from the map', async () => {
