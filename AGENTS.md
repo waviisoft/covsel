@@ -33,6 +33,9 @@ packages/adapter-generic/   @covsel/adapter-generic — wrap-any-command adapter
 packages/adapter-*/         one package per runner (the community lane).
 packages/conformance/       @covsel/conformance — the shared suite every adapter
                             must pass; adapters register it in their own tests.
+benchmarks/                 @covsel/benchmarks — replays merged changes from real
+                            repositories and measures what selection saved.
+                            Private; nothing in packages/ depends on it.
 docs/                       VitePress site (private package, deployed to GitHub Pages).
 ```
 

@@ -1,0 +1,23 @@
+{
+  "name": "@covsel/benchmarks",
+  "version": "0.0.0",
+  "description": "Replays merged pull requests from real repositories through covsel and measures what selection saved",
+  "private": true,
+  "license": "MIT",
+  "author": "WAVIISoft, LLC",
+  "type": "module",
+  "scripts": {
+    "build": "tsup src/cli.ts --format esm --sourcemap --clean",
+    "replay": "node dist/cli.js",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@covsel/core": "workspace:*"
+  },
+  "devDependencies": {
+    "@types/node": "^22.20.1"
+  },
+  "engines": {
+    "node": ">=22"
+  }
+}

@@ -39,6 +39,16 @@ importers:
         specifier: ^4.1.10
         version: 4.1.10(@types/node@22.20.1)(@vitest/coverage-v8@4.1.10)(vite@7.3.6(@types/node@22.20.1)(yaml@2.9.0))
 
+  benchmarks:
+    dependencies:
+      '@covsel/core':
+        specifier: workspace:*
+        version: link:../packages/core
+    devDependencies:
+      '@types/node':
+        specifier: ^22.20.1
+        version: 22.20.1
+
   docs:
     devDependencies:
       vitepress:

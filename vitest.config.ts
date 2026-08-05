@@ -39,6 +39,10 @@ export default defineConfig({
     // from a checkout with no install or build step, so it is plain JavaScript
     // with no dependencies -- but its reporting is where a selection becomes a
     // claim someone acts on, and that is worth the same suite as everything else.
-    include: ['packages/*/test/**/*.test.ts', 'actions/*/test/**/*.test.ts'],
+    include: [
+      'packages/*/test/**/*.test.ts',
+      'benchmarks/test/**/*.test.ts',
+      'actions/*/test/**/*.test.ts',
+    ],
   },
 });

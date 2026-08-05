@@ -20,20 +20,25 @@ export default {
   // the workspace directory is both accurate and inert.
   adapter: './packages/adapter-vitest',
 
-  // The suite vitest itself runs. The golden example end-to-end scripts under
-  // examples/ are shell, driven by their own CI steps, and are not selected.
+  // The suite vitest itself runs, which is what these have to keep up with:
+  // testable code outside `packages/` is invisible to selection until it is named
+  // here, and invisible means a change to it selects nothing at all -- so the job
+  // demonstrating covsel on itself would run nothing and pass while the code
+  // under it changed. Both `benchmarks/` and `actions/` are that case.
   //
-  // `actions/` is here because the action's reporting is testable code that does
-  // not live in a package: leaving it out let a change to it select nothing at
-  // all, so the job demonstrating covsel on itself would run nothing and pass
-  // while the code under it changed.
-  testGlobs: ['packages/*/test/**/*.test.ts', 'actions/*/test/**/*.test.ts'],
+  // The golden example end-to-end scripts under examples/ are shell, driven by
+  // their own CI steps, and are deliberately not selected.
+  testGlobs: [
+    'packages/*/test/**/*.test.ts',
+    'benchmarks/test/**/*.test.ts',
+    'actions/*/test/**/*.test.ts',
+  ],
 
-  // Only the packages' own sources, and the action's. Written with a slash on
+  // The sources behind those suites, and nothing else. Written with a slash on
   // purpose: a slash-less glob also matches by basename anywhere in the tree,
   // which would pull every fixture and example file of the same name into the
   // map (see #20).
-  sourceGlobs: ['packages/*/src/**', 'actions/*/*.mjs'],
+  sourceGlobs: ['packages/*/src/**', 'benchmarks/src/**', 'actions/*/*.mjs'],
 
   /*
    * Tests whose coverage the recorder cannot see, named here as well as left to
