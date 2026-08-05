@@ -63,6 +63,13 @@ export default {
     'packages/cli/test/built-artifact.test.ts',
     'packages/core/test/coverage-observation.test.ts',
     'packages/core/test/inspector-observation.test.ts',
+    // Its subject is `actions/ci/action.yml`, which no coverage can ever credit
+    // it with: YAML is not executed, so no recording will ever attribute it to
+    // this test and no diff touching it can select this test through the map.
+    // It is selected today only because the entry credits nothing at all, and
+    // that stops being true the moment the file imports anything -- leaving the
+    // one test that guards action.yml skipped on the pull requests that edit it.
+    'actions/ci/test/action.test.ts',
   ],
 
   /*

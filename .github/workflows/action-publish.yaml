@@ -21,13 +21,18 @@ on:
         description: 'Version to publish, without the leading v (e.g. 1.0.0)'
         required: true
       latest:
-        description: 'Move the floating major tag (v1) to this release'
+        description: 'Move the floating major tag (v0) to this release. Ignored for a prerelease.'
         type: boolean
         default: true
 
 concurrency:
   group: action-publish
   cancel-in-progress: false
+
+# Nothing here writes to this repository: the mirror work uses the app token,
+# and the release is cut with it too.
+permissions:
+  contents: read
 
 jobs:
   publish:
@@ -94,17 +99,38 @@ jobs:
           major="${VERSION%%.*}"
 
           git clone --quiet "https://x-access-token:$TOKEN@github.com/$OWNER/$MIRROR.git" mirror
+          cd mirror
+
+          # Publish from `main` explicitly, whatever the mirror's default branch
+          # happens to be. A clone of a repository defaulting to `master` checks
+          # that out, and `push HEAD:main` would then publish from a branch the
+          # next run never sees: the second dispatch clones `master` again, which
+          # never received the first publish, and its push to `main` is rejected
+          # as a non-fast-forward. `-B` covers the empty-repository case too,
+          # where there is no `origin/main` and HEAD is unborn.
+          if git rev-parse --verify --quiet origin/main >/dev/null; then
+            git checkout -q -B main origin/main
+          else
+            git checkout -q -B main
+          fi
+
+          # Refuse a version that is already published, before anything is
+          # pushed. Discovering it at the tag would leave the mirror's `main`
+          # carrying a commit that no tag points at.
+          if git rev-parse --verify --quiet "refs/tags/v$VERSION" >/dev/null; then
+            echo "::error::v$VERSION is already published. Pick a version that is not taken."
+            exit 1
+          fi
 
           # Replace the published tree wholesale rather than copying over it, so
           # a file deleted here is deleted there. Everything except .git goes.
-          find mirror -mindepth 1 -maxdepth 1 ! -name .git -exec rm -rf {} +
-          cp -R actions/ci/. mirror/
-          cp LICENSE mirror/LICENSE
+          find . -mindepth 1 -maxdepth 1 ! -name .git -exec rm -rf {} +
+          cp -R ../actions/ci/. .
+          cp ../LICENSE LICENSE
           # The tests belong to this repository: they run against the CLI at
           # HEAD, which the mirror does not have.
-          rm -rf mirror/test
+          rm -rf test
 
-          cd mirror
           git config user.name 'github-actions[bot]'
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
           git add -A
@@ -116,12 +142,14 @@ jobs:
           Published from waviisoft/covsel@$SOURCE_SHA. Do not edit here."
           fi
 
-          git tag -f "v$VERSION"
-          git push --quiet origin HEAD:main
+          git tag "v$VERSION"
+          git push --quiet origin main
           git push --quiet origin "refs/tags/v$VERSION"
-          # The floating major tag is what `@v1` resolves to, so moving it is
-          # what makes a release reach anyone who did not pin.
-          if [ "$LATEST" = 'true' ]; then
+          # The floating major tag is what `@v0` resolves to, so moving it is
+          # what makes a release reach anyone who did not pin. Never for a
+          # prerelease: `1.0.0-rc.1` has a major of 1, and moving `v1` to it
+          # would hand every consumer on the floating tag an untested build.
+          if [ "$LATEST" = 'true' ] && ! printf '%s' "$VERSION" | grep -q -- '-'; then
             git tag -f "v$major"
             git push --quiet --force origin "refs/tags/v$major"
           fi

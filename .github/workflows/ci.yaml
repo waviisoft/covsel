@@ -151,12 +151,26 @@ jobs:
       # The run step, with nothing to select from, so the full-run path is the one
       # exercised: covsel hands the runner its own command, unfiltered.
       - name: Run the tests through the action, with no map to select from
+        id: full
         uses: ./actions/ci
         with:
           command: npx vitest run actions/ci/test/report.test.ts
           covsel-command: node packages/cli/dist/bin.js
           cache-key-prefix: covsel-action-e2e-never-populated-
           summary: 'false'
+
+      # Without this the step above proves nothing: its only signal is an exit
+      # code, and selecting against a map left behind by an earlier step would
+      # pass just as quietly -- which is the defect that made it worth writing.
+      - name: Check that really was the full-run path
+        env:
+          FULL_RUN: ${{ steps.full.outputs.full-run }}
+        run: |
+          set -euo pipefail
+          test "$FULL_RUN" = 'true' || {
+            echo "::error::the no-map invocation selected instead of running in full (full-run=$FULL_RUN)"
+            exit 1
+          }
 
   docs:
     name: Build docs

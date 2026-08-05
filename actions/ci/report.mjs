@@ -137,8 +137,11 @@ export function summary(facts) {
     );
   }
   if (facts.mode === 'select') {
+    // `unknown`, not 0, for the same reason `headline` says so: the two
+    // renderings of one fact must not be able to disagree about whether a
+    // narrowing was measured or merely absent.
     lines.push(
-      `| Selected | ${facts.fullRun ? 'everything' : (facts.selectedCount ?? 0)} |`,
+      `| Selected | ${facts.fullRun ? 'everything' : (facts.selectedCount ?? 'unknown')} |`,
     );
     lines.push(`| Discovered | ${facts.discoveredCount ?? 'unknown'} |`);
   }
@@ -203,7 +206,10 @@ function readJson(path) {
 }
 
 export function main() {
-  const dir = process.argv[2] ?? process.env['RUNNER_TEMP'] ?? '.';
+  // The directory the action made for this invocation, and no fallback to
+  // $RUNNER_TEMP: that is shared by every step in the job, which is exactly the
+  // sharing the per-invocation directory exists to avoid.
+  const dir = process.argv[2] ?? '.';
   const mode = process.env['COVSEL_MODE'];
   const affected = readJson(join(dir, 'covsel-affected.json'));
 
