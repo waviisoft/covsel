@@ -57,10 +57,17 @@ export default {
   /*
    * A change to any of these forces a full run.
    *
-   * The first four are drawn from covsel's defaults, restated because setting
+   * The first group is drawn from covsel's defaults, restated because setting
    * the field replaces them rather than adding to them; the defaults name
-   * further lockfiles, for package managers this repository does not use. The
-   * rest are this repository's own: the vitest config decides what the suite
+   * further lockfiles, for package managers this repository does not use. That
+   * replacement is a trap worth naming: a default gained upstream reaches every
+   * project except the ones that wrote a list of their own, so this repository
+   * has to be told about covsel's. `.npmrc` and `.pnpmfile.cjs` are the newest
+   * of them, and neither file exists here yet — which is the point. They decide
+   * how the lockfile becomes a `node_modules`, so adding one would change what a
+   * source's imports resolve to while moving nothing covsel records.
+   *
+   * The rest are this repository's own: the vitest config decides what the suite
    * even is, and the shims and the CLI entry point run in child processes the
    * recorder cannot observe — so a change to one of them cannot be attributed to
    * any test, and the only sound answer is to run everything.
@@ -76,8 +83,10 @@ export default {
   sentinels: [
     'package.json',
     'pnpm-lock.yaml',
-    'tsconfig*.json',
     'yarn.lock',
+    'tsconfig*.json',
+    '.npmrc',
+    '.pnpmfile.cjs',
     'vitest.config.ts',
     'packages/*/src/shim.{js,mjs}',
     'packages/cli/src/bin.ts',
