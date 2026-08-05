@@ -232,6 +232,15 @@ Selection needs no configuration once an adapter is installed. To refine, add a 
 }
 ```
 
+`sourceGlobs` means the paths it says, relative to the repo root: `"index.js"`
+is the entry point, not every `index.js` in the tree. Write `"**/index.js"` for
+the recursive reading. `testGlobs`, `sentinels`, and `alwaysRun` are matched more
+loosely — a slash-less pattern there also matches a path's basename at any depth,
+so `"package.json"` covers a workspace's own manifest and `"*.test.js"` finds
+nested tests. The asymmetry is deliberate: matching more test files or more
+sentinels runs more tests, while matching more _sources_ only bloats the map with
+files nobody meant to describe.
+
 Any change matching `sentinels` forces a full run. A change to this file itself
 forces one when it moves a value covsel reads — a reworded comment or a
 reformatted array does not, because the map records the values it was recorded
