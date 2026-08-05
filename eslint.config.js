@@ -5,8 +5,17 @@ export default tseslint.config(
   // `.claude/worktrees/` holds a whole checkout of this repository while an
   // agent is working in one. Left in scope, its copy of tsconfig.json gives the
   // TypeScript parser a second candidate root and every file fails to parse.
+  // `benchmarks/.work/` holds clones of other people's repositories for the
+  // benchmark harness to measure. Their code is not ours to lint, and their
+  // tsconfig would give the TypeScript parser a second candidate root.
   {
-    ignores: ['**/dist/**', '**/node_modules/**', 'docs/**', '.claude/worktrees/**'],
+    ignores: [
+      '**/dist/**',
+      '**/node_modules/**',
+      'docs/**',
+      '.claude/worktrees/**',
+      'benchmarks/.work/**',
+    ],
   },
   js.configs.recommended,
   ...tseslint.configs.recommended,

@@ -46,7 +46,7 @@ export const workspaceAlias: Record<string, string> = {
 export default defineConfig({
   resolve: { alias: workspaceAlias },
   test: {
-    include: ['packages/*/test/**/*.test.ts'],
+    include: ['packages/*/test/**/*.test.ts', 'benchmarks/test/**/*.test.ts'],
     exclude: [...configDefaults.exclude, ...BROWSER_TESTS],
   },
 });

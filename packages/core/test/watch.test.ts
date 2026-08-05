@@ -68,10 +68,15 @@ async function quiesce(): Promise<void> {
   await new Promise((r) => setTimeout(r, DEBOUNCE * 8));
 }
 
-const NOTHING: AffectedResult = { fullRun: false, tests: [], selected: [] };
+const NOTHING: AffectedResult = {
+  fullRun: false,
+  tests: [],
+  selected: [],
+  discovered: 0,
+};
 
 function selectedFile(file: string): AffectedResult {
-  return { fullRun: false, tests: [file], selected: [{ file }] };
+  return { fullRun: false, tests: [file], selected: [{ file }], discovered: 1 };
 }
 
 interface Harness {
