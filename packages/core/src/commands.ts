@@ -676,6 +676,14 @@ export interface AffectedResult {
    * selection; collapsing them to their files yields exactly `tests`.
    */
   selected: TestId[];
+  /**
+   * Test files discovery found, whether or not they were selected. It is the
+   * denominator selection is only meaningful against: one test chosen out of two
+   * and one chosen out of two hundred are the same `tests` list and completely
+   * different news, and a glob that stopped matching looks like a precise
+   * selection without it.
+   */
+  discovered: number;
 }
 
 export interface SelectInit {
@@ -756,6 +764,7 @@ export async function selectAffected(init: SelectInit): Promise<AffectedResult> 
     reason,
     tests: testFiles,
     selected: testFiles.map((file) => ({ file })),
+    discovered: testFiles.length,
   });
 
   // Discovery found nothing to choose between, so there is no selection to make
@@ -833,7 +842,7 @@ export async function selectAffected(init: SelectInit): Promise<AffectedResult> 
   sortUnits(selected);
 
   const tests = new Set<string>(selected.map((t) => t.file));
-  return { fullRun: false, tests: [...tests], selected };
+  return { fullRun: false, tests: [...tests], selected, discovered: testFiles.length };
 }
 
 /**
@@ -992,6 +1001,13 @@ export interface StatusResult {
    */
   discoveredTestCount?: number;
   recordedAt?: string;
+  /**
+   * The commit the map records, which is the tree selection measures change
+   * from. Absent when the map records none — recorded from a dirty tree, or
+   * merged from shards that disagreed — and then the next selection is a full
+   * run, since the window since recording is unknowable.
+   */
+  commit?: string;
   ageMs?: number;
   granularity?: string;
   /** Globs the recording was able to observe execution within. */
@@ -1131,6 +1147,7 @@ export async function computeStatus(init: StatusInit): Promise<StatusResult> {
     mapState: 'usable',
     discoveredTestCount: discovered.length,
     recordedAt: map.recordedAt,
+    ...(map.commit !== undefined ? { commit: map.commit } : {}),
     ageMs: now - Date.parse(map.recordedAt),
     granularity: map.granularity,
     observed: [...map.observed],

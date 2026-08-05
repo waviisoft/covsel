@@ -35,6 +35,7 @@ import {
   runAffected,
   runAffectedSelection,
   selectAffected,
+  type StatusResult,
   type TestId,
   watchAffected,
   type WatchEvent,
@@ -56,15 +57,16 @@ Usage:
   covsel init [--adapter <name>] [--auto-approve] [--no-install]
                                                    Set covsel up for this project
   covsel record [--adapter <name>] -- <command>   Run the suite and build the map
-  covsel affected [--since <ref>] [--format files] Print tests the diff can affect
+  covsel affected [--since <ref>] [--format <fmt>] Print tests the diff can affect
   covsel run -- <command>                          Run only the affected tests
   covsel watch -- <command>                        Rerun affected tests as you edit
-  covsel status                                    Show map age, size, and next action
+  covsel status [--format <fmt>]                   Show map age, size, and next action
   covsel explain <path> [--all]                    Show what covers a file, or what
                                                    a test covers
   covsel merge <maps...> [--out <file>]            Merge CI shard maps into one
   covsel publish [--archive <dir>] [--keep <n>]    Archive the map under its commit
   covsel fetch [--archive <dir>] [--require]       Install the best archived map
+               [--format <fmt>]
   covsel --help                                    Show this help
   covsel --version                                 Show version
 
@@ -73,6 +75,9 @@ Options:
                      (default: the config's adapter, else '${DEFAULT_ADAPTER}';
                      adapters install separately)
   --since <ref>      Diff against <ref> instead of the commit the map records
+  --format <fmt>     affected/status/fetch: 'json' for one object on stdout, for
+                     a script to read (default: 'files' for affected, 'text' for
+                     the rest)
   --auto-approve     init: carry the plan out without asking (required with no
                      terminal, since init changes the project)
   --no-install       init: plan to configure without installing, and print the
@@ -123,6 +128,40 @@ function flag(opts: string[], name: string): string | undefined {
 /** True when a bare `--name` switch is present. */
 function hasFlag(opts: string[], name: string): boolean {
   return opts.includes(`--${name}`);
+}
+
+/**
+ * Read `--format` for a command that can answer as prose or as data. `human` is
+ * what this command calls its own output — `affected` prints a list of files,
+ * the rest print a report — so the error names the two formats that command
+ * actually has rather than a vocabulary shared with commands it is not.
+ *
+ * `undefined` means the value was rejected and said so; the caller exits 1.
+ */
+function readFormat(
+  cmd: string,
+  opts: string[],
+  human: string,
+): 'human' | 'json' | undefined {
+  const format = flag(opts, 'format') ?? human;
+  if (format === human) return 'human';
+  if (format === 'json') return 'json';
+  err(
+    `covsel ${cmd}: unsupported --format '${format}' (expected '${human}' or 'json')\n`,
+  );
+  return undefined;
+}
+
+/**
+ * Write the machine-readable answer: one object, one line, on stdout.
+ *
+ * One line so a caller can read it without a JSON parser at all, and stdout
+ * alone so `covsel status --format json | jq` never has to strip anything first.
+ * Everything a human would want alongside it — what was skipped, why a run is
+ * full — keeps its place on stderr, where it does not have to be valid anything.
+ */
+function json(value: unknown): void {
+  out(`${JSON.stringify(value)}\n`);
 }
 
 /**
@@ -686,13 +725,8 @@ async function cmdRecord(argv: string[]): Promise<number> {
 }
 
 async function cmdAffected(argv: string[]): Promise<number> {
-  const format = flag(argv, 'format') ?? 'files';
-  if (format !== 'files') {
-    err(
-      `covsel affected: unsupported --format '${format}' (only 'files' is available)\n`,
-    );
-    return 1;
-  }
+  const format = readFormat('affected', argv, 'files');
+  if (format === undefined) return 1;
   const cwd = process.cwd();
   const adapter = await resolveAdapter('affected', argv, cwd);
   if (!adapter) return 1;
@@ -703,6 +737,21 @@ async function cmdAffected(argv: string[]): Promise<number> {
   // The same list the adapter would append to the runner's command line, so
   // `<runner> $(covsel affected)` and `covsel run` agree by construction.
   const files = adapter.formatSelection(result.selected);
+  if (format === 'json') {
+    // `files` is the adapter's runner-native rendering and `tests` the plain
+    // test files behind it. They differ wherever selection is per-test, and a
+    // caller sharding the suite needs the files while one running the command
+    // needs the rendering — so both are reported rather than one guessed at.
+    json({
+      fullRun: result.fullRun,
+      ...(result.reason !== undefined ? { reason: result.reason } : {}),
+      files,
+      tests: result.tests,
+      selected: result.selected,
+      discovered: result.discovered,
+    });
+    return 0;
+  }
   if (files.length > 0) out(`${files.join('\n')}\n`);
   return 0;
 }
@@ -850,10 +899,57 @@ async function cmdWatch(argv: string[]): Promise<number> {
   }
 }
 
-async function cmdStatus(): Promise<number> {
+/**
+ * The status report as data. Built field by field rather than handed core's
+ * result straight out, so what covsel promises a script is decided here and
+ * changes only when someone means to change it.
+ *
+ * Absent means unknown, never zero: a map covsel could not read has no entry
+ * count, and a key reading 0 would describe an empty map instead of an
+ * unreadable one.
+ */
+function statusJson(s: StatusResult): unknown {
+  return {
+    mapPath: s.mapPath,
+    mapState: s.mapState,
+    ...(s.unusableReason !== undefined ? { unusableReason: s.unusableReason } : {}),
+    ...(s.discoveredTestCount !== undefined
+      ? { discoveredTestCount: s.discoveredTestCount }
+      : {}),
+    ...(s.recordedAt !== undefined ? { recordedAt: s.recordedAt } : {}),
+    ...(s.commit !== undefined ? { commit: s.commit } : {}),
+    ...(s.ageMs !== undefined ? { ageMs: s.ageMs } : {}),
+    ...(s.granularity !== undefined ? { granularity: s.granularity } : {}),
+    ...(s.observed !== undefined ? { observed: s.observed } : {}),
+    ...(s.entryCount !== undefined ? { entryCount: s.entryCount } : {}),
+    ...(s.unmeasuredEntryCount !== undefined
+      ? { unmeasuredEntryCount: s.unmeasuredEntryCount }
+      : {}),
+    ...(s.coveredFileCount !== undefined ? { coveredFileCount: s.coveredFileCount } : {}),
+    ...(s.coveredBlockCount !== undefined
+      ? { coveredBlockCount: s.coveredBlockCount }
+      : {}),
+    changedSentinels: s.changedSentinels,
+    nextIsFullRun: s.nextIsFullRun,
+    ...(s.nextFullRunReason !== undefined
+      ? { nextFullRunReason: s.nextFullRunReason }
+      : {}),
+  };
+}
+
+async function cmdStatus(argv: string[]): Promise<number> {
+  const format = readFormat('status', argv, 'text');
+  if (format === undefined) return 1;
   const cwd = process.cwd();
   const config = await loadConfig(cwd);
   const s = await computeStatus({ cwd, config });
+  // The report *is* this command's stdout, unlike the other two where the human
+  // lines go to stderr, so here the object replaces it rather than joining it —
+  // stdout cannot carry both and still be something a script can read.
+  if (format === 'json') {
+    json(statusJson(s));
+    return 0;
+  }
   out(`map:        ${s.mapPath}\n`);
   // A file that is there and cannot be used is neither "yes" nor "no": reported
   // as "no" it sends its reader looking for a map that is sitting at the path
@@ -878,6 +974,12 @@ async function cmdStatus(): Promise<number> {
     const ageMin = s.ageMs !== undefined ? Math.round(s.ageMs / 60000) : undefined;
     out(
       `recorded:   ${s.recordedAt ?? 'unknown'}${ageMin !== undefined ? ` (${ageMin}m ago)` : ''}\n`,
+    );
+    // The tree selection measures change from, which is what makes a restored
+    // map mean anything. A map recording none is why the `next:` line below says
+    // full run, and reading the two together is how that is diagnosed.
+    out(
+      `commit:     ${s.commit === undefined ? 'none recorded' : s.commit.slice(0, 12)}\n`,
     );
     out(`granularity:${s.granularity ?? 'unknown'}\n`);
     out(
@@ -1242,6 +1344,8 @@ async function cmdPublish(argv: string[]): Promise<number> {
 }
 
 async function cmdFetch(argv: string[]): Promise<number> {
+  const format = readFormat('fetch', argv, 'text');
+  if (format === undefined) return 1;
   const cwd = process.cwd();
   const config = await loadConfig(cwd);
   const dir = archiveDir(argv, cwd, config);
@@ -1256,6 +1360,22 @@ async function cmdFetch(argv: string[]): Promise<number> {
   // to be used, so the reason it was not is worth the line in a CI log.
   for (const skipped of result.skipped) {
     err(`covsel fetch: skipped ${skipped.commit.slice(0, 12)} -- ${skipped.reason}\n`);
+  }
+  // Additive, not instead of: everything this command says already goes to
+  // stderr, so a job reading the object keeps the log a human reads beside it.
+  if (format === 'json') {
+    json(
+      result.ok
+        ? {
+            ok: true,
+            commit: result.commit,
+            how: result.how,
+            recordedAt: result.recordedAt,
+            mapPath: result.mapPath,
+            skipped: result.skipped,
+          }
+        : { ok: false, reason: result.reason, skipped: result.skipped },
+    );
   }
 
   if (!result.ok) {
@@ -1305,7 +1425,7 @@ export async function main(argv: string[] = process.argv.slice(2)): Promise<numb
     case 'watch':
       return cmdWatch(rest);
     case 'status':
-      return cmdStatus();
+      return cmdStatus(rest);
     case 'explain':
       return cmdExplain(rest);
     case 'merge':

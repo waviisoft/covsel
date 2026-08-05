@@ -153,6 +153,89 @@ rather know asks with `--require`, which exits non-zero instead.
 one — that only happens on a developer's machine, where the local recording is
 the better map. `--force` overrides it.
 
+## Reading covsel's answer from a script
+
+The recipes above are shell: a step runs, it either passes or it does not. A job
+that wants to _report_ what covsel decided — a step output, a job summary, a
+shard matrix — needs the answer as data rather than as prose, and scraping the
+log for it would break the first time a sentence is reworded.
+
+`affected`, `status`, and `fetch` take `--format json` and write one object on
+one line to stdout:
+
+```bash
+covsel affected --format json
+```
+
+```json
+{
+  "fullRun": false,
+  "files": ["test/math.test.js -t adds"],
+  "tests": ["test/math.test.js"],
+  "selected": [{ "file": "test/math.test.js", "name": "adds" }],
+  "discovered": 37
+}
+```
+
+`files` is what the adapter would append to the runner's command line, so it is
+exactly what `covsel affected` prints without the flag. `tests` is the plain test
+files behind it — the two differ wherever selection is per-test, and a job
+splitting the suite across shards wants the second. `discovered` is the
+denominator: one test selected out of two and one out of two hundred are the same
+`tests` list and completely different news, and a `testGlobs` that quietly
+stopped matching looks like a very precise selection without it.
+
+A full run says so, and says why, rather than listing every file as though it had
+chosen them:
+
+```json
+{ "fullRun": true, "reason": "sentinel changed since the map was recorded: package.json", ... }
+```
+
+`status --format json` carries the same facts its report does, including the
+commit the map records — the one selection measures change from, so a job
+reporting anything about the map should report that:
+
+```json
+{
+  "mapPath": "/repo/.covsel/map.json",
+  "mapState": "usable",
+  "commit": "9c81de4a2f60...",
+  "recordedAt": "2026-07-28T04:11:02.884Z",
+  "ageMs": 741000,
+  "granularity": "block",
+  "entryCount": 37,
+  "discoveredTestCount": 37,
+  "nextIsFullRun": false
+}
+```
+
+Absent means unknown, never zero: a map covsel could not read has no
+`entryCount`, and a key reading `0` would describe an empty map rather than an
+unreadable one. `mapState` tells those two apart — `usable`, `absent`, or
+`unusable` with an `unusableReason`.
+
+`fetch --format json` says which map it installed and, just as usefully, which it
+passed over:
+
+```json
+{
+  "ok": true,
+  "commit": "9c81de4a2f60...",
+  "how": "ancestor",
+  "recordedAt": "2026-07-28T04:11:02.884Z",
+  "mapPath": "/repo/.covsel/map.json",
+  "skipped": [{ "commit": "3f2a1c9e8b7d...", "reason": "not in this checkout" }]
+}
+```
+
+Two things the flag deliberately does not change. **Exit codes are the same** —
+`fetch` finding nothing is still `ok: false` and still exits 0, because the tests
+still have to run, and `--require` still turns that into a failure. And **the
+human lines stay on stderr**, where `affected` and `fetch` already put them, so a
+job piping stdout into `jq` keeps the log a person reads beside it. `status` is
+the exception, since its report _is_ its stdout: there the object replaces it.
+
 ## covsel's own CI does this
 
 The workflows in this repository are the worked example:
