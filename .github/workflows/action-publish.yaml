@@ -1,0 +1,158 @@
+name: Publish the action
+
+# The action's source lives here, in `actions/ci`, so its end-to-end test runs
+# against `packages/cli` at HEAD and a change to covsel's JSON output goes red on
+# the pull request that made it. It is *consumed* from waviisoft/covsel-action,
+# because the Marketplace wants `action.yml` at a repository root and this
+# repository's tags belong to changesets.
+#
+# So this workflow copies `actions/ci` into that repository, tags the release,
+# moves the floating major tag, and cuts a GitHub Release there -- the release
+# being what a Marketplace listing hangs off.
+#
+# Dispatch-only. Whether an action release is cut per CLI release or on its own
+# cadence is not settled, and until it is, publishing is a deliberate act rather
+# than a consequence of merging.
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Version to publish, without the leading v (e.g. 1.0.0)'
+        required: true
+      latest:
+        description: 'Move the floating major tag (v1) to this release'
+        type: boolean
+        default: true
+
+concurrency:
+  group: action-publish
+  cancel-in-progress: false
+
+jobs:
+  publish:
+    name: Publish to waviisoft/covsel-action
+    runs-on: ubuntu-latest
+    env:
+      # Read once, so every guard below asks the same question. Publishing is
+      # skipped rather than failed when the app is not configured: a dispatch on
+      # a fork, or before the secrets exist, should not go red for it.
+      APP_ID: ${{ secrets.COVSEL_ACTION_APP_ID }}
+      MIRROR: covsel-action
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Check the version
+        env:
+          VERSION: ${{ inputs.version }}
+        run: |
+          set -euo pipefail
+          if ! printf '%s' "$VERSION" | grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$'; then
+            echo "::error::'$VERSION' is not a semantic version. Publish 1.0.0, not v1.0.0."
+            exit 1
+          fi
+
+      # The action must be published in a state that runs, and the only check
+      # that proves it is the one the pull request already runs. Repeated here
+      # because a dispatch can be aimed at any ref.
+      - uses: pnpm/action-setup@v6
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 22
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm vitest run actions
+
+      - name: Say why nothing was published
+        if: env.APP_ID == ''
+        run: |
+          echo "::warning::COVSEL_ACTION_APP_ID is not set, so nothing was published. Configure the GitHub App and its private key first."
+
+      - name: Mint a token for the mirror
+        id: token
+        if: env.APP_ID != ''
+        uses: actions/create-github-app-token@v2
+        with:
+          app-id: ${{ secrets.COVSEL_ACTION_APP_ID }}
+          private-key: ${{ secrets.COVSEL_ACTION_PRIVATE_KEY }}
+          owner: ${{ github.repository_owner }}
+          repositories: covsel-action
+
+      - name: Publish the action and move the tags
+        if: env.APP_ID != ''
+        env:
+          TOKEN: ${{ steps.token.outputs.token }}
+          VERSION: ${{ inputs.version }}
+          LATEST: ${{ inputs.latest }}
+          OWNER: ${{ github.repository_owner }}
+          SOURCE_SHA: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          major="${VERSION%%.*}"
+
+          git clone --quiet "https://x-access-token:$TOKEN@github.com/$OWNER/$MIRROR.git" mirror
+
+          # Replace the published tree wholesale rather than copying over it, so
+          # a file deleted here is deleted there. Everything except .git goes.
+          find mirror -mindepth 1 -maxdepth 1 ! -name .git -exec rm -rf {} +
+          cp -R actions/ci/. mirror/
+          cp LICENSE mirror/LICENSE
+          # The tests belong to this repository: they run against the CLI at
+          # HEAD, which the mirror does not have.
+          rm -rf mirror/test
+
+          cd mirror
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add -A
+          if git diff --cached --quiet; then
+            echo "No change to the published action; tagging the existing tree."
+          else
+            git commit -q -m "covsel-action v$VERSION
+
+          Published from waviisoft/covsel@$SOURCE_SHA. Do not edit here."
+          fi
+
+          git tag -f "v$VERSION"
+          git push --quiet origin HEAD:main
+          git push --quiet origin "refs/tags/v$VERSION"
+          # The floating major tag is what `@v1` resolves to, so moving it is
+          # what makes a release reach anyone who did not pin.
+          if [ "$LATEST" = 'true' ]; then
+            git tag -f "v$major"
+            git push --quiet --force origin "refs/tags/v$major"
+          fi
+
+      - name: Cut the release the Marketplace listing hangs off
+        if: env.APP_ID != ''
+        env:
+          GH_TOKEN: ${{ steps.token.outputs.token }}
+          VERSION: ${{ inputs.version }}
+          OWNER: ${{ github.repository_owner }}
+        run: |
+          set -euo pipefail
+          if gh release view "v$VERSION" --repo "$OWNER/$MIRROR" >/dev/null 2>&1; then
+            echo "::notice::Release v$VERSION already exists; leaving it alone."
+            exit 0
+          fi
+          gh release create "v$VERSION" \
+            --repo "$OWNER/$MIRROR" \
+            --title "v$VERSION" \
+            --notes "Published from [waviisoft/covsel@${GITHUB_SHA:0:12}](https://github.com/$OWNER/covsel/commit/$GITHUB_SHA).
+
+          See the [covsel CI guide](https://waviisoft.github.io/covsel/guide/ci) for what this action does."
+
+      - name: Say what to do next
+        if: env.APP_ID != ''
+        env:
+          VERSION: ${{ inputs.version }}
+          OWNER: ${{ github.repository_owner }}
+        run: |
+          {
+            echo "### Published covsel-action v$VERSION"
+            echo
+            echo "- [Release](https://github.com/$OWNER/$MIRROR/releases/tag/v$VERSION)"
+            echo
+            echo "A first release also needs listing by hand: open the release and choose"
+            echo "**Publish this Action to the GitHub Marketplace**. Later releases inherit the listing."
+          } >> "$GITHUB_STEP_SUMMARY"

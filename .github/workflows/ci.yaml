@@ -89,6 +89,66 @@ jobs:
       - name: Run the affected tests
         run: node packages/cli/dist/bin.js run -- npx vitest run
 
+  action:
+    name: The action drives covsel end to end
+    runs-on: ubuntu-latest
+    # The action's contract is the CLI's JSON output, which is why it is
+    # developed here rather than in the repository it ships from: this job runs
+    # it against `packages/cli` at HEAD, so a change to a JSON shape goes red on
+    # the pull request that made it instead of reaching a user first.
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+      - uses: pnpm/action-setup@v6
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 22
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm build
+
+      # Against the real archive, so this exercises what a pull request in any
+      # repository hits: a map to fetch, or nothing to fetch and a full run.
+      # Nothing is run -- the `select` job above already runs the selection, and
+      # the `test` job runs the suite.
+      - name: Select, and report what it would have run
+        id: selection
+        uses: ./actions/ci
+        with:
+          command: npx vitest run
+          covsel-command: node packages/cli/dist/bin.js
+          dry-run: true
+
+      - name: Check the action answered with facts rather than blanks
+        env:
+          FULL_RUN: ${{ steps.selection.outputs.full-run }}
+          DISCOVERED: ${{ steps.selection.outputs.discovered-count }}
+          AFFECTED: ${{ steps.selection.outputs.affected }}
+          MAP_STATE: ${{ steps.selection.outputs.map-state }}
+        run: |
+          set -euo pipefail
+          echo "full-run=$FULL_RUN discovered=$DISCOVERED map=$MAP_STATE"
+          test "$FULL_RUN" = 'true' -o "$FULL_RUN" = 'false'
+          test "$DISCOVERED" -gt 0
+          node -e 'JSON.parse(process.env.AFFECTED)'
+          # A full run has to enumerate what it will run. An empty list here is
+          # the shape that makes a consumer pipe nothing into its runner and call
+          # it a pass, so it is checked rather than assumed.
+          if [ "$FULL_RUN" = 'true' ]; then
+            node -e 'if (JSON.parse(process.env.AFFECTED).length === 0) { throw new Error("a full run reported no test files") }'
+          fi
+
+      # The run step, on a deliberately empty archive so the full-run path is the
+      # one exercised: covsel hands the runner its own command, unfiltered.
+      - name: Run the tests through the action, with no map to select from
+        uses: ./actions/ci
+        with:
+          command: npx vitest run actions/ci/test/report.test.ts
+          covsel-command: node packages/cli/dist/bin.js
+          cache-key-prefix: covsel-action-e2e-never-populated-
+          summary: 'false'
+
   docs:
     name: Build docs
     runs-on: ubuntu-latest

@@ -1,0 +1,259 @@
+name: 'covsel'
+description: 'Run only the tests your diff can affect, and record the map that makes that possible.'
+author: 'WAVIISoft, LLC'
+
+branding:
+  icon: 'filter'
+  color: 'purple'
+
+# The CI map lifecycle, as one step per side of it. `select` fetches the best
+# archived map and runs the tests a diff can affect; `record` records the suite
+# and publishes the map a later `select` will fetch. Everything the CI guide
+# spells out -- restoring the archive before publishing into it, the cache key
+# and its prefix, the order of fetch/status/run -- lives here rather than in
+# prose a caller has to copy correctly.
+inputs:
+  mode:
+    description: 'select (on a pull request) or record (on the default branch)'
+    required: false
+    default: 'select'
+  command:
+    description: 'The runner command, e.g. "npm test". Split on whitespace.'
+    required: true
+  adapter:
+    description: "The covsel adapter to use. Defaults to the one covsel init wrote to your config, else 'generic'."
+    required: false
+    default: ''
+  covsel-version:
+    description: >-
+      The covsel to invoke, as an npm version. Left empty, the action uses the
+      covsel your project installed -- the version whose map format matches your
+      recordings, which is what you want whenever the project has one. Set this
+      to pin a version for a project that does not install covsel itself.
+    required: false
+    default: ''
+  covsel-command:
+    description: >-
+      Override the covsel executable entirely, e.g. "node packages/cli/dist/bin.js".
+      For testing this action against a checkout of covsel itself; projects want
+      covsel-version instead.
+    required: false
+    default: ''
+  working-directory:
+    description: 'Directory to run covsel in.'
+    required: false
+    default: '.'
+  archive-path:
+    description: 'The archive directory, carried between runs by the Actions cache.'
+    required: false
+    default: '.covsel/archive'
+  cache-key-prefix:
+    description: 'Prefix for the archive cache key. Change it to invalidate every archive at once.'
+    required: false
+    default: 'covsel-archive-'
+  require-map:
+    description: >-
+      Fail when no archived map can be used, instead of falling open to a full
+      run. Off by default: a first pull request against an empty cache must not
+      go red for having nothing to select from.
+    required: false
+    default: 'false'
+  dry-run:
+    description: >-
+      select only. Report what would have been selected and run nothing, so the
+      suite you already trust still gates the merge while you watch covsel agree
+      with it.
+    required: false
+    default: 'false'
+  keep:
+    description: 'record only. Archived maps to keep, oldest pruned first.'
+    required: false
+    default: ''
+  summary:
+    description: 'Write a job summary describing the selection.'
+    required: false
+    default: 'true'
+
+outputs:
+  full-run:
+    description: >-
+      'true' when covsel could not narrow and every test runs. Branch on this,
+      never on the length of `affected`: a full run enumerates every discovered
+      test file, and treating that list as a selection to filter by is the one
+      mistake that runs nothing on the runs that need everything.
+    value: ${{ steps.report.outputs.full-run }}
+  full-run-reason:
+    description: 'Why the run is a full one, when it is.'
+    value: ${{ steps.report.outputs.full-run-reason }}
+  selected-count:
+    description: 'Test files selected.'
+    value: ${{ steps.report.outputs.selected-count }}
+  discovered-count:
+    description: 'Test files discovery found. The denominator selected-count only means anything against.'
+    value: ${{ steps.report.outputs.discovered-count }}
+  affected:
+    description: 'The selected test files as a JSON array, for fromJSON() into a shard matrix.'
+    value: ${{ steps.report.outputs.affected }}
+  map-state:
+    description: "'usable', 'absent', or 'unusable'."
+    value: ${{ steps.report.outputs.map-state }}
+  map-commit:
+    description: 'The commit the map records, which is the tree selection measured change from.'
+    value: ${{ steps.report.outputs.map-commit }}
+  map-age-ms:
+    description: 'How old the map is, in milliseconds.'
+    value: ${{ steps.report.outputs.map-age-ms }}
+
+runs:
+  using: 'composite'
+  steps:
+    - name: Check the inputs and the checkout
+      id: setup
+      shell: bash
+      working-directory: ${{ inputs.working-directory }}
+      env:
+        MODE: ${{ inputs.mode }}
+        COVSEL_VERSION: ${{ inputs.covsel-version }}
+        COVSEL_COMMAND: ${{ inputs.covsel-command }}
+        ADAPTER: ${{ inputs.adapter }}
+      run: |
+        set -euo pipefail
+        if [ "$MODE" != 'select' ] && [ "$MODE" != 'record' ]; then
+          echo "::error::covsel-action: mode must be 'select' or 'record', not '$MODE'"
+          exit 1
+        fi
+
+        # A shallow checkout is the commonest way to get quietly worse selection:
+        # the map records a commit the checkout does not contain, so covsel falls
+        # open to a full run and the job still passes. Warning rather than
+        # failing, because a full run is the safe outcome and this is a
+        # configuration to fix, not a reason to go red.
+        if [ "$(git rev-parse --is-shallow-repository 2>/dev/null || echo unknown)" = 'true' ]; then
+          echo "::warning::covsel-action: this is a shallow checkout, so covsel will not find the commit its map records and every run will be a full one. Set 'fetch-depth: 0' on actions/checkout."
+        fi
+
+        if [ -n "$COVSEL_COMMAND" ]; then
+          echo "covsel=$COVSEL_COMMAND" >> "$GITHUB_OUTPUT"
+        elif [ -n "$COVSEL_VERSION" ]; then
+          echo "covsel=npx --yes covsel@$COVSEL_VERSION" >> "$GITHUB_OUTPUT"
+        else
+          echo "covsel=npx covsel" >> "$GITHUB_OUTPUT"
+        fi
+
+        if [ -n "$ADAPTER" ]; then
+          echo "adapter=--adapter $ADAPTER" >> "$GITHUB_OUTPUT"
+        else
+          echo "adapter=" >> "$GITHUB_OUTPUT"
+        fi
+
+    # Restored in both modes, and in `record` that is the point: publishing into
+    # an archive that was not restored first leaves an archive of exactly one
+    # map, and a pull request branched before the latest push then finds nothing
+    # it can diff from.
+    - name: Restore the map archive
+      uses: actions/cache/restore@v4
+      with:
+        path: ${{ inputs.working-directory }}/${{ inputs.archive-path }}
+        key: ${{ inputs.cache-key-prefix }}${{ github.sha }}
+        restore-keys: ${{ inputs.cache-key-prefix }}
+
+    - name: Fetch the map this checkout can measure change from
+      if: inputs.mode == 'select'
+      shell: bash
+      working-directory: ${{ inputs.working-directory }}
+      env:
+        COVSEL: ${{ steps.setup.outputs.covsel }}
+        ARCHIVE: ${{ inputs.archive-path }}
+        REQUIRE: ${{ inputs.require-map }}
+      run: |
+        set -euo pipefail
+        require=''
+        if [ "$REQUIRE" = 'true' ]; then require='--require'; fi
+        # Unquoted on purpose: $COVSEL is a command line, not a single word.
+        $COVSEL fetch --archive "$ARCHIVE" --format json $require \
+          > "$RUNNER_TEMP/covsel-fetch.json"
+
+    - name: Record the suite
+      if: inputs.mode == 'record'
+      shell: bash
+      working-directory: ${{ inputs.working-directory }}
+      env:
+        COVSEL: ${{ steps.setup.outputs.covsel }}
+        ADAPTER: ${{ steps.setup.outputs.adapter }}
+        COMMAND: ${{ inputs.command }}
+      run: |
+        set -euo pipefail
+        $COVSEL record $ADAPTER -- $COMMAND
+
+    - name: Publish the map under this commit
+      if: inputs.mode == 'record'
+      shell: bash
+      working-directory: ${{ inputs.working-directory }}
+      env:
+        COVSEL: ${{ steps.setup.outputs.covsel }}
+        ARCHIVE: ${{ inputs.archive-path }}
+        KEEP: ${{ inputs.keep }}
+      run: |
+        set -euo pipefail
+        keep=''
+        if [ -n "$KEEP" ]; then keep="--keep $KEEP"; fi
+        $COVSEL publish --archive "$ARCHIVE" $keep
+
+    # What covsel is about to do, or has just done, as data. Read after
+    # recording in `record` mode so the summary describes the map that was
+    # actually published.
+    - name: Read the map
+      shell: bash
+      working-directory: ${{ inputs.working-directory }}
+      env:
+        COVSEL: ${{ steps.setup.outputs.covsel }}
+      run: |
+        set -euo pipefail
+        $COVSEL status --format json > "$RUNNER_TEMP/covsel-status.json"
+
+    # Reporting only. What actually runs is decided by `covsel run` below, which
+    # re-derives the selection itself -- so nothing here can widen or narrow what
+    # the runner is given.
+    - name: Read the selection
+      if: inputs.mode == 'select'
+      shell: bash
+      working-directory: ${{ inputs.working-directory }}
+      env:
+        COVSEL: ${{ steps.setup.outputs.covsel }}
+        ADAPTER: ${{ steps.setup.outputs.adapter }}
+      run: |
+        set -euo pipefail
+        $COVSEL affected $ADAPTER --format json > "$RUNNER_TEMP/covsel-affected.json"
+
+    - name: Report what covsel decided
+      id: report
+      shell: bash
+      working-directory: ${{ inputs.working-directory }}
+      env:
+        COVSEL_MODE: ${{ inputs.mode }}
+        COVSEL_SUMMARY: ${{ inputs.summary }}
+        COVSEL_DRY_RUN: ${{ inputs.dry-run }}
+      run: node "$GITHUB_ACTION_PATH/report.mjs" "$RUNNER_TEMP"
+
+    # `covsel run` is what runs the tests, and deliberately so. On a full run it
+    # hands the runner its own command with no file filter; passing the reported
+    # file list to the runner instead would be a second, worse implementation of
+    # that -- and the one that runs nothing when the list is empty.
+    - name: Run the affected tests
+      if: inputs.mode == 'select' && inputs.dry-run != 'true'
+      shell: bash
+      working-directory: ${{ inputs.working-directory }}
+      env:
+        COVSEL: ${{ steps.setup.outputs.covsel }}
+        ADAPTER: ${{ steps.setup.outputs.adapter }}
+        COMMAND: ${{ inputs.command }}
+      run: |
+        set -euo pipefail
+        $COVSEL run $ADAPTER -- $COMMAND
+
+    - name: Save the map archive
+      if: inputs.mode == 'record'
+      uses: actions/cache/save@v4
+      with:
+        path: ${{ inputs.working-directory }}/${{ inputs.archive-path }}
+        key: ${{ inputs.cache-key-prefix }}${{ github.sha }}
