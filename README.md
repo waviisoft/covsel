@@ -109,13 +109,13 @@ work through the generic wrap, which does not care which runner it is wrapping.
 Runners that transform sources first (Vitest, Jest) need a per-runner recorder
 that reads the runner's own coverage; both are done. Per-test selection ships for
 node:test and Mocha, scenario-level selection for cucumber-js, and per-test
-browser-side selection for Playwright.
+selection for Playwright -- from the browser, and from the application server it
+drives.
 
-Every adapter below except Playwright's runs the shared conformance suite, and
-the generic wrap, Vitest, Jest, Mocha, and cucumber-js scenario selection each
-have a runnable [example](./examples) that CI drives end-to-end on every pull
-request and on `main`. Playwright's needs a browser and a served application to
-drive, and has neither yet:
+Every adapter below runs the shared conformance suite, and each has a runnable
+[example](./examples) that CI drives end-to-end on every pull request and on
+`main`. Playwright's runs against a real browser and a served application, in its
+own CI job:
 
 | Runner                     | Per-file            | Per-test / scenario |
 | -------------------------- | ------------------- | ------------------- |

@@ -16,11 +16,11 @@ export const APP_PORT = 45817;
 /**
  * The fixture's server.
  *
- * Two things beyond serving files. It answers `/api/price` from
- * `server/logic.mjs`, so both units' assertions depend on code the *browser*
- * never executes — which is what gives the suite a blind spot to hold the
- * adapter's declared scope against. And it appends an identity source map to
- * every module it serves.
+ * Two things beyond serving files. It answers `/api/price` from a module it
+ * loads per endpoint, so both units' assertions depend on server code the
+ * *browser* never executes — and on different files, so a file-granular server
+ * window has something to tell them apart with. And it appends an identity
+ * source map to every module it serves.
  *
  * The map is per **column**, not per line, and that is not fussiness. A
  * line-granularity map has no segment at the offset a function's coverage range
@@ -33,8 +33,6 @@ export const APP_PORT = 45817;
 export const SERVER = `import { createServer } from 'node:http';
 import { readFileSync } from 'node:fs';
 import { basename, join } from 'node:path';
-
-import { price } from './logic.mjs';
 
 const root = process.cwd();
 const B64 = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/';
@@ -82,11 +80,19 @@ function identityMap(rel, text) {
   };
 }
 
-createServer((req, res) => {
+createServer(async (req, res) => {
   const url = new URL(req.url, 'http://localhost');
   if (url.pathname === '/api/price') {
+    const qty = Number(url.searchParams.get('qty') ?? 1);
+    // Loaded on demand, so a test that never asks for one never executes it --
+    // the server-side counterpart of the browser's dynamic import, and what lets
+    // a file-granular server window tell the two units apart.
+    const price =
+      url.searchParams.get('kind') === 'beta'
+        ? (await import('./beta.mjs')).betaPrice(qty)
+        : (await import('./alpha.mjs')).alphaPrice(qty);
     res.writeHead(200, { 'content-type': 'application/json' });
-    res.end(JSON.stringify({ price: price(Number(url.searchParams.get('qty') ?? 1)) }));
+    res.end(JSON.stringify({ price }));
     return;
   }
   if (url.pathname === '/' || url.pathname === '/index.html') {
@@ -152,22 +158,72 @@ export const B = unit('beta', 'x + 1');
  * graph says which of these a given test reaches.
  */
 export const MAIN = `const out = document.querySelector('#out');
-async function base() {
-  return (await (await fetch('/api/price?qty=1')).json()).price;
+async function base(kind) {
+  return (await (await fetch(\`/api/price?qty=1&kind=\${kind}\`)).json()).price;
 }
 document.querySelector('#alpha').addEventListener('click', async () => {
   const { alpha } = await import('./a.js');
-  out.textContent = String(alpha(await base()));
+  out.textContent = String(alpha(await base('alpha')));
 });
 document.querySelector('#beta').addEventListener('click', async () => {
   const { beta } = await import('./b.js');
-  out.textContent = String(beta(await base()));
+  out.textContent = String(beta(await base('beta')));
 });
 `;
 
-export const LOGIC = `export function price(qty) {
+/**
+ * The server's own sources, one per endpoint plus the one they both go through.
+ *
+ * Not named `shared`: the conformance suite rejects a fixture whose other files
+ * mention the shared source's stem, because a test file naming it would make the
+ * recall checks certify nothing.
+ *
+ * Split because the server window is file-granular: what it can show is that a
+ * test executed *this* server file and not that one. A single module both units
+ * reach would prove only that something on the server ran.
+ */
+export const SERVER_PRICING = `import { execFileSync } from 'node:child_process';
+import { join } from 'node:path';
+
+export function base(qty) {
+  // Out of process on purpose. See JOB below: this is the boundary neither
+  // window can cross, and the suite needs one to hold the declaration against.
+  return Number(
+    execFileSync(process.execPath, [join(process.cwd(), 'jobs/run.mjs'), String(qty)], {
+      encoding: 'utf8',
+    }),
+  );
+}
+`;
+
+const endpoint = (name: string) =>
+  `import { base } from './pricing.mjs';
+
+export function ${name}(qty) {
+  return base(qty);
+}
+`;
+
+export const SERVER_ALPHA = endpoint('alphaPrice');
+export const SERVER_BETA = endpoint('betaPrice');
+
+/**
+ * Work the server hands to a second process, and the fixture's blind spot.
+ *
+ * Both units reach it — every price they assert on comes through here — and
+ * neither window can see it: the browser is a different isolate, and the
+ * inspector session watches the server process, not the ones it starts. That is
+ * the boundary a repo-path scope cannot describe, which is exactly what the
+ * declaration has to be held against.
+ */
+export const JOB = `export function compute(qty) {
   return qty * 3 + 1;
 }
+`;
+
+export const JOB_RUNNER = `import { compute } from './compute.mjs';
+
+process.stdout.write(String(compute(Number(process.argv[2] ?? 1))));
 `;
 
 /**
@@ -175,12 +231,21 @@ export const LOGIC = `export function price(qty) {
  * project to write it — so the suite certifies the setup users are given rather
  * than a private one.
  */
-export const FIXTURES = `import { test as base, expect } from '@playwright/test';
+export function fixtures(server?: { observes: string[]; inspectUrl: string }): string {
+  const options =
+    server === undefined
+      ? ''
+      : `{
+    browser: { observes: ${JSON.stringify(BROWSER_OBSERVES)} },
+    server: ${JSON.stringify(server)},
+  }`;
+  return `import { test as base, expect } from '@playwright/test';
 import { covselFixtures } from '@covsel/adapter-playwright/fixture';
 
-export const test = base.extend(covselFixtures());
+export const test = base.extend(covselFixtures(${options}));
 export { expect };
 `;
+}
 
 /** A spec, with each test recording that it ran under the name covsel gives it. */
 export function spec(
@@ -214,7 +279,15 @@ ${tests
  * container that ships one. Unset, which is the normal case, Playwright resolves
  * the browser it installed.
  */
-export function playwrightConfig(): string {
+export function playwrightConfig(options: { inspectPort?: number } = {}): string {
+  const command =
+    options.inspectPort === undefined
+      ? "'node server/serve.mjs'"
+      : `'node --inspect=${options.inspectPort} server/serve.mjs'`;
+  // One worker whenever the server is observed: the window is collected from the
+  // one server process, and a second worker's test executing there at the same
+  // time would be credited to this one.
+  const workers = options.inspectPort === undefined ? '' : '\n  workers: 1,';
   return `import { mkdtempSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -228,14 +301,14 @@ export default {
   // any other -- one outside the declared scope, so every selection after the
   // first run would fall open. A real project gitignores it; this fixture has no
   // .gitignore of its own, because the conformance suite owns that file.
-  outputDir: mkdtempSync(join(tmpdir(), 'covsel-conformance-pw-out-')),
+  outputDir: mkdtempSync(join(tmpdir(), 'covsel-conformance-pw-out-')),${workers}
   projects: [{ name: 'chromium' }],
   use: {
     baseURL: 'http://127.0.0.1:${APP_PORT}',
     ...(executablePath ? { launchOptions: { executablePath } } : {}),
   },
   webServer: {
-    command: 'node server/serve.mjs',
+    command: ${command},
     url: 'http://127.0.0.1:${APP_PORT}/api/price?qty=1',
     // Never reuse: each conformance check records a fresh temp project, and a
     // server left over from the previous one would serve the wrong files.
@@ -244,4 +317,53 @@ export default {
   reporter: 'line',
 };
 `;
+}
+
+/** What the browser window can see, and the only scope it may claim. */
+export const BROWSER_OBSERVES = ['src/**'];
+/** What the server window can see. Its own files, and nothing it shells out to. */
+export const SERVER_OBSERVES = ['server/**'];
+/** The port the fixture's server opens its inspector on, when it opens one. */
+export const INSPECT_PORT = 45818;
+
+/**
+ * Every file the fixture project holds.
+ *
+ * The same application either way. What changes with `server` is only whether the
+ * project is set up to observe it — the config, and the one line the fixture
+ * extends `test` with — so the two conformance runs differ in what covsel was
+ * told to watch and in nothing else.
+ */
+export function files(init: {
+  markerFile: string;
+  server?: boolean;
+}): Record<string, string> {
+  return {
+    'index.html': INDEX_HTML,
+    'playwright.config.js': playwrightConfig(
+      init.server === true ? { inspectPort: INSPECT_PORT } : {},
+    ),
+    'server/serve.mjs': SERVER,
+    'server/pricing.mjs': SERVER_PRICING,
+    'server/alpha.mjs': SERVER_ALPHA,
+    'server/beta.mjs': SERVER_BETA,
+    'jobs/compute.mjs': JOB,
+    'jobs/run.mjs': JOB_RUNNER,
+    'src/shared.js': SHARED,
+    'src/a.js': A,
+    'src/b.js': B,
+    'src/main.js': MAIN,
+    'tests/fixtures.js':
+      init.server === true
+        ? fixtures({
+            observes: SERVER_OBSERVES,
+            inspectUrl: `http://127.0.0.1:${INSPECT_PORT}`,
+          })
+        : fixtures(),
+    'tests/demo.spec.js': spec(init.markerFile, [
+      // compute(1) is 4; alpha doubles it and shared adds 100.
+      { title: 'alpha test', button: 'alpha', expected: '108' },
+      { title: 'beta test', button: 'beta', expected: '105' },
+    ]),
+  };
 }

@@ -13,11 +13,11 @@ a spec exercises. Runtime coverage can.
 
 A Playwright test executes code in three places: the worker running the spec, the
 browser showing your application, and usually a server behind it. This adapter
-observes **the browser** and nothing else.
+observes **the browser**, and — when you ask it to — **the server** as well.
 
-That is not a gap covsel hides. The scope you declare in `observes` is written
-into the map, and every change outside it forces a full run rather than being
-read as code no test covers:
+Whatever is left is not a gap covsel hides. The scope you declare in `observes`
+is written into the map, and every change outside it forces a full run rather
+than being read as code no test covers:
 
 ```console
 $ covsel affected
@@ -34,11 +34,16 @@ rest. The trade is explicit, and it is the reason `observes` has no default:
 }
 ```
 
-Declare a path only when, had code there run, the browser recording would have
-seen it. **Under-claiming costs CI minutes; over-claiming skips tests.** Scope
-globs are matched strictly — no basename widening — because a path wrongly
-counted as observed suppresses the full run it should have caused. Without
-`observes`, `covsel record` refuses to start rather than guess.
+Declare a path only when, had code there run, the recording would have seen it.
+**Under-claiming costs CI minutes; over-claiming skips tests.** Scope globs are
+matched strictly — no basename widening — because a path wrongly counted as
+observed suppresses the full run it should have caused. Without `observes`,
+`covsel record` refuses to start rather than guess.
+
+The claim and the setup have to match. Adding `server/**` to `observes` without
+also [observing the server](#selecting-on-server-changes-too) is the one
+misconfiguration covsel cannot catch for you: the map would say the server was
+watched, and a change there would then select nothing at all.
 
 ## Setup
 
@@ -107,6 +112,61 @@ code inlined into several callers cannot be called idle by a range that never
 ran, so covsel keeps those blocks marked executed. That is the safe direction,
 and it is why the dev server is the route to record against.
 
+## Selecting on server changes too
+
+Browser-only, a change to your server falls open to a full run — never wrong,
+never a minute saved either. Point covsel at the server as well and a change
+there selects the tests that reached it.
+
+Start the application with Node's inspector open, and tell the fixture where:
+
+```js
+// playwright.config.js
+webServer: { command: 'node --inspect=9229 server/index.js', url: '...' },
+workers: 1,
+```
+
+```ts
+// tests/fixtures.ts
+export const test = base.extend(
+  covselFixtures({
+    browser: { observes: ['src/**'] },
+    server: { observes: ['server/**'], inspectUrl: 'http://127.0.0.1:9229' },
+  }),
+);
+```
+
+```json
+{ "adapter": "playwright", "observes": ["src/**", "server/**"] }
+```
+
+Each window says what it alone could see, and covsel unions them onto the test.
+That separation is the point: without it a browser recording would vouch for the
+server, which is how a server change comes to skip the tests it breaks. The
+config's `observes` stays the union, and recording refuses any window claiming
+more than it.
+
+Nothing of covsel runs inside your server. It opens an inspector session per
+test, takes what the server ran, and closes it.
+
+**Record with `--workers=1`.** The window is collected from the one server
+process, so a second worker's test executing there at the same time would be
+credited to this one — or would stop this one's collection mid-test, which
+records a test as covering less of the server than it does. The fixture refuses
+rather than guess which happened. Only the _recording_ is serial; the selected
+runs afterwards are not.
+
+**The server window is file-granular**, where the browser window is
+block-granular. Coverage starts after the server has already loaded its modules,
+and V8 then reports only functions that ran — an un-run one is absent rather than
+zero-counted, so covsel reads it as executed and stays fail-open. A change to a
+server file therefore selects every test that executed _that file_. Splitting
+handlers across modules is what buys precision here; block-level server coverage
+would need covsel's code running inside your server process, which it does not.
+
+A file both windows see falls back to file granularity, because a window that
+recorded no blocks for it cannot vouch for the other's.
+
 ## Scripts covsel cannot map
 
 Every script the browser executes has to resolve back to a source, or the
@@ -147,6 +207,9 @@ one afterwards. It fails, and writes nothing, when:
   run";
 - **the browser reported no coverage** — see above;
 - **an executed script could not be mapped** — see above;
+- **the server's inspector could not be reached**, when a server window is
+  configured — an unobserved server behind a scope that claims it is exactly the
+  map that skips tests;
 - **a test opened a further page** (a popup, or `context.newPage()`) — coverage
   cannot be attached to a page before its first scripts run, so what executed
   there is unknown rather than partly known. covsel observes the primary `page`
@@ -179,3 +242,8 @@ does, in ways no coverage recording connects back to a test.
 
 Visual-regression tests get limited wins for the same reason: what they assert on
 is mostly not JavaScript.
+
+Keep Playwright's `outputDir` (`test-results/` by default) out of the working
+tree or in `.gitignore`. covsel reads an untracked directory as a change like any
+other, and one outside `observes` falls open — so every selection after the first
+run would be a full run.

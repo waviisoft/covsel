@@ -42,3 +42,26 @@ Supporting changes in `@covsel/core`:
   confirmed against the text the build published.
 - **`covsel init` names the Playwright adapter** for a project that has
   `@playwright/test`, and names Cypress as a runner no adapter records yet.
+
+The adapter also observes the **application server** when the project asks it
+to, so a change there selects the tests that reached it instead of falling open:
+
+```ts
+export const test = base.extend(
+  covselFixtures({
+    browser: { observes: ['src/**'] },
+    server: { observes: ['server/**'], inspectUrl: 'http://127.0.0.1:9229' },
+  }),
+);
+```
+
+It opens a Node inspector session per test against the server Playwright already
+started — nothing of covsel runs inside it — and each window declares what it
+alone could see, so a browser recording never vouches for the server. Recording
+needs `--workers=1` when the server window is on, and the fixture refuses rather
+than credit one worker's server execution to another's test. The server window
+is file-granular: coverage starts after the server has loaded its modules, and
+V8 then reports only functions that ran.
+
+Both configurations run the shared conformance suite, against a real browser and
+a served application, in their own CI job.
