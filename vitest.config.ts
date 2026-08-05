@@ -26,6 +26,9 @@ export default defineConfig({
       '@covsel/adapter-cucumber': fileURLToPath(
         new URL('./packages/adapter-cucumber/src/index.ts', import.meta.url),
       ),
+      '@covsel/adapter-playwright': fileURLToPath(
+        new URL('./packages/adapter-playwright/src/index.ts', import.meta.url),
+      ),
       '@covsel/conformance/vitest': fileURLToPath(
         new URL('./packages/conformance/src/vitest.ts', import.meta.url),
       ),

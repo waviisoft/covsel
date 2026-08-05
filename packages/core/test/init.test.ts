@@ -138,14 +138,14 @@ describe('covsel init — naming the adapter', () => {
   it('names the other suites it cannot record', async () => {
     const cwd = project({
       'package.json': pkg({
-        devDependencies: { vitest: '^3.0.0', '@playwright/test': '^1.0.0' },
+        devDependencies: { vitest: '^3.0.0', cypress: '^15.0.0' },
       }),
     });
 
     const result = await init(cwd);
 
     expect(result.adapter).toBe('vitest');
-    expect(result.warnings.join('\n')).toContain('playwright has no adapter yet');
+    expect(result.warnings.join('\n')).toContain('cypress has no adapter yet');
   });
 
   it('adds the store directory to .gitignore', async () => {
@@ -172,7 +172,7 @@ describe('covsel init — naming the adapter', () => {
 describe('covsel init — what it will not guess', () => {
   it('writes nothing for a runner no adapter records', async () => {
     const cwd = project({
-      'package.json': pkg({ devDependencies: { '@playwright/test': '^1.0.0' } }),
+      'package.json': pkg({ devDependencies: { cypress: '^15.0.0' } }),
     });
 
     const result = await init(cwd);
@@ -180,8 +180,8 @@ describe('covsel init — what it will not guess', () => {
     expect(result.outcome).toBe('unsupported-runner');
     expect(result.configWritten).toBe(false);
     expect(result.gitignoreUpdated).toBe(false);
-    expect(result.detected.map((r: { name: string }) => r.name)).toContain('playwright');
-    expect(result.reportUrl).toContain('playwright');
+    expect(result.detected.map((r: { name: string }) => r.name)).toContain('cypress');
+    expect(result.reportUrl).toContain('cypress');
   });
 
   it('writes nothing when it recognises no runner at all', async () => {

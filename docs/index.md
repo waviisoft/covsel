@@ -29,7 +29,7 @@ features:
     details: >-
       It depends only on the two things every JS/TS runner shares: V8 can
       observe the code, and every runner accepts a list of test files. Vitest,
-      Jest, Mocha, node:test, cucumber-js, or any command that executes your
+      Jest, Mocha, node:test, cucumber-js, Playwright, or any command that executes your
       source.
   - title: Fails open, loudly
     details: >-

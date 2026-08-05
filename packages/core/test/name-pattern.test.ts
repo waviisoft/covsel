@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
-import { testNamePattern } from '@covsel/core';
+import { testNamePattern, testNameSuffixPattern } from '@covsel/core';
 
 /**
  * Every runner that can narrow a run below the file takes one regex over test
@@ -49,5 +49,54 @@ describe('testNamePattern', () => {
     // filter that selects no test is the one outcome selection may never
     // produce quietly. Callers with nothing to name run nothing instead.
     expect(() => testNamePattern([])).toThrow(/no test names/);
+  });
+});
+
+/**
+ * The same pattern for a runner that matches it against a title it has prefixed
+ * itself. Playwright greps against `<project> <file> <describes> <title>`, and
+ * the project is the part a recorded name may not carry: a map recorded on
+ * Chromium that named it would select nothing at all when the suite runs on
+ * Firefox.
+ */
+describe('testNameSuffixPattern', () => {
+  const matches = (names: string[], title: string): boolean =>
+    new RegExp(testNameSuffixPattern(names)).test(title);
+
+  it('matches a name the runner prefixed with something else', () => {
+    expect(
+      matches(['cart.spec.ts adds an item'], 'chromium cart.spec.ts adds an item'),
+    ).toBe(true);
+    // The same recorded name under a different project, which is the case a
+    // front-anchored pattern gets wrong by matching nothing.
+    expect(
+      matches(['cart.spec.ts adds an item'], 'firefox cart.spec.ts adds an item'),
+    ).toBe(true);
+  });
+
+  it('escapes metacharacters, so a spec filename matches literally', () => {
+    // `.` is the one that bites here: every recorded Playwright name contains a
+    // file extension, and unescaped `cart.spec.ts` would also match `cartxspecxts`
+    // — over-matching, so safe — while an unescaped `a+b` in a title matches
+    // nothing, which is not.
+    expect(matches(['a+b'], 'chromium a+b')).toBe(true);
+    expect(matches(['a+b'], 'chromium aab')).toBe(false);
+  });
+
+  it('anchors at the end, so a name is not matched in the middle of a title', () => {
+    expect(matches(['adds an item'], 'chromium adds an item then removes it')).toBe(
+      false,
+    );
+  });
+
+  it('matches every name when several are combined', () => {
+    const names = ['spec.ts one', 'spec.ts two'];
+    expect(matches(names, 'chromium spec.ts one')).toBe(true);
+    expect(matches(names, 'chromium spec.ts two')).toBe(true);
+    expect(matches(names, 'chromium spec.ts three')).toBe(false);
+  });
+
+  it('refuses to build a pattern from no names', () => {
+    expect(() => testNameSuffixPattern([])).toThrow(/no test names/);
   });
 });

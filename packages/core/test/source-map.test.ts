@@ -289,6 +289,57 @@ describe('resolving a script to its sources', () => {
     });
   }, 20_000);
 
+  it('resolves a dev server’s source named relative to the script it serves', async () => {
+    // The shape every Vite-family dev server produces, and the one a browser
+    // recording is made of: the module is served at its own path and its map
+    // names the source relative to *that* -- `/src/app.ts` answered with a map
+    // naming `app.ts`. Read against the repo root alone it is looked for at the
+    // top of the tree, found nowhere, and the whole recording fails on a source
+    // that is sitting right there.
+    const cwd = mkdtempSync(join(tmpdir(), 'covsel-sourcemap-'));
+    dirs.push(cwd);
+    write(cwd, 'src/app.mjs', APP);
+    const inline = Buffer.from(mapJson(['app.mjs'], [APP])).toString('base64');
+    const url = 'http://127.0.0.1:5173/src/app.mjs';
+    const resolver = new SourceMapResolver({
+      cwd,
+      fetchText: async (asked) =>
+        asked === url
+          ? `${APP}//# sourceMappingURL=data:application/json;base64,${inline}\n`
+          : undefined,
+    });
+
+    expect(await resolver.resolve({ url })).toEqual({
+      kind: 'mapped',
+      sources: ['src/app.mjs'],
+      unresolved: [],
+    });
+  });
+
+  it('will not credit the file a served path points at when the build published other text', async () => {
+    // The URL says where to look; it does not say the file there is the one that
+    // was built. Reading the path as proof would credit a source the test never
+    // executed, and lose every change to the one it did.
+    const cwd = mkdtempSync(join(tmpdir(), 'covsel-sourcemap-'));
+    dirs.push(cwd);
+    write(cwd, 'src/app.mjs', 'export function greet() {\n  return 42;\n}\n');
+    const inline = Buffer.from(mapJson(['./app.mjs'], [APP])).toString('base64');
+    const url = 'http://127.0.0.1:5173/src/app.mjs';
+    const resolver = new SourceMapResolver({
+      cwd,
+      fetchText: async (asked) =>
+        asked === url
+          ? `${APP}//# sourceMappingURL=data:application/json;base64,${inline}\n`
+          : undefined,
+    });
+
+    expect(await resolver.resolve({ url })).toEqual({
+      kind: 'mapped',
+      sources: [],
+      unresolved: ['./app.mjs'],
+    });
+  });
+
   it('will not credit a same-named file when nothing confirms the guess', async () => {
     const cwd = fixture(['/src/app.mjs']);
     const base = await serve(join(cwd, 'dist'));

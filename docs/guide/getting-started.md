@@ -224,12 +224,22 @@ Selection needs no configuration once an adapter is installed. To refine, add a 
   "alwaysRun": ["**/fixtures/**"], // test files that must always run
   "sentinels": ["package.json", "pnpm-lock.yaml", "tsconfig*.json"], // replaces the defaults below
   "granularity": "block", // "block" (function-level) | "file"
+  "observes": ["src/**"], // only for a recorder that cannot work out its own reach
   "store": {
     "dir": ".covsel",
     "archiveDir": "archive", // where publish/fetch keep maps by commit, under dir
   },
 }
 ```
+
+`observes` is the one field most projects leave out. A recorder watching a Node
+process tree covsel started sees every script that tree loads, wherever it lives,
+so it works this out for itself. A recorder watching a **browser** sees only what
+the build shipped there, and which of your paths those are depends on your build
+layout and where your server lives — so the
+[Playwright adapter](/guide/adapters/playwright) asks, and refuses to record
+until you answer. Everything outside what you declare falls open: a change there
+runs the suite, because the map's silence about it means nothing.
 
 Any change matching `sentinels` forces a full run. A change to this file itself
 forces one when it moves a value covsel reads — a reworded comment or a

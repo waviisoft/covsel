@@ -95,7 +95,18 @@ const RUNNERS: readonly RunnerSignature[] = [
     scripts: [/\bmocha\b/],
     command: 'mocha',
   },
-  { name: 'playwright', deps: ['@playwright/test'], scripts: [/\bplaywright\b/] },
+  {
+    name: 'playwright',
+    adapter: 'playwright',
+    deps: ['@playwright/test'],
+    scripts: [/\bplaywright\b/],
+    command: 'playwright test',
+  },
+  // Named without an adapter, which is the whole point of naming it: a Cypress
+  // project gets told covsel cannot record it yet, instead of being handed the
+  // generic wrap that would observe the spec process and record that no test
+  // covers the app.
+  { name: 'cypress', deps: ['cypress'], scripts: [/\bcypress\b/] },
 ];
 
 /**

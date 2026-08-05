@@ -16,18 +16,51 @@ const METACHARACTERS = /[.*+?^${}()|[\]\\]/g;
 /**
  * A regex source matching exactly the given test names and nothing else.
  *
- * Names are escaped so they match literally, and the alternation is anchored so
- * one name is not matched inside a longer title. Anchoring cannot skip a test:
- * a runner matching the pattern against a fuller title than the name recorded —
- * a leaf name inside a `describe` — simply runs more tests than named, which is
- * the direction selection is allowed to err in.
+ * Names are escaped so they match literally, and the alternation is anchored at
+ * both ends so one name is not matched inside a longer title.
+ *
+ * Anchoring at the front is a claim about the runner: that what it matches
+ * against is the name as recorded, not a title it has prefixed. node:test
+ * matches each test's own name, and cucumber matches the scenario name, so both
+ * hold. A runner that prefixes — Playwright puts the project and file in front —
+ * would match *nothing* here rather than matching more, which is a selection
+ * that skips every test it named; those take {@link testNameSuffixPattern}.
+ *
+ * Throws on an empty list, for the reason {@link alternation} gives.
+ */
+export function testNamePattern(names: readonly string[]): string {
+  return `^(?:${alternation(names)})$`;
+}
+
+/**
+ * A regex source matching any title *ending* in one of the given names.
+ *
+ * For a runner that matches the pattern against a title it has prefixed with
+ * something the recorded name cannot include. Playwright greps against
+ * `<project> <file> <describes> <title>`, and the project name is the prefix
+ * that matters: a pattern anchored at the front would have to name one browser,
+ * and a map recorded on Chromium would then select nothing when the suite runs
+ * on Firefox — the map skipping tests through the very flag meant to narrow it.
+ *
+ * Anchored at the end only, so it stays a name match rather than a substring
+ * one: a name is matched where the title ends, never inside it. What it gives up
+ * is that a longer title ending in the same words also matches, which runs more
+ * tests than named — the direction selection is allowed to err in.
+ *
+ * Throws on an empty list, for the reason {@link testNamePattern} does.
+ */
+export function testNameSuffixPattern(names: readonly string[]): string {
+  return `(?:${alternation(names)})$`;
+}
+
+/**
+ * The names as one alternation of literals.
  *
  * Throws on an empty list. A pattern over no names matches nothing, so handing
  * one to a runner would report a green run that executed no test; callers with
  * nothing to name have nothing to run.
  */
-export function testNamePattern(names: readonly string[]): string {
+function alternation(names: readonly string[]): string {
   if (names.length === 0) throw new Error('cannot build a pattern from no test names');
-  const escaped = names.map((name) => name.replace(METACHARACTERS, '\\$&'));
-  return `^(?:${escaped.join('|')})$`;
+  return names.map((name) => name.replace(METACHARACTERS, '\\$&')).join('|');
 }

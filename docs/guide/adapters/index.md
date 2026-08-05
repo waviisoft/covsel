@@ -68,8 +68,16 @@ and which one an adapter uses depends on the runner:
   coverage, which remaps execution back to your sources through the runner's
   source maps, and reads the resulting report.
 
-Both produce the same thing: the set of source files a test executed. The rest
-of covsel is identical regardless of which path recorded the map.
+- **A browser's own coverage** (the [Playwright](/guide/adapters/playwright)
+  adapter). The code a UI test is really about runs in a page, in bytes a build
+  produced, on the far side of an HTTP boundary no process-level dump reaches. Its
+  adapter collects Chromium's V8 coverage per test and projects those offsets back
+  through the application's source maps to your `src/**`. Because it watches one
+  isolate out of the several a UI test spans, it declares what it can see and
+  covsel falls open on everything else.
+
+All three produce the same thing: the set of source files a test executed. The
+rest of covsel is identical regardless of which path recorded the map.
 
 ## Available adapters
 
@@ -81,11 +89,19 @@ of covsel is identical regardless of which path recorded the map.
 | `@covsel/adapter-node-test`  | node:test               | inspector snapshot-diff (per-test) |
 | `@covsel/adapter-mocha`      | Mocha                   | inspector snapshot-diff (per-test) |
 | `@covsel/adapter-cucumber`   | cucumber-js             | inspector snapshot-diff (scenario) |
+| `@covsel/adapter-playwright` | Playwright              | Chromium coverage (per test)       |
 
 The generic, Vitest, and Jest adapters record at whole-file granularity. The
-node:test, Mocha, and cucumber-js adapters record each **test** or **scenario**
-individually and run only the affected ones -- which for cucumber-js is the only
-selection it has natively.
+node:test, Mocha, cucumber-js, and Playwright adapters record each **test** or
+**scenario** individually and run only the affected ones -- which for cucumber-js
+is the only selection it has natively.
+
+The Playwright adapter is the one that observes something other than the process
+covsel started: it reads what the **browser** executed and maps it back through
+the application's source maps, so it declares a scope rather than claiming to see
+everything, and every change outside that scope falls open to a full run. It is
+also the one adapter not yet certified by the shared conformance suite, which
+needs a browser and a served application to drive.
 
 Any other runner that executes your source directly is already covered at file
 level by the generic adapter, which does not care what it is wrapping: Mocha
@@ -102,7 +118,7 @@ object implementing the `Adapter` interface from `@covsel/core` -- identity,
 selection formatting, and the recorder that produces the executed source list,
 plus whatever optional capabilities the runner supports -- and proves itself
 against the shared conformance suite in `@covsel/conformance`, the same suite
-every adapter above runs. Nothing distinguishes one covsel publishes from one
+every adapter above except Playwright's runs today. Nothing distinguishes one covsel publishes from one
 you publish: both are packages a project installs, resolved the same way. See
 [Writing an adapter](/guide/adapters/writing-an-adapter),
 [CONTRIBUTING.md](https://github.com/waviisoft/covsel/blob/main/CONTRIBUTING.md),

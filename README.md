@@ -6,8 +6,8 @@
 
 **Status: early.** The `covsel init`, `record`, `affected`, `run`, `watch`,
 `status`, `explain`, and `merge` commands work today, with block-hash (function-level)
-selection, per-test selection for node:test, scenario-level selection for
-cucumber-js, and a documented CI recipe for publishing, restoring, and merging
+selection, per-test selection for node:test, Mocha, Playwright, and
+cucumber-js scenarios, and a documented CI recipe for publishing, restoring, and merging
 maps. Track the work in
 the [issues](https://github.com/waviisoft/covsel/issues), and see
 [`DESIGN.md`](./DESIGN.md) for the architecture.
@@ -40,7 +40,7 @@ Or pick it yourself:
 
 ```bash
 npm install --save-dev covsel @covsel/adapter-generic   # any command, whole-file
-# or @covsel/adapter-vitest , -jest , -node-test , -cucumber
+# or @covsel/adapter-vitest , -jest , -node-test , -mocha , -cucumber , -playwright
 ```
 
 ```bash
@@ -108,12 +108,14 @@ Runners that execute source directly (`node --test`, Mocha on plain JavaScript)
 work through the generic wrap, which does not care which runner it is wrapping.
 Runners that transform sources first (Vitest, Jest) need a per-runner recorder
 that reads the runner's own coverage; both are done. Per-test selection ships for
-node:test and Mocha, and scenario-level selection for cucumber-js.
+node:test and Mocha, scenario-level selection for cucumber-js, and per-test
+browser-side selection for Playwright.
 
-Every adapter below runs the shared conformance suite, and the generic wrap,
-Vitest, Jest, Mocha, and cucumber-js scenario selection each have a runnable
-[example](./examples) that CI drives end-to-end on every pull request and on
-`main`:
+Every adapter below except Playwright's runs the shared conformance suite, and
+the generic wrap, Vitest, Jest, Mocha, and cucumber-js scenario selection each
+have a runnable [example](./examples) that CI drives end-to-end on every pull
+request and on `main`. Playwright's needs a browser and a served application to
+drive, and has neither yet:
 
 | Runner                     | Per-file            | Per-test / scenario |
 | -------------------------- | ------------------- | ------------------- |
@@ -123,21 +125,23 @@ Vitest, Jest, Mocha, and cucumber-js scenario selection each have a runnable
 | cucumber-js                | yes (feature files) | yes (`--adapter`)   |
 | Vitest                     | yes (`--adapter`)   | no                  |
 | Jest                       | yes (`--adapter`)   | no                  |
+| Playwright                 | yes (`--adapter`)   | yes (`--adapter`)   |
 
 ## Packages
 
-| Package                     | Purpose                                                                  |
-| --------------------------- | ------------------------------------------------------------------------ |
-| `covsel`                    | The CLI                                                                  |
-| `@covsel/core`              | Observer , Mapper , Store , Selector , Policy + the versioned map schema |
-| `@covsel/adapter-generic`   | Wrap-any-command adapter (whole-file)                                    |
-| `@covsel/adapter-vitest`    | Vitest adapter (records via Vitest's own V8 coverage)                    |
-| `@covsel/adapter-jest`      | Jest adapter (records via Jest's own coverage)                           |
-| `@covsel/adapter-node-test` | node:test adapter (per-test selection via the inspector observer)        |
-| `@covsel/adapter-mocha`     | Mocha adapter (per-test selection via the inspector observer)            |
-| `@covsel/adapter-cucumber`  | cucumber-js adapter (scenario-level selection)                           |
-| `@covsel/conformance`       | The shared suite every adapter must pass                                 |
-| `@covsel/adapter-*`         | Per-runner adapters (community contribution lane)                        |
+| Package                      | Purpose                                                                  |
+| ---------------------------- | ------------------------------------------------------------------------ |
+| `covsel`                     | The CLI                                                                  |
+| `@covsel/core`               | Observer , Mapper , Store , Selector , Policy + the versioned map schema |
+| `@covsel/adapter-generic`    | Wrap-any-command adapter (whole-file)                                    |
+| `@covsel/adapter-vitest`     | Vitest adapter (records via Vitest's own V8 coverage)                    |
+| `@covsel/adapter-jest`       | Jest adapter (records via Jest's own coverage)                           |
+| `@covsel/adapter-node-test`  | node:test adapter (per-test selection via the inspector observer)        |
+| `@covsel/adapter-mocha`      | Mocha adapter (per-test selection via the inspector observer)            |
+| `@covsel/adapter-cucumber`   | cucumber-js adapter (scenario-level selection)                           |
+| `@covsel/adapter-playwright` | Playwright adapter (per-test selection from the browser's own coverage)  |
+| `@covsel/conformance`        | The shared suite every adapter must pass                                 |
+| `@covsel/adapter-*`          | Per-runner adapters (community contribution lane)                        |
 
 ## Documentation
 
