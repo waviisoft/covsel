@@ -18,10 +18,21 @@ export const CWD_ENV = 'COVSEL_CWD';
 /** `'1'` when the recording wants block granularity. */
 export const BLOCKS_ENV = 'COVSEL_BLOCKS';
 
-/** What one observation window saw, before a scope is attached to it. */
+/** What one observation window saw. */
 export interface ObservedWindow {
   files: CoveredFile[];
   blocks: CoveredBlock[];
+  /**
+   * The repo paths this window was in a position to see run.
+   *
+   * Absent when there is only ever one window, which is the browser-only case:
+   * the recorder's own declaration is then the whole truth and attaching a copy
+   * of it here would only be a second place for it to drift. Present the moment a
+   * second window exists, because the two see different halves of the repository
+   * and a window claiming the other's paths would have a browser recording vouch
+   * for the server.
+   */
+  observes?: readonly string[];
 }
 
 /** A window that produced nothing usable, and why. */

@@ -51,9 +51,12 @@ export type {
   CoverageApi,
   CovselFixture,
   CovselFixtures,
+  CovselFixturesOptions,
+  CovselServerWindow,
   PageLike,
   TestInfoLike,
 } from './fixture.js';
+export { RemoteCoverageSession } from './server-session.js';
 export { covselFixtures } from './fixture.js';
 export type { ObservedTest, ObservedWindow, FailedWindow } from './protocol.js';
 
@@ -201,13 +204,24 @@ export function createPlaywrightRecorder(init: PlaywrightRecorderInit): Recorder
   };
 }
 
-/** Attach the recorder's scope to each window the fixture reported. */
+/**
+ * Give each window the fixture reported a scope.
+ *
+ * A window that named its own keeps it — that is a fixture watching more than
+ * the browser, and it alone knows which half of the repository each window sees.
+ * One that named none is the browser-only case, where the recorder's declaration
+ * is the whole truth. Either way recording holds the result to that declaration
+ * as a ceiling, so a window claiming more than the project stands behind fails
+ * the recording rather than widening it.
+ */
 function windowsOf(
   observed: ObservedTest,
   observes: readonly string[],
 ): ObservationWindow[] {
   return (observed.windows ?? []).map((w) =>
-    'failed' in w ? w : { files: w.files, blocks: w.blocks, observes },
+    'failed' in w
+      ? w
+      : { files: w.files, blocks: w.blocks, observes: w.observes ?? observes },
   );
 }
 

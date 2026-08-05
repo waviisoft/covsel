@@ -31,6 +31,8 @@ import { join, relative } from 'node:path';
 
 import { type MapperConfig, UnmappableScriptError, V8FileMapper } from '@covsel/core';
 
+import { RemoteCoverageSession } from './server-session.js';
+
 import {
   BLOCKS_ENV,
   CONFIG_ENV,
@@ -80,6 +82,46 @@ export interface TestInfoLike {
   file: string;
   /** File, describes, and title — what `--grep` is matched against, less the project. */
   titlePath: string[];
+  /** Which parallel slot ran this test; 0 when the run has only one. */
+  parallelIndex?: number;
+}
+
+/** Node's own default when `--inspect` is given no port. */
+const DEFAULT_INSPECT_URL = 'http://127.0.0.1:9229';
+
+/** Observing the application server the page talks to. */
+export interface CovselServerWindow {
+  /**
+   * Repo globs this window can see — the server's own sources, and whatever they
+   * reach. Read as written and never widened, like every scope covsel records.
+   */
+  readonly observes: readonly string[];
+  /**
+   * Where the server's Node inspector is listening. Defaults to Node's own
+   * default port, which `--inspect` with no argument uses.
+   */
+  readonly inspectUrl?: string;
+}
+
+/** What to observe, beyond the browser. */
+export interface CovselFixturesOptions {
+  /**
+   * The browser window's own scope. Required whenever `server` is given, and
+   * pointless without it: with one window the recorder's declaration is the
+   * whole truth, and with two neither may claim the other's paths.
+   */
+  readonly browser?: { readonly observes: readonly string[] };
+  /**
+   * Observe the application server as well, so a change to it selects the tests
+   * that reached it instead of falling open to a full run.
+   *
+   * Needs the server started with Node's inspector open (`--inspect`) and the
+   * recording run with `--workers=1`: coverage is collected from the one server
+   * process, and a second worker's test executing in it at the same time would
+   * be credited to this one — or worse, would stop this one's collection
+   * mid-test. The fixture refuses rather than guess which happened.
+   */
+  readonly server?: CovselServerWindow;
 }
 
 /** The auto-fixture, in the tuple form `test.extend` takes. */
@@ -131,6 +173,76 @@ function reason(err: unknown): string {
 }
 
 /**
+ * Open the server's profiler for one test.
+ *
+ * A connection per test rather than one per worker, and precise coverage started
+ * inside it: what comes back is then what this test made the server do, with no
+ * baseline to subtract and nothing of the previous test left in it. It also means
+ * no socket outlives the test that opened it, which matters in a Playwright
+ * worker — an open one would keep the process from exiting.
+ */
+async function openServer(
+  config: CovselServerWindow,
+  testInfo: TestInfoLike,
+): Promise<{ session: RemoteCoverageSession } | FailedWindow> {
+  if ((testInfo.parallelIndex ?? 0) !== 0) {
+    return {
+      failed:
+        'this test ran in a second Playwright worker, and the server window is ' +
+        'collected from the one server process both of them drive. Another ' +
+        'worker\u2019s test executing there at the same time would be credited to ' +
+        'this one, and its own collection could be stopped mid-test \u2014 which ' +
+        'records a test as covering less of the server than it does. Record with ' +
+        '`--workers=1`. Only the recording is serial; the selected runs afterwards ' +
+        'are not.',
+    };
+  }
+  const session = new RemoteCoverageSession(config.inspectUrl ?? DEFAULT_INSPECT_URL);
+  try {
+    await session.start();
+    return { session };
+  } catch (err) {
+    await session.close();
+    return { failed: reason(err) };
+  }
+}
+
+/** Take what the server ran during the test, and map it back to its sources. */
+async function closeServer(
+  session: RemoteCoverageSession,
+  config: CovselServerWindow,
+): Promise<{ window: ObservedWindow | FailedWindow; allowedUnmappable: string[] }> {
+  let scripts;
+  try {
+    scripts = await session.take();
+  } catch (err) {
+    return { window: { failed: reason(err) }, allowedUnmappable: [] };
+  } finally {
+    await session.close();
+  }
+  const { mapper: m, wantBlocks } = mapper();
+  const raw = { scripts };
+  try {
+    // The server executes its own files, so these are `file://` paths and the V8
+    // offsets index the bytes on disk — no projection, and real block
+    // granularity without the build having to publish anything.
+    const files = await m.toFiles(raw);
+    const blocks = wantBlocks ? await m.toBlocks(raw) : [];
+    return {
+      window: { files, blocks, observes: config.observes },
+      allowedUnmappable: m.takeAllowedUnmappable(),
+    };
+  } catch (err) {
+    return {
+      window: {
+        failed: err instanceof UnmappableScriptError ? err.message : reason(err),
+      },
+      allowedUnmappable: m.takeAllowedUnmappable(),
+    };
+  }
+}
+
+/**
  * The fixtures to hand `test.extend`.
  *
  * Empty unless covsel is driving this run, which it signals by naming the
@@ -138,7 +250,21 @@ function reason(err: unknown): string {
  * common case, and the one whose whole point is to be fast — free of the fixture
  * entirely, rather than paying for a page it would not otherwise have opened.
  */
-export function covselFixtures(): CovselFixtures {
+export function covselFixtures(options: CovselFixturesOptions = {}): CovselFixtures {
+  if (options.server !== undefined && options.browser === undefined) {
+    // Not a nicety. With two windows the recorder's single declaration cannot
+    // stand for either: attached to the browser window it would have a browser
+    // recording vouch for the server, and a server change would then read as
+    // touching code no test covers.
+    throw new Error(
+      'covselFixtures({ server }) also needs `browser: { observes: [...] }`. Each ' +
+        'window has to say what it alone could see, because the two see different ' +
+        'halves of the repository — typically `browser: { observes: ["src/**"] }` ' +
+        'beside `server: { observes: ["server/**"] }`. The covsel config\u2019s own ' +
+        '`observes` stays the union of them, and recording refuses a window that ' +
+        'claims more than it.',
+    );
+  }
   const outDir = process.env[OUT_DIR_ENV];
   if (outDir === undefined || outDir === '') return {};
   const out = join(outDir, `${process.pid}.jsonl`);
@@ -173,15 +299,34 @@ export function covselFixtures(): CovselFixtures {
           }
         }
 
+        // Opened before the test body and taken after it, so what comes back is
+        // what this test made the server do.
+        const server =
+          options.server === undefined
+            ? undefined
+            : await openServer(options.server, testInfo);
+
         try {
           await use();
         } finally {
           const closed = await close(coverage, started, appeared);
+          const windows: (ObservedWindow | FailedWindow)[] = [
+            scoped(closed.window, options.browser?.observes),
+          ];
+          const allowedUnmappable = [...closed.allowedUnmappable];
+          if (server !== undefined && options.server !== undefined) {
+            const serverWindow =
+              'failed' in server
+                ? { window: server, allowedUnmappable: [] }
+                : await closeServer(server.session, options.server);
+            windows.push(serverWindow.window);
+            allowedUnmappable.push(...serverWindow.allowedUnmappable);
+          }
           const record: ObservedTest = {
             file: repoRelative(testInfo.file),
             name: testInfo.titlePath.join(' '),
-            windows: [closed.window],
-            allowedUnmappable: closed.allowedUnmappable,
+            windows,
+            allowedUnmappable: [...new Set(allowedUnmappable)],
           };
           appendFileSync(out, `${JSON.stringify(record)}\n`);
         }
@@ -189,6 +334,21 @@ export function covselFixtures(): CovselFixtures {
       { auto: true },
     ],
   };
+}
+
+/**
+ * Attach a scope to a window that produced something.
+ *
+ * Left alone when there is none to attach: the recorder's declaration then
+ * stands for the window, which is right exactly when the browser is the only
+ * window there is.
+ */
+function scoped(
+  window: ObservedWindow | FailedWindow,
+  observes: readonly string[] | undefined,
+): ObservedWindow | FailedWindow {
+  if ('failed' in window || observes === undefined) return window;
+  return { ...window, observes };
 }
 
 /** The spec's path as covsel names it, which is relative to the repo root. */
