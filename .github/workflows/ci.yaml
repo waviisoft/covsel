@@ -139,8 +139,17 @@ jobs:
             node -e 'if (JSON.parse(process.env.AFFECTED).length === 0) { throw new Error("a full run reported no test files") }'
           fi
 
-      # The run step, on a deliberately empty archive so the full-run path is the
-      # one exercised: covsel hands the runner its own command, unfiltered.
+      # The step above installed whichever map it fetched, and `covsel fetch`
+      # leaves an existing map alone when it finds nothing -- so an empty archive
+      # is not on its own a checkout with nothing to select from. Without this,
+      # the step below would select against the previous step's map, and on a
+      # pull request touching only `actions/**` that selection is empty: it would
+      # run no tests and pass, proving nothing about the path it exists to prove.
+      - name: Discard the map the previous step installed
+        run: rm -rf .covsel
+
+      # The run step, with nothing to select from, so the full-run path is the one
+      # exercised: covsel hands the runner its own command, unfiltered.
       - name: Run the tests through the action, with no map to select from
         uses: ./actions/ci
         with:

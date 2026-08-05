@@ -52,9 +52,12 @@ jobs:
             exit 1
           fi
 
-      # The action must be published in a state that runs, and the only check
-      # that proves it is the one the pull request already runs. Repeated here
-      # because a dispatch can be aimed at any ref.
+      # What this proves and what it does not: the reporter's own suite, plus the
+      # structural checks on action.yml that catch a step id renamed out from
+      # under the outputs. It does not run the action end to end -- that job needs
+      # a built CLI and lives in ci.yaml, on every pull request. A dispatch aimed
+      # at a ref that never passed CI is publishing something unproven, and this
+      # will not catch it.
       - uses: pnpm/action-setup@v6
       - uses: actions/setup-node@v7
         with:
@@ -123,6 +126,10 @@ jobs:
             git push --quiet --force origin "refs/tags/v$major"
           fi
 
+          # The clone URL carries the token, so it is written into
+          # mirror/.git/config and would sit there for the rest of the job.
+          git remote set-url origin "https://github.com/$OWNER/$MIRROR.git"
+
       - name: Cut the release the Marketplace listing hangs off
         if: env.APP_ID != ''
         env:
@@ -140,7 +147,7 @@ jobs:
             --title "v$VERSION" \
             --notes "Published from [waviisoft/covsel@${GITHUB_SHA:0:12}](https://github.com/$OWNER/covsel/commit/$GITHUB_SHA).
 
-          See the [covsel CI guide](https://waviisoft.github.io/covsel/guide/ci) for what this action does."
+          The README in this repository documents the inputs and outputs. covsel itself, and the map lifecycle this action drives, are documented in the [covsel guide](https://waviisoft.github.io/covsel/guide/ci)."
 
       - name: Say what to do next
         if: env.APP_ID != ''

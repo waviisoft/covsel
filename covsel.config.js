@@ -22,12 +22,18 @@ export default {
 
   // The suite vitest itself runs. The golden example end-to-end scripts under
   // examples/ are shell, driven by their own CI steps, and are not selected.
-  testGlobs: ['packages/*/test/**/*.test.ts'],
+  //
+  // `actions/` is here because the action's reporting is testable code that does
+  // not live in a package: leaving it out let a change to it select nothing at
+  // all, so the job demonstrating covsel on itself would run nothing and pass
+  // while the code under it changed.
+  testGlobs: ['packages/*/test/**/*.test.ts', 'actions/*/test/**/*.test.ts'],
 
-  // Only the packages' own sources. Written with a slash on purpose: a slash-less
-  // glob also matches by basename anywhere in the tree, which would pull every
-  // fixture and example file of the same name into the map (see #20).
-  sourceGlobs: ['packages/*/src/**'],
+  // Only the packages' own sources, and the action's. Written with a slash on
+  // purpose: a slash-less glob also matches by basename anywhere in the tree,
+  // which would pull every fixture and example file of the same name into the
+  // map (see #20).
+  sourceGlobs: ['packages/*/src/**', 'actions/*/*.mjs'],
 
   /*
    * Tests whose coverage the recorder cannot see, named here as well as left to

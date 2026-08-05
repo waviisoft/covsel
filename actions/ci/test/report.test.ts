@@ -126,14 +126,34 @@ describe('what nobody measured', () => {
 });
 
 describe('a fetch that found nothing', () => {
-  it('says the suite runs in full, and that this is the safe outcome', () => {
+  it('says the suite runs in full, when that is what happened', () => {
     const facts = readFacts({
       mode: 'select',
+      affected: {
+        fullRun: true,
+        reason: 'no usable map recorded',
+        tests: [],
+        discovered: 0,
+      },
       status,
       fetch: { ok: false, reason: 'no archive at .covsel/archive', skipped: [] },
     });
     expect(summary(facts)).toContain('runs in full');
     expect(summary(facts)).toContain('safe');
+  });
+
+  it('does not claim a full run when a map already in the store narrowed one', () => {
+    // `covsel fetch` leaves an existing map alone when it finds nothing to
+    // install, so a failed fetch does not imply everything ran. Claiming it does
+    // would tell a reader every test ran on a job that ran three.
+    const facts = readFacts({
+      mode: 'select',
+      affected: narrowed,
+      status,
+      fetch: { ok: false, reason: 'no archive at .covsel/archive', skipped: [] },
+    });
+    expect(summary(facts)).toContain('already in the store');
+    expect(summary(facts)).not.toContain('runs in full');
   });
 
   it('names every candidate it passed over, with the reason', () => {
@@ -150,6 +170,50 @@ describe('a fetch that found nothing', () => {
     });
     expect(summary(facts)).toContain('3f2a1c9e8b7d');
     expect(summary(facts)).toContain('not in this checkout');
+  });
+});
+
+describe('an age', () => {
+  it.each([
+    [12 * 60000, '12m ago'],
+    [5 * 3600000, '5h ago'],
+    [9 * 86400000, '9d ago'],
+  ])('reads as something a person parses at a glance (%i)', (ageMs, expected) => {
+    const facts = readFacts({
+      mode: 'select',
+      affected: narrowed,
+      status: { ...status, ageMs },
+    });
+    expect(summary(facts)).toContain(expected);
+  });
+});
+
+describe('a selection nobody could read', () => {
+  it('is not rendered as a selection of nothing', () => {
+    // The pair that runs no tests and calls it a pass: full-run false beside an
+    // empty list. Absent input must never produce it.
+    const facts = readFacts({ mode: 'select', status });
+    expect(headline(facts)).toContain('an unknown number of');
+    expect(headline(facts)).not.toContain('Selected 0');
+  });
+});
+
+describe('record mode', () => {
+  it('takes its verdict from what status says the next run would be', () => {
+    // There is no selection to read in record mode, so the only thing that can
+    // say whether the map narrows anything is status.
+    const facts = readFacts({
+      mode: 'record',
+      status: {
+        ...status,
+        nextIsFullRun: true,
+        nextFullRunReason: 'the map records no commit',
+      },
+    });
+    expect(facts.fullRun).toBe(true);
+    expect(headline(facts)).toContain('Recorded and published');
+    // The select-only rows describe a narrowing that was never attempted.
+    expect(summary(facts)).not.toContain('| Selected |');
   });
 });
 

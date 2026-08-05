@@ -116,12 +116,27 @@ runs:
         COVSEL_VERSION: ${{ inputs.covsel-version }}
         COVSEL_COMMAND: ${{ inputs.covsel-command }}
         ADAPTER: ${{ inputs.adapter }}
+        DRY_RUN: ${{ inputs.dry-run }}
       run: |
         set -euo pipefail
         if [ "$MODE" != 'select' ] && [ "$MODE" != 'record' ]; then
           echo "::error::covsel-action: mode must be 'select' or 'record', not '$MODE'"
           exit 1
         fi
+
+        # Normalised once and read by both the step that skips the run and the
+        # reporter that describes it. GitHub compares strings case-insensitively
+        # and node does not, so 'True' otherwise skips the tests while the summary
+        # says they ran.
+        printf 'dry-run=%s\n' "$(printf '%s' "$DRY_RUN" | tr '[:upper:]' '[:lower:]')" \
+          >> "$GITHUB_OUTPUT"
+
+        # A directory of this invocation's own. $RUNNER_TEMP is shared by every
+        # step in the job, so two invocations of this action -- select then
+        # record, say -- would otherwise have the second read the first's
+        # selection and report it as its own.
+        work="$(mktemp -d "${RUNNER_TEMP:-/tmp}/covsel-action.XXXXXX")"
+        echo "work=$work" >> "$GITHUB_OUTPUT"
 
         # A shallow checkout is the commonest way to get quietly worse selection:
         # the map records a commit the checkout does not contain, so covsel falls
@@ -137,7 +152,11 @@ runs:
         elif [ -n "$COVSEL_VERSION" ]; then
           echo "covsel=npx --yes covsel@$COVSEL_VERSION" >> "$GITHUB_OUTPUT"
         else
-          echo "covsel=npx covsel" >> "$GITHUB_OUTPUT"
+          # --no rather than a bare `npx covsel`: with neither a local install
+          # nor a pinned version there is nothing to run, and downloading
+          # whatever the registry serves at that moment is not a default worth
+          # having. Failing here names the misconfiguration.
+          echo "covsel=npx --no covsel" >> "$GITHUB_OUTPUT"
         fi
 
         if [ -n "$ADAPTER" ]; then
@@ -165,13 +184,14 @@ runs:
         COVSEL: ${{ steps.setup.outputs.covsel }}
         ARCHIVE: ${{ inputs.archive-path }}
         REQUIRE: ${{ inputs.require-map }}
+        WORK: ${{ steps.setup.outputs.work }}
       run: |
         set -euo pipefail
         require=''
         if [ "$REQUIRE" = 'true' ]; then require='--require'; fi
         # Unquoted on purpose: $COVSEL is a command line, not a single word.
         $COVSEL fetch --archive "$ARCHIVE" --format json $require \
-          > "$RUNNER_TEMP/covsel-fetch.json"
+          > "$WORK/covsel-fetch.json"
 
     - name: Record the suite
       if: inputs.mode == 'record'
@@ -207,9 +227,10 @@ runs:
       working-directory: ${{ inputs.working-directory }}
       env:
         COVSEL: ${{ steps.setup.outputs.covsel }}
+        WORK: ${{ steps.setup.outputs.work }}
       run: |
         set -euo pipefail
-        $COVSEL status --format json > "$RUNNER_TEMP/covsel-status.json"
+        $COVSEL status --format json > "$WORK/covsel-status.json"
 
     # Reporting only. What actually runs is decided by `covsel run` below, which
     # re-derives the selection itself -- so nothing here can widen or narrow what
@@ -221,9 +242,10 @@ runs:
       env:
         COVSEL: ${{ steps.setup.outputs.covsel }}
         ADAPTER: ${{ steps.setup.outputs.adapter }}
+        WORK: ${{ steps.setup.outputs.work }}
       run: |
         set -euo pipefail
-        $COVSEL affected $ADAPTER --format json > "$RUNNER_TEMP/covsel-affected.json"
+        $COVSEL affected $ADAPTER --format json > "$WORK/covsel-affected.json"
 
     - name: Report what covsel decided
       id: report
@@ -232,15 +254,16 @@ runs:
       env:
         COVSEL_MODE: ${{ inputs.mode }}
         COVSEL_SUMMARY: ${{ inputs.summary }}
-        COVSEL_DRY_RUN: ${{ inputs.dry-run }}
-      run: node "$GITHUB_ACTION_PATH/report.mjs" "$RUNNER_TEMP"
+        COVSEL_DRY_RUN: ${{ steps.setup.outputs.dry-run }}
+        WORK: ${{ steps.setup.outputs.work }}
+      run: node "$GITHUB_ACTION_PATH/report.mjs" "$WORK"
 
     # `covsel run` is what runs the tests, and deliberately so. On a full run it
     # hands the runner its own command with no file filter; passing the reported
     # file list to the runner instead would be a second, worse implementation of
     # that -- and the one that runs nothing when the list is empty.
     - name: Run the affected tests
-      if: inputs.mode == 'select' && inputs.dry-run != 'true'
+      if: inputs.mode == 'select' && steps.setup.outputs.dry-run != 'true'
       shell: bash
       working-directory: ${{ inputs.working-directory }}
       env:

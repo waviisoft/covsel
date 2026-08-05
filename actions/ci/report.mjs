@@ -106,7 +106,10 @@ export function headline(facts) {
     return `Full run: ${scope}${facts.fullRunReason === undefined ? '' : ` -- ${facts.fullRunReason}`}.`;
   }
   const of = discovered === undefined ? '' : ` of ${discovered}`;
-  return `Selected ${facts.selectedCount ?? 0}${of} test file(s); only those ${
+  // "unknown", not 0. A count nobody measured is not a selection of nothing, and
+  // rendering it as one describes a narrowing that never happened.
+  const count = facts.selectedCount ?? 'an unknown number of';
+  return `Selected ${count}${of} test file(s); only those ${
     facts.dryRun ? 'would run' : 'ran'
   }.`;
 }
@@ -142,8 +145,14 @@ export function summary(facts) {
   lines.push('');
 
   if (facts.fetchReason !== undefined) {
+    // A fetch that found nothing does not by itself mean a full run: `covsel
+    // fetch` leaves an existing map in the store alone, so selection may have
+    // narrowed against one that was already there. Report the verdict that was
+    // reached rather than the one a failed fetch usually implies.
     lines.push(
-      `No archived map was installed: ${facts.fetchReason}. The suite runs in full, which is the safe outcome.`,
+      facts.fullRun
+        ? `No archived map was installed: ${facts.fetchReason}. The suite runs in full, which is the safe outcome.`
+        : `No archived map was installed: ${facts.fetchReason}. Selection used the map already in the store.`,
       '',
     );
   }
@@ -195,10 +204,26 @@ function readJson(path) {
 
 export function main() {
   const dir = process.argv[2] ?? process.env['RUNNER_TEMP'] ?? '.';
+  const mode = process.env['COVSEL_MODE'];
+  const affected = readJson(join(dir, 'covsel-affected.json'));
+
+  // In select mode the selection is the thing being reported, so a file that is
+  // missing or half-written is a failure rather than an absence to render around.
+  // Reporting it as "selected 0" would be a green step claiming a narrowing that
+  // was never measured.
+  if (mode !== 'record' && affected === undefined) {
+    process.stderr.write(
+      `covsel-action: no readable selection at ${join(dir, 'covsel-affected.json')}, ` +
+        'so there is nothing to report\n',
+    );
+    process.exitCode = 1;
+    return;
+  }
+
   const facts = readFacts({
-    mode: process.env['COVSEL_MODE'],
+    mode,
     dryRun: process.env['COVSEL_DRY_RUN'] === 'true',
-    affected: readJson(join(dir, 'covsel-affected.json')),
+    affected,
     status: readJson(join(dir, 'covsel-status.json')),
     fetch: readJson(join(dir, 'covsel-fetch.json')),
   });
