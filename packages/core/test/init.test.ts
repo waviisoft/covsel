@@ -148,6 +148,31 @@ describe('covsel init — naming the adapter', () => {
     expect(result.warnings.join('\n')).toContain('cypress has no adapter yet');
   });
 
+  it('names what a runner needs doing by hand before the commands will work', async () => {
+    // Playwright is the one runner whose printed commands refuse until the
+    // project has done something itself: covsel cannot see into a browser
+    // without the fixture, and cannot guess which paths that browser runs.
+    // Handing someone a command init knows will refuse is worse than saying so.
+    const cwd = project({
+      'package.json': pkg({ devDependencies: { '@playwright/test': '^1.62.0' } }),
+    });
+
+    const result = await init(cwd, 'playwright');
+
+    expect(result.adapter).toBe('playwright');
+    const setup = (result.commands?.setup ?? []).join('\n');
+    expect(setup).toMatch(/observes/);
+    expect(setup).toMatch(/covselFixtures/);
+  });
+
+  it('says nothing extra for a runner that needs nothing extra', async () => {
+    const cwd = project({
+      'package.json': pkg({ devDependencies: { vitest: '^3.0.0' } }),
+    });
+
+    expect((await init(cwd)).commands?.setup).toBeUndefined();
+  });
+
   it('adds the store directory to .gitignore', async () => {
     const cwd = project({
       'package.json': pkg({ devDependencies: { vitest: '^3.0.0' } }),

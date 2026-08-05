@@ -247,10 +247,20 @@ export { expect };
 `;
 }
 
-/** A spec, with each test recording that it ran under the name covsel gives it. */
+/**
+ * A spec, with each test recording that it ran under the name covsel gives it.
+ *
+ * One test carries a Playwright tag, and its describe carries another, because
+ * that is where the recorded name and the title `--grep` matches come apart:
+ * Playwright appends each level's tags after that level's own title, so the name
+ * sits *inside* the grep title rather than at the end of it. A selection whose
+ * pattern does not allow for that matches no test and exits 0 — the suite's
+ * `a selection handed to the runner runs the units it names` check is what
+ * catches it, and only if a tagged test is there to be missed.
+ */
 export function spec(
   markerFile: string,
-  tests: { title: string; button: string; expected: string }[],
+  tests: { title: string; button: string; expected: string; tag?: string }[],
 ): string {
   return `import { appendFileSync } from 'node:fs';
 import { expect, test } from './fixtures.js';
@@ -259,15 +269,19 @@ test.beforeEach(({}, testInfo) => {
   appendFileSync('${markerFile}', testInfo.titlePath.join(' ') + '\\n');
 });
 
+test.describe('the app', { tag: '@ui' }, () => {
 ${tests
   .map(
-    (t) => `test('${t.title}', async ({ page }) => {
-  await page.goto('/');
-  await page.click('#${t.button}');
-  await expect(page.locator('#out')).toHaveText('${t.expected}');
-});`,
+    (
+      t,
+    ) => `  test('${t.title}'${t.tag === undefined ? '' : `, { tag: '${t.tag}' }`}, async ({ page }) => {
+    await page.goto('/');
+    await page.click('#${t.button}');
+    await expect(page.locator('#out')).toHaveText('${t.expected}');
+  });`,
   )
   .join('\n\n')}
+});
 `;
 }
 
@@ -362,7 +376,7 @@ export function files(init: {
         : fixtures(),
     'tests/demo.spec.js': spec(init.markerFile, [
       // compute(1) is 4; alpha doubles it and shared adds 100.
-      { title: 'alpha test', button: 'alpha', expected: '108' },
+      { title: 'alpha test', button: 'alpha', expected: '108', tag: '@smoke' },
       { title: 'beta test', button: 'beta', expected: '105' },
     ]),
   };

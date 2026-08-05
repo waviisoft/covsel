@@ -156,13 +156,18 @@ records a test as covering less of the server than it does. The fixture refuses
 rather than guess which happened. Only the _recording_ is serial; the selected
 runs afterwards are not.
 
-**The server window is file-granular**, where the browser window is
-block-granular. Coverage starts after the server has already loaded its modules,
-and V8 then reports only functions that ran — an un-run one is absent rather than
-zero-counted, so covsel reads it as executed and stays fail-open. A change to a
-server file therefore selects every test that executed _that file_. Splitting
-handlers across modules is what buys precision here; block-level server coverage
-would need covsel's code running inside your server process, which it does not.
+**Expect file granularity from the server window**, where the browser window is
+block-granular throughout. covsel does record server blocks, but how much they
+tell it depends on when the module was loaded. Coverage starts when the test
+does, and V8 reports only functions that ran since — so for a module the server
+loaded at boot an un-run function is absent rather than zero-counted, covsel
+reads it as executed, and a change anywhere in that file selects every test that
+executed it. A module first imported _during_ the test is compiled inside the
+window, so its un-run functions are reported and it keeps real block granularity.
+
+Splitting handlers across modules, and loading them on demand, is what buys
+precision here. Block granularity for everything else would need covsel's code
+running inside your server process, which it does not.
 
 A file both windows see falls back to file granularity, because a window that
 recorded no blocks for it cannot vouch for the other's.

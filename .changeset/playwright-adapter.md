@@ -60,8 +60,10 @@ started — nothing of covsel runs inside it — and each window declares what i
 alone could see, so a browser recording never vouches for the server. Recording
 needs `--workers=1` when the server window is on, and the fixture refuses rather
 than credit one worker's server execution to another's test. The server window
-is file-granular: coverage starts after the server has loaded its modules, and
-V8 then reports only functions that ran.
+tells covsel less than the browser window does: coverage starts when the test
+does, so a module the server loaded at boot reports only the functions that ran
+and covsel reads the rest as executed — file granularity, fail-open. A module
+first imported during the test keeps real block granularity.
 
 Both configurations run the shared conformance suite, against a real browser and
 a served application, in their own CI job.

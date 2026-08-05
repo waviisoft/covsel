@@ -89,6 +89,28 @@ describe('testNameSuffixPattern', () => {
     );
   });
 
+  it('matches a title the runner tagged, at every level it tagged', () => {
+    // Playwright appends each level's tags after that level's own title, so a
+    // recorded name is not a suffix of the title it belongs to — the tags sit
+    // inside it. A pattern that did not allow for them would match nothing, and
+    // `playwright test --grep <that>` exits 0 having run none of the tests the
+    // diff affected. Verified against Playwright 1.62.
+    const name = 'cart.spec.ts checkout pays';
+    expect(matches([name], 'chromium cart.spec.ts checkout @slow pays @smoke')).toBe(
+      true,
+    );
+    expect(matches([name], 'chromium cart.spec.ts checkout pays @smoke')).toBe(true);
+    expect(matches([name], 'chromium cart.spec.ts checkout pays')).toBe(true);
+  });
+
+  it('still tells two tagged tests apart', () => {
+    // Tolerating tags may not cost the discrimination the pattern exists for: a
+    // pattern that matched everything would run the whole suite on every diff.
+    expect(
+      matches(['cart.spec.ts pays'], 'chromium cart.spec.ts @slow refunds @smoke'),
+    ).toBe(false);
+  });
+
   it('matches every name when several are combined', () => {
     const names = ['spec.ts one', 'spec.ts two'];
     expect(matches(names, 'chromium spec.ts one')).toBe(true);

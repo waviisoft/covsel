@@ -230,10 +230,17 @@ function windowsOf(
  *
  * One file per worker, appended a line at a time as each test finishes, because
  * Playwright runs several workers at once and a worker that dies takes whatever
- * it was holding with it. A line that will not parse is dropped rather than
- * failing the read: it is a partial write from a worker killed mid-line, and the
- * test behind it is then a test the run never reported -- which recording
- * already refuses, by name, against the files it asked about.
+ * it was holding with it.
+ *
+ * A line that will not parse is dropped rather than failing the read, and what
+ * makes that safe is the exit code rather than reconciliation. Reconciliation is
+ * per *file*: a truncated line for one test in a file whose other tests reported
+ * fine would leave that test out of the map with nothing noticing. But the only
+ * way to truncate a line is a worker dying mid-append, and a run that lost a
+ * worker did not pass -- so the recording is refused whole, before any of this is
+ * read. A record that survives with no test to attribute it to is dropped for the
+ * same reason: kept, it would become an entry keyed on nothing, which no diff
+ * matches and no reconciliation misses.
  */
 function readObservations(dir: string): ObservedTest[] {
   const out: ObservedTest[] = [];

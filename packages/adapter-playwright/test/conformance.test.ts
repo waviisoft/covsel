@@ -75,13 +75,13 @@ const common = {
       testFile: 'tests/demo.spec.js',
       // The title path as Playwright greps it, less the project name — which is
       // what the recorder writes and what a selection has to name.
-      name: 'demo.spec.js alpha test',
+      name: 'demo.spec.js the app alpha test',
       source: 'src/a.js',
       bodyEdit: { find: 'shared(x * 2)', replace: 'shared(x * 4)' },
     },
     b: {
       testFile: 'tests/demo.spec.js',
-      name: 'demo.spec.js beta test',
+      name: 'demo.spec.js the app beta test',
       source: 'src/b.js',
       bodyEdit: { find: 'shared(x + 1)', replace: 'shared(x + 3)' },
     },

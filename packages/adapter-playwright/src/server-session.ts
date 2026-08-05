@@ -33,6 +33,18 @@ interface Pending {
 /** Long enough for a loaded server, short enough not to hang a recording. */
 const TIMEOUT_MS = 20_000;
 
+/** What a caller may vary about how long this waits. */
+export interface RemoteCoverageSessionInit {
+  /**
+   * How long any one call may take before the window is failed instead.
+   *
+   * A deadline rather than a preference: a server that accepts the connection
+   * and then says nothing would otherwise be waited on once per test, and a
+   * recording that looks hung is one nobody runs again.
+   */
+  timeoutMs?: number;
+}
+
 function advice(inspectUrl: string): string {
   return (
     `covsel could not reach an inspector at ${inspectUrl}. Recording the server ` +
@@ -44,14 +56,25 @@ function advice(inspectUrl: string): string {
   );
 }
 
+/** True when a published debugger URL points at the host covsel was told about. */
+function sameHost(wsUrl: string, inspectUrl: string): boolean {
+  try {
+    return new URL(wsUrl).host === new URL(inspectUrl).host;
+  } catch {
+    return false;
+  }
+}
+
 export class RemoteCoverageSession {
   private readonly inspectUrl: string;
+  private readonly timeoutMs: number;
   private socket: WebSocket | undefined;
   private nextId = 0;
   private readonly pending = new Map<number, Pending>();
 
-  constructor(inspectUrl: string) {
+  constructor(inspectUrl: string, init: RemoteCoverageSessionInit = {}) {
     this.inspectUrl = inspectUrl.replace(/\/+$/, '');
+    this.timeoutMs = init.timeoutMs ?? TIMEOUT_MS;
   }
 
   async start(): Promise<void> {
@@ -86,11 +109,14 @@ export class RemoteCoverageSession {
     } catch {
       /* the coverage is already collected */
     }
-    for (const [, waiter] of this.pending) {
-      waiter.reject(new Error('the inspector connection closed'));
-    }
-    this.pending.clear();
+    this.settleAll(new Error('the inspector connection closed'));
     socket.close();
+  }
+
+  /** Fail every call still waiting, and forget them. */
+  private settleAll(error: Error): void {
+    for (const [, waiter] of this.pending) waiter.reject(error);
+    this.pending.clear();
   }
 
   /** Find the target Node publishes and open a socket to it. */
@@ -98,7 +124,7 @@ export class RemoteCoverageSession {
     let targets: InspectorTarget[];
     try {
       const res = await fetch(`${this.inspectUrl}/json/list`, {
-        signal: AbortSignal.timeout(TIMEOUT_MS),
+        signal: AbortSignal.timeout(this.timeoutMs),
       });
       if (!res.ok) throw new Error(`the inspector answered ${res.status}`);
       targets = (await res.json()) as InspectorTarget[];
@@ -112,15 +138,33 @@ export class RemoteCoverageSession {
     if (url === undefined) {
       throw new Error(`${advice(this.inspectUrl)} (it published no debugger target)`);
     }
+    // The debugger URL is content covsel did not write, and opening a socket to
+    // wherever it points would turn recording into a connection generator aimed
+    // by whatever answered `/json/list` -- the same reason `SourceMapResolver`
+    // will not follow a `sourceMappingURL` to another host.
+    if (!sameHost(url, this.inspectUrl)) {
+      throw new Error(
+        `${advice(this.inspectUrl)} (it published a debugger target on another ` +
+          `host, ${url}, which covsel will not connect to)`,
+      );
+    }
 
     const socket = new WebSocket(url);
     socket.addEventListener('message', (event: MessageEvent) => {
       this.deliver(event.data);
     });
+    // A server that dies mid-test takes the socket with it, and `send` on a
+    // closed one is a no-op -- so without this every call in flight, and every
+    // call after it, waits out the full timeout. The window fails either way;
+    // this is the difference between failing at once and a recording that looks
+    // hung for as many timeouts as there are tests left.
+    socket.addEventListener('close', () => {
+      this.settleAll(new Error('the inspector connection closed'));
+    });
     await new Promise<void>((resolve, reject) => {
       const timer = setTimeout(
         () => reject(new Error(`the inspector at ${url} did not accept a connection`)),
-        TIMEOUT_MS,
+        this.timeoutMs,
       );
       socket.addEventListener('open', () => {
         clearTimeout(timer);
@@ -171,7 +215,7 @@ export class RemoteCoverageSession {
       const timer = setTimeout(() => {
         this.pending.delete(id);
         reject(new Error(`the inspector did not answer ${method}`));
-      }, TIMEOUT_MS);
+      }, this.timeoutMs);
       this.pending.set(id, {
         resolve: (value) => {
           clearTimeout(timer);

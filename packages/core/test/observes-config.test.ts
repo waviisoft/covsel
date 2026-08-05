@@ -40,6 +40,22 @@ describe('the scope a project declares', () => {
     ]);
   });
 
+  it('refuses a scope that is not a list of globs', () => {
+    // `"observes": "src/**"` is the plausible typo, since every other list in the
+    // config file is written as one — and it is the shape that does the most
+    // damage. A scope is iterated for its globs, and iterating a string yields
+    // its characters, so the map would be stamped `["s","r","c","/","*"]`: globs
+    // that match nothing, which makes every path they miss read as *observed and
+    // covered by no test* rather than unobserved. The full run that should have
+    // followed never happens.
+    expect(() => resolveConfig({ observes: 'src/**' } as never)).toThrow(
+      /is not a list of globs/,
+    );
+    expect(() => resolveConfig({ observes: ['src/**', 7] } as never)).toThrow(
+      /is not a list of globs/,
+    );
+  });
+
   it('keeps an explicitly empty declaration rather than reading it as unset', () => {
     // An adapter that requires the declaration refuses either way, and the two
     // deserve the same refusal — but they are different statements, and turning

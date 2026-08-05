@@ -252,7 +252,15 @@ function printNextSteps(commands: {
   record: string;
   affected: string;
   run: string;
+  setup?: string[];
 }): void {
+  // Before the commands, because for a runner that needs them the commands
+  // refuse until they are done -- and someone reading a "Next:" list has every
+  // reason to expect the first line to work.
+  if (commands.setup !== undefined && commands.setup.length > 0) {
+    out('\nFirst, in your project:\n');
+    for (const step of commands.setup) out(`  - ${step}\n`);
+  }
   out('\nNext:\n');
   out(`  ${commands.record}\n`);
   out(`  ${commands.affected}\n`);

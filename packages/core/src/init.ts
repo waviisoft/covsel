@@ -52,6 +52,17 @@ interface RunnerSignature {
    * reads Vitest's own coverage, which the project has to provide.
    */
   support?: readonly string[];
+  /**
+   * What the project has to do itself before the printed commands will work.
+   *
+   * Every adapter here records with no further setup except one: covsel cannot
+   * see into a browser without a fixture the project installs on its own `test`
+   * object, and cannot guess which of its paths that browser executes. Both are
+   * refused at record time with messages that say so — but init is where someone
+   * finds out, and handing them a command it knows will refuse is worse than
+   * saying what is missing.
+   */
+  setup?: readonly string[];
 }
 
 /**
@@ -100,7 +111,12 @@ const RUNNERS: readonly RunnerSignature[] = [
     adapter: 'playwright',
     deps: ['@playwright/test'],
     scripts: [/\bplaywright\b/],
-    command: 'playwright test',
+    command: 'playwright test --project=chromium',
+    setup: [
+      'extend your `test` object: `export const test = base.extend(covselFixtures())`',
+      'set `observes` in covsel.json to the globs the browser executes, e.g. ["src/**"]',
+      'see https://waviisoft.github.io/covsel/guide/adapters/playwright',
+    ],
   },
   // Named without an adapter, which is the whole point of naming it: a Cypress
   // project gets told covsel cannot record it yet, instead of being handed the
@@ -238,7 +254,13 @@ export interface InitPlan {
   warnings: string[];
   diagnostics: InitDiagnostics;
   /** The commands to run once the project is set up. */
-  commands?: { record: string; affected: string; run: string };
+  commands?: {
+    record: string;
+    affected: string;
+    run: string;
+    /** What the project must do itself first, for a runner that needs it. */
+    setup?: string[];
+  };
   /** Where to report a runner covsel could not configure. */
   reportUrl?: string;
 }
@@ -357,12 +379,14 @@ function addGitignore(cwd: string, storeDir: string): void {
 function nextCommands(
   adapter: string,
   runner: DetectedRunner | undefined,
-): { record: string; affected: string; run: string } {
+): { record: string; affected: string; run: string; setup?: string[] } {
   const command = runner?.command ?? '<your test command>';
+  const setup = RUNNERS.find((r) => r.adapter === adapter)?.setup;
   return {
     record: `covsel record --adapter ${adapter} -- ${command}`,
     affected: 'covsel affected',
     run: `covsel run --adapter ${adapter} -- ${command}`,
+    ...(setup !== undefined ? { setup: [...setup] } : {}),
   };
 }
 

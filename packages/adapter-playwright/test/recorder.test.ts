@@ -165,6 +165,63 @@ describe('recording a Playwright run', () => {
     expect(units[0]?.observes).toEqual(['src/**']);
   });
 
+  it('keeps the scope a window named for itself, over the recorder’s own', async () => {
+    // A fixture watching more than the browser is the only thing that knows
+    // which half of the repository each window saw. Stamping the recorder's
+    // declaration onto both would have the browser window vouch for the
+    // server — and then a path *neither* window watched, but the declaration
+    // names, reads as observed and covered by no test, so nothing runs.
+    const fake = project({
+      records: [
+        {
+          file: 'e2e/a.spec.ts',
+          name: 'a.spec.ts runs',
+          windows: [
+            { ...covering('src/cart.ts'), observes: ['src/**'] },
+            { ...covering('server/api.ts'), observes: ['server/**'] },
+          ],
+          allowedUnmappable: [],
+        },
+      ],
+    });
+
+    const recorder = createPlaywrightRecorder({
+      command: fake.command,
+      cwd: fake.cwd,
+      config: resolveConfig({ observes: ['src/**', 'server/**', 'shared/**'] }),
+    });
+    const units = (await recorder.recordRun?.(['e2e/a.spec.ts'])) ?? [];
+
+    // `shared/**` is declared but watched by neither window, so the unit may not
+    // claim it — and a change under it then falls open instead of selecting
+    // nothing.
+    expect(units[0]?.observes).toEqual(['src/**', 'server/**']);
+  });
+
+  it('drops a record that names no test, rather than recording it as one', async () => {
+    // A line missing its file or name cannot be attributed. Kept, it becomes an
+    // entry keyed on `undefined` that no diff ever matches and no reconciliation
+    // ever misses — a test silently absent from selection for good.
+    const fake = project({
+      records: [
+        { name: 'a.spec.ts runs', windows: [covering('src/cart.ts')] },
+        { file: 'e2e/a.spec.ts', windows: [covering('src/cart.ts')] },
+        {
+          file: 'e2e/a.spec.ts',
+          name: 'a.spec.ts runs',
+          windows: [covering('src/cart.ts')],
+          allowedUnmappable: [],
+        },
+      ],
+    });
+
+    const { units } = await record(fake);
+
+    expect(units.map((u) => u.test)).toEqual([
+      { file: 'e2e/a.spec.ts', name: 'a.spec.ts runs' },
+    ]);
+  });
+
   it('fails the recording when a window produced nothing usable', async () => {
     // Half a test's execution recorded as all of it is exactly the map that
     // skips tests: the regions the failed window would have covered read as
@@ -211,9 +268,9 @@ describe('recording a Playwright run', () => {
   });
 
   it('drops a half-written line rather than failing the read', async () => {
-    // A worker killed mid-append leaves one. The test behind it is then a test
-    // the run never reported, which recording refuses by name against the files
-    // it asked about — a better failure than an unparseable byte.
+    // A worker killed mid-append leaves one, and a run that lost a worker exits
+    // non-zero, so the recording is refused whole before any of this is read.
+    // Dropping the line is what keeps the read itself from being the failure.
     const fake = project({
       records: [
         {

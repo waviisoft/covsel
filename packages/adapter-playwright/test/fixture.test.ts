@@ -13,7 +13,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { resolveConfig, toMapperConfig } from '@covsel/core';
 
 import { write } from '../../core/test/helpers/repo.js';
-import type { CovselFixtures, PageLike } from '../src/fixture.js';
+import type { CovselFixtures, CovselFixturesOptions, PageLike } from '../src/fixture.js';
 import type { ObservedTest } from '../src/protocol.js';
 
 /**
@@ -75,11 +75,13 @@ const coverageOf = (entries: { url: string; source?: string }[]) => ({
  * across cases would map the second one against the first one's repository.
  */
 async function load(env: Record<string, string | undefined>): Promise<{
-  covselFixtures: () => CovselFixtures;
+  covselFixtures: (options?: CovselFixturesOptions) => CovselFixtures;
 }> {
   vi.resetModules();
   for (const [key, value] of Object.entries(env)) vi.stubEnv(key, value);
-  return (await import('../src/fixture.js')) as { covselFixtures: () => CovselFixtures };
+  return (await import('../src/fixture.js')) as {
+    covselFixtures: (options?: CovselFixturesOptions) => CovselFixtures;
+  };
 }
 
 /** Run one test through the fixture and return what it wrote for it. */
@@ -90,6 +92,8 @@ async function runFixture(init: {
   titlePath?: string[];
   specFile?: string;
   body?: () => Promise<void>;
+  options?: CovselFixturesOptions;
+  parallelIndex?: number;
 }): Promise<ObservedTest | undefined> {
   const { covselFixtures } = await load({
     COVSEL_OUT: init.outDir,
@@ -97,7 +101,7 @@ async function runFixture(init: {
     COVSEL_BLOCKS: '1',
     COVSEL_CONFIG: JSON.stringify(toMapperConfig(resolveConfig({}))),
   });
-  const entry = covselFixtures().covselCoverage;
+  const entry = covselFixtures(init.options).covselCoverage;
   if (entry === undefined) return undefined;
   const [fn] = entry;
   await fn(
@@ -108,6 +112,7 @@ async function runFixture(init: {
     {
       file: join(init.cwd, init.specFile ?? 'e2e/cart.spec.ts'),
       titlePath: init.titlePath ?? ['cart.spec.ts', 'the cart', 'adds an item'],
+      ...(init.parallelIndex !== undefined ? { parallelIndex: init.parallelIndex } : {}),
     },
   );
   return written(init.outDir)[0];
@@ -350,5 +355,126 @@ describe('where the fixture writes', () => {
       'a.spec.ts first',
       'a.spec.ts second',
     ]);
+  });
+});
+
+/**
+ * The window that watches the application server, and everything it must refuse
+ * rather than record.
+ *
+ * These are the decisions that say what a recording may claim, and every one of
+ * them fails in the same direction when it goes wrong: a test credited with less
+ * than it ran, or a scope claiming ground nothing watched. Both are read later as
+ * "no test covers this", which is the one answer covsel may never give quietly.
+ * None of them needs a browser or a server to check.
+ */
+describe('the server window', () => {
+  /** An inspector nothing is listening on, so `start()` fails the way it does. */
+  const DEAD = 'http://127.0.0.1:1';
+  const serverOptions = (over: Partial<CovselFixturesOptions['server']> = {}) => ({
+    browser: { observes: ['src/**'] },
+    server: { observes: ['server/**'], inspectUrl: DEAD, ...over },
+  });
+
+  it('refuses to be configured without the browser window naming its own scope', async () => {
+    // With two windows the recorder's single declaration cannot stand for
+    // either. Attached to the browser window it would have a browser recording
+    // vouch for `server/**` — and then a change to a path *neither* window
+    // watches reads as observed and covered by nothing, so no test runs.
+    const { covselFixtures } = await load({ COVSEL_OUT: temp('covsel-pw-out-') });
+    expect(() =>
+      covselFixtures({ server: { observes: ['server/**'] } } as CovselFixturesOptions),
+    ).toThrow(/browser/);
+  });
+
+  it('refuses before it opens anything, so a misconfigured project hears at load', async () => {
+    // Thrown from `covselFixtures()` itself rather than from a test, so the
+    // spec file fails to load instead of the suite recording a whole run under
+    // a scope nobody could satisfy.
+    const { covselFixtures } = await load({ COVSEL_OUT: undefined });
+    expect(() =>
+      covselFixtures({ server: { observes: ['server/**'] } } as CovselFixturesOptions),
+    ).toThrow(/browser/);
+  });
+
+  it('gives each window its own scope, and neither the other one', async () => {
+    const cwd = temp('covsel-pw-cwd-');
+    write(cwd, 'src/cart.ts', 'export const total = () => 1;\n');
+
+    const record = await runFixture({
+      cwd,
+      outDir: temp('covsel-pw-out-'),
+      page: fakePage({ coverage: coverageOf([{ url: `file://${cwd}/src/cart.ts` }]) }),
+      options: serverOptions(),
+    });
+
+    const [browser] = record?.windows ?? [];
+    expect(browser && 'observes' in browser ? browser.observes : undefined).toEqual([
+      'src/**',
+    ]);
+  });
+
+  it('fails the window when the test ran in a second Playwright worker', async () => {
+    // Both workers drive the one server process: this test would be credited
+    // with the other's server execution, or its own collection stopped
+    // mid-test. The second is the dangerous one — it records the test as
+    // covering less of the server than it does, so a change there skips it.
+    const cwd = temp('covsel-pw-cwd-');
+    write(cwd, 'src/cart.ts', 'export const total = () => 1;\n');
+
+    const record = await runFixture({
+      cwd,
+      outDir: temp('covsel-pw-out-'),
+      page: fakePage({ coverage: coverageOf([{ url: `file://${cwd}/src/cart.ts` }]) }),
+      options: serverOptions(),
+      parallelIndex: 1,
+    });
+
+    const server = record?.windows[1];
+    expect(server && 'failed' in server ? server.failed : '').toMatch(/--workers=1/);
+    // Not merely "there is a failure": a window carrying files as well would be
+    // read as a measurement by everything downstream.
+    expect(server && 'files' in server).toBe(false);
+  });
+
+  it('fails the window when the server could not be reached, rather than recording nothing', async () => {
+    // An unreachable inspector is not a test that ran no server code. Recorded
+    // as an empty measurement it would say exactly that, and every later change
+    // to the server would select this test out.
+    const cwd = temp('covsel-pw-cwd-');
+    write(cwd, 'src/cart.ts', 'export const total = () => 1;\n');
+
+    const record = await runFixture({
+      cwd,
+      outDir: temp('covsel-pw-out-'),
+      page: fakePage({ coverage: coverageOf([{ url: `file://${cwd}/src/cart.ts` }]) }),
+      options: serverOptions(),
+      parallelIndex: 0,
+    });
+
+    const server = record?.windows[1];
+    expect(server && 'failed' in server ? server.failed : '').toMatch(/--inspect/);
+    expect(server && 'files' in server).toBe(false);
+  });
+
+  it('still records the browser window when the server window failed', async () => {
+    // The two failures are separate: recording fails on the combined unit, and
+    // the browser's half is what makes the message about the server rather than
+    // about a test that observed nothing at all.
+    const cwd = temp('covsel-pw-cwd-');
+    write(cwd, 'src/cart.ts', 'export const total = () => 1;\n');
+
+    const record = await runFixture({
+      cwd,
+      outDir: temp('covsel-pw-out-'),
+      page: fakePage({ coverage: coverageOf([{ url: `file://${cwd}/src/cart.ts` }]) }),
+      options: serverOptions(),
+    });
+
+    expect(record?.windows).toHaveLength(2);
+    const [browser] = record?.windows ?? [];
+    expect(browser && 'files' in browser ? browser.files.map((f) => f.file) : []).toEqual(
+      ['src/cart.ts'],
+    );
   });
 });
