@@ -1,7 +1,12 @@
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 
-import type { MapDependencies } from './schema.js';
+import type { CovselConfig } from './config.js';
+import { fileAtCommit } from './git.js';
+import type { Change } from './interfaces.js';
+import { readInstalledInventory } from './inventory.js';
+import { LOCKFILE_NAMES } from './lockfiles.js';
+import type { CoverageMap, MapDependencies } from './schema.js';
 
 /**
  * Deciding what a dependency change affects, given what a map recorded and what
@@ -154,4 +159,169 @@ export function dependencyOnlyManifestChange(
   // is known to have moved, which is not the same as knowing nothing moved, so
   // it keeps the sentinel's full run.
   return touched.length > 0 && touched.every((key) => DEPENDENCY_KEYS.has(key));
+}
+
+/** The manifest every package manager keeps its dependency blocks in. */
+const MANIFEST = 'package.json';
+
+/**
+ * Whether a changed path is one a dependency change shows up in.
+ *
+ * By basename, matching how the sentinel list reads these names: `makeMatcher`
+ * widens a slash-less glob to basenames, so a workspace's own `package.json` and
+ * a nested lockfile are sentinels exactly as the root ones are, and this has to
+ * agree with that or the two would disagree about which files are accounted for.
+ *
+ * Exported because three commands now ask this question -- `affected` to resolve
+ * the change, `status` to predict what `affected` will do, and `explain` to say
+ * what a change to the path would cost. Three copies of the answer is how they
+ * drift apart.
+ */
+export function isDependencyFile(rel: string): boolean {
+  const name = rel.slice(rel.lastIndexOf('/') + 1);
+  return name === MANIFEST || (LOCKFILE_NAMES as readonly string[]).includes(name);
+}
+
+/**
+ * What a diff's dependency-related changes amount to.
+ *
+ * Three answers, and the middle one is why this is not a boolean. `undefined`
+ * means the diff raises no dependency question at all, and everything proceeds
+ * as it did before this existed.
+ */
+export type DependencyChange =
+  | {
+      /**
+       * The changed files this answer speaks for. They stop being changes to
+       * reason about as *files* -- the sentinel does not fire for them, and the
+       * selector is never asked which tests cover a lockfile -- because their
+       * whole content is the package axis below.
+       */
+      readonly accounted: readonly string[];
+      /** Package names whose resolution moved since the map was recorded. */
+      readonly packages: readonly string[];
+      readonly fallOpen?: undefined;
+    }
+  | {
+      readonly accounted?: undefined;
+      readonly packages?: undefined;
+      /** Why this dependency change could not be resolved to package names. */
+      readonly fallOpen: string;
+    };
+
+/**
+ * Resolve a diff's dependency changes to the packages whose resolution moved, or
+ * say why they cannot be.
+ *
+ * This is the one place the lockfile sentinel is allowed to be downgraded, and
+ * every precondition below has to hold before it is. The order is deliberate:
+ * cheapest and most decisive first, so a project this can say nothing about pays
+ * almost nothing to find that out.
+ *
+ * What makes the downgrade safe is that each precondition rules out a way the
+ * comparison could be a lie rather than a measurement:
+ *
+ *  - **The map recorded an inventory.** Without one there is no "before" side,
+ *    and every map recorded before that field existed is in exactly that
+ *    position.
+ *  - **The tree provably reflects the lockfile.** A lockfile pulled but not
+ *    installed leaves the old packages on disk, so diffing inventories reports
+ *    nothing changed and skips the tests for everything that really moved. Note
+ *    the asymmetry: "the tree shows no difference" is not a safe test on its
+ *    own, because a tree stale for one reason can still differ for another.
+ *  - **The tree still yields an inventory now.** A project that switched to a
+ *    layout covsel cannot identify packages in has no "after" side.
+ *  - **Every changed package was installed at record time.** One that was not is
+ *    a package the map never had an opinion about, and its silence is an
+ *    artifact rather than a measurement -- the same distinction `observed`
+ *    draws for paths.
+ *
+ * A manifest change is admitted only when every changed `package.json` moved
+ * nothing but its dependency blocks. `makeMatcher` widens a slash-less sentinel
+ * to basenames, so the sentinel fires for every workspace manifest, and the
+ * question has to be asked of each one: a `scripts` block edited in one package
+ * changes how that suite runs whatever the other manifests did.
+ */
+export function dependencyChange(init: {
+  cwd: string;
+  config: CovselConfig;
+  map: CoverageMap;
+  changes: readonly Change[];
+}): DependencyChange | undefined {
+  const { cwd, map, changes } = init;
+  const basename = (rel: string): string => rel.slice(rel.lastIndexOf('/') + 1);
+  const dependencyFiles = changes.filter((c) => isDependencyFile(c.file));
+  const manifests = dependencyFiles.filter((c) => basename(c.file) === MANIFEST);
+  const locks = dependencyFiles.filter((c) => basename(c.file) !== MANIFEST);
+  if (locks.length === 0 && manifests.length === 0) return undefined;
+
+  const recorded = map.dependencies;
+  // Not a downgrade that failed -- a question this map cannot be asked, so it is
+  // not asked, and the diff is answered exactly as it was before any of this
+  // existed. The distinction is worth the branch for two reasons. Every map
+  // recorded before the field existed is in this position, so this is the path
+  // almost every real map takes, and "sentinel changed: pnpm-lock.yaml" is both
+  // truer and more useful to its owner than a sentence about an inventory they
+  // never opted into. And a project that deliberately dropped lockfiles from its
+  // `sentinels` keeps the behaviour it chose, where a fall-open reason here would
+  // quietly overrule it with a full run it had decided not to spend.
+  if (recorded === undefined) return undefined;
+  // An entry-less map credits packages to nothing, so there is no selection here
+  // to make and its own reason for the full run says so better than any of the
+  // ones below would.
+  if (map.entries.length === 0) return undefined;
+
+  // Answered from the diff and one `git show` per changed manifest, and asked
+  // only now: the two exits above are the ones almost every project takes, and
+  // this is the first step that costs a subprocess. A manifest that moved
+  // anything but its dependency blocks is not a dependency change at all, so it
+  // says nothing and the sentinel fires as it always did -- no fall-open reason,
+  // because nothing was downgraded.
+  const base = map.commit;
+  for (const manifest of manifests) {
+    const before =
+      base === undefined ? undefined : fileAtCommit(cwd, base, manifest.file);
+    let after: string | undefined;
+    try {
+      after = readFileSync(join(cwd, manifest.file), 'utf8');
+    } catch {
+      after = undefined;
+    }
+    if (!dependencyOnlyManifestChange(before, after)) return undefined;
+  }
+
+  const freshness = treeIsProvablyCurrent(cwd, recorded);
+  if (!freshness.current) return { fallOpen: freshness.why };
+
+  const installed = readInstalledInventory(cwd);
+  if (installed === undefined) {
+    // A project that moved to a layout covsel cannot identify packages in --
+    // `node-linker=hoisted`, npm, yarn -- and one degenerate case worth naming
+    // because it looks like a bug from the outside: removing the last dependency
+    // a project has leaves nothing to vouch for, which is reported as no
+    // inventory, and this falls open. Correct, and invisible on any tree with
+    // more than one package left standing.
+    return { fallOpen: 'what is installed now cannot be established' };
+  }
+  // The marker proves the tree matches its lockfile; this proves both sides are
+  // describing the same kind of tree. A repository that changed package manager
+  // between recording and now satisfies the first and not the second.
+  if (installed.manager !== recorded.manager) {
+    return {
+      fallOpen: `installed with ${installed.manager}, but the map was recorded under ${recorded.manager}`,
+    };
+  }
+
+  const packages = changedPackages(recorded.inventory, installed.inventory);
+  const unknown = packages.find((name) => !Object.hasOwn(recorded.inventory, name));
+  if (unknown !== undefined) {
+    return {
+      fallOpen: `${unknown} was not installed when the map was recorded, so no entry could mention it`,
+    };
+  }
+
+  return {
+    accounted: [...locks, ...manifests].map((c) => c.file),
+    packages,
+  };
 }

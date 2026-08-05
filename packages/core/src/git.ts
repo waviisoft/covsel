@@ -50,6 +50,36 @@ export function isAncestorCommit(cwd: string, ref: string, of = 'HEAD'): boolean
 }
 
 /**
+ * One file's contents as of one commit, or nothing when it cannot be read.
+ *
+ * The "before" side of a change to a tracked file, for the cases where knowing
+ * *that* it changed is not enough and what changed inside it decides the answer.
+ * A manifest is the one that matters: `package.json` is a sentinel because
+ * almost anything in it can change what a test does, and only a diff confined to
+ * its dependency blocks is one the inventory can account for.
+ *
+ * Nothing is returned for a path that did not exist at that commit, a commit
+ * this checkout does not have, or a git that fails — and every caller has to
+ * read that as "cannot tell", never as "empty". The distinction is the whole
+ * point: an unreadable manifest says nothing about what moved in it, which keeps
+ * the sentinel's full run rather than downgrading it.
+ */
+export function fileAtCommit(
+  cwd: string,
+  commit: string,
+  rel: string,
+): string | undefined {
+  try {
+    // `<commit>:<path>` binds the path to that commit, rather than to the index
+    // or to whatever the work tree holds now.
+    const res = git(cwd, ['show', `${commit}:${rel}`]);
+    return res.ok ? res.stdout : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+/**
  * True when `cwd` is inside a git work tree. The command also succeeds in a bare
  * repository and inside `.git/`, printing `false`, so the output is what counts.
  */

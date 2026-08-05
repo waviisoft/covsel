@@ -11,6 +11,7 @@ import {
   recordedConfig,
   resolveConfig,
 } from './config.js';
+import { dependencyChange, isDependencyFile } from './dependencies.js';
 import { discoverTestFiles, isTestFile } from './discover.js';
 import {
   commitExists,
@@ -35,6 +36,7 @@ import { FailOpenPolicy, fullRunReason } from './policy.js';
 import {
   type CoverageMap,
   type Granularity,
+  isUsableMap,
   MAP_SCHEMA_VERSION,
   type MapEntry,
   OBSERVES_EVERYTHING,
@@ -788,15 +790,35 @@ export async function selectAffected(init: SelectInit): Promise<AffectedResult> 
     return fullRun('could not compute a git diff');
   }
 
+  // A dependency change is the one change nothing in the map moves for: vendored
+  // code is outside what a recording maps, so the lockfile is the only place it
+  // shows at all. Resolving it to package names is what lets that sentinel be
+  // downgraded, and it is asked before the sentinel check so the files it speaks
+  // for can be taken out of the diff -- they are not changes to reason about as
+  // files any more, they are the package axis below.
+  const deps = isUsableMap(map)
+    ? dependencyChange({ cwd, config, map, changes })
+    : undefined;
+  if (deps?.fallOpen !== undefined) return fullRun(deps.fallOpen);
+  const accounted = new Set<string>(deps?.accounted ?? []);
+  const fileChanges =
+    accounted.size === 0 ? changes : changes.filter((c) => !accounted.has(c.file));
+
   const policy = new FailOpenPolicy(config);
-  if (policy.evaluate(map, changes) === 'full-run') {
-    return fullRun(fullRunReason(config, map, changes));
+  if (policy.evaluate(map, fileChanges) === 'full-run') {
+    return fullRun(fullRunReason(config, map, fileChanges));
   }
 
   if (map!.granularity === 'block' && config.granularity !== 'file') {
-    annotateChangedBlocks(cwd, changes, map!);
+    annotateChangedBlocks(cwd, fileChanges, map!);
   }
-  const units = await new FileSelector().affected(map!, changes);
+  const units = await new FileSelector().affected(map!, fileChanges);
+  const byPackage = packageAffected(map!, deps?.packages ?? []);
+  if (byPackage === undefined) {
+    return fullRun(
+      'the map records an inventory but an entry says nothing about packages',
+    );
+  }
   const mandatory = await policy.mandatory(changes);
   const alwaysRun = testFiles.filter((f) => matchesAny(f, config.alwaysRun));
 
@@ -835,7 +857,7 @@ export async function selectAffected(init: SelectInit): Promise<AffectedResult> 
   ]);
   const selected: TestId[] = [...wholeFile].map((file) => ({ file }));
   const seen = new Set<string>();
-  for (const u of units) {
+  for (const u of [...units, ...byPackage]) {
     if (wholeFile.has(u.file)) continue;
     const key = `${u.file} ${u.name ?? ''}`;
     if (seen.has(key)) continue;
@@ -848,6 +870,40 @@ export async function selectAffected(init: SelectInit): Promise<AffectedResult> 
 
   const tests = new Set<string>(selected.map((t) => t.file));
   return { fullRun: false, tests: [...tests], selected, discovered: testFiles.length };
+}
+
+/**
+ * The units whose entry ran code in a package whose resolution moved — or
+ * `undefined` when the map is not in a state to be asked.
+ *
+ * The package axis, kept deliberately separate from the file axis. The
+ * alternative considered and rejected was synthesising `Change` records with
+ * `node_modules/` paths and letting the selector do this: those paths are
+ * outside every recording's `observed` scope by construction, so each one would
+ * trip `unobservedChange` and force the very full run this exists to avoid.
+ *
+ * Silence about a package here is a measurement, in the same narrow sense
+ * silence about a source file is. It is sound only because everything that could
+ * make it an artifact has already been ruled out: the recorder declared it
+ * watches packages, the package was installed when the map was recorded, and the
+ * tree provably reflects its lockfile. An entry that says nothing at all about
+ * packages is the one remaining hole -- the map claims an inventory while an
+ * entry disclaims the question -- and it cannot be reconciled here, so it is
+ * reported rather than guessed at. Recording and merging both couple the two,
+ * which leaves a hand-edited or foreign map as the way in.
+ */
+function packageAffected(
+  map: CoverageMap,
+  changed: readonly string[],
+): TestId[] | undefined {
+  if (changed.length === 0) return [];
+  const moved = new Set(changed);
+  const affected: TestId[] = [];
+  for (const entry of map.entries) {
+    if (entry.packages === undefined) return undefined;
+    if (entry.packages.some((name) => moved.has(name))) affected.push(entry.test);
+  }
+  return affected;
 }
 
 /**
@@ -1060,8 +1116,21 @@ function nextSelection(
   if (base.kind === 'untrusted') return { fullRun: true, reason: base.reason };
   try {
     const changes = diffChanges(cwd, base.since, { exact: base.exact === true });
-    return new FailOpenPolicy(config).evaluate(map, changes) === 'full-run'
-      ? { fullRun: true, reason: fullRunReason(config, map, changes) }
+    // The same dependency step `selectAffected` takes, in the same order, for
+    // the same reason: this reports what that would decide, and a status that
+    // announced a full run for a lockfile bump the selection then downgrades is
+    // worse than no status at all. Two derivations of one answer is the standing
+    // hazard here -- they are kept together by both calling the same two
+    // functions in the same sequence.
+    const deps = isUsableMap(map)
+      ? dependencyChange({ cwd, config, map, changes })
+      : undefined;
+    if (deps?.fallOpen !== undefined) return { fullRun: true, reason: deps.fallOpen };
+    const accounted = new Set<string>(deps?.accounted ?? []);
+    const fileChanges =
+      accounted.size === 0 ? changes : changes.filter((c) => !accounted.has(c.file));
+    return new FailOpenPolicy(config).evaluate(map, fileChanges) === 'full-run'
+      ? { fullRun: true, reason: fullRunReason(config, map, fileChanges) }
       : { fullRun: false };
   } catch {
     return { fullRun: true, reason: 'could not compute a git diff' };
@@ -1422,6 +1491,21 @@ export async function explainPath(init: ExplainInit): Promise<ExplainResult> {
     recorded: CoverageMap | undefined,
   ): FullRunTrigger | undefined => {
     if (matchesAny(rel, config.sentinels)) {
+      // A lockfile is a sentinel that no longer always fires. Once a map records
+      // an inventory, a change here is resolved to the packages whose resolution
+      // moved and only the tests that ran them are selected -- so answering
+      // "always" would be telling the user something `affected` will contradict
+      // on the next bump. The same drift `status` was kept clear of, one command
+      // further out.
+      if (isDependencyFile(rel) && recorded?.dependencies !== undefined) {
+        return {
+          always: false,
+          why:
+            'a change here forces one only when it cannot be resolved to the ' +
+            'packages that moved -- the map records what was installed, and a ' +
+            'bump it can account for selects just the tests that ran them',
+        };
+      }
       return {
         always: true,
         why:
