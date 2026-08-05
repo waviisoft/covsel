@@ -42,6 +42,15 @@ export interface InstalledInventory {
  *
  * bun and yarn's PnP linker write nothing usable, so a project on either has no
  * inventory and keeps falling open on every lockfile change.
+ *
+ * Finding a marker is necessary and not sufficient, and for three of these it is
+ * currently not enough: npm and both yarns install into a flat `node_modules`
+ * with no store, and a package there has no identity that a change to its
+ * contents would move. Every package is refused, so those trees yield no
+ * inventory whatever their marker says. They stay listed because the marker half
+ * is the half that was hard to work out, and because it is what a content signal
+ * for those layouts would be built on — see `identityOf` for why hashing is not
+ * that signal today.
  */
 const MARKERS: readonly { manager: string; marker: string }[] = [
   { manager: 'pnpm', marker: 'node_modules/.pnpm/lock.yaml' },
@@ -214,19 +223,41 @@ function namesALocation(entryPath: string): boolean {
 }
 
 /**
- * What a package resolved to, as something two recordings can compare.
+ * What a package resolved to, as something two recordings can compare — or
+ * nothing, when the layout offers no way to tell one copy from another.
  *
- * A store entry names itself, store and all. Anything else -- a hoisted tree, a
- * bundled dependency -- is identified by where it really sits plus the version
- * it declares. That is weaker: a version is not a content hash, so a package
- * whose source changes without its version moving is invisible in that shape.
- * It is the best the layout offers, and it is why the store is where the
- * identity comes from wherever there is one.
+ * A store entry names itself, store and all, and that name is a content signal:
+ * a registry tarball pins its version, a git specifier its commit, a patched
+ * package its patch hash. Two recordings that disagree about that name disagree
+ * about which code is there.
+ *
+ * Outside a store there is no such name. A hoisted tree (`node-linker=hoisted`)
+ * and a bundled dependency both put the package directly in a `node_modules`,
+ * where the only identity available is the path plus the version its manifest
+ * declares — and a version is not a content signal. `pnpm patch` rewrites the
+ * files and leaves the version alone, which is precisely the case this has to
+ * catch: recorded as unchanged, the patched package reads as "installed and
+ * never ran", and the tests that execute the patched code are skipped.
+ *
+ * So a package outside a store falls open instead, the same as one whose store
+ * entry names a `file:` directory. Hashing the files would give it a real
+ * signal, and was measured rather than assumed: 700 packages of this repository
+ * are 281 MB across ~25,000 files and take 14 seconds to hash. That is not a
+ * price to add to every recording for a non-default linker, and there is no
+ * cheaper signal that is honest — sizes and timestamps both report "unchanged"
+ * for edits that are not, which is the one direction covsel must never fail in.
+ *
+ * The cost is real and worth stating plainly: a project on
+ * `node-linker=hoisted` gets no inventory at all, so every dependency change
+ * falls open to the lockfile sentinel, exactly as it does today. npm and yarn
+ * trees are the same shape, and their inventories were already unusable for
+ * want of a freshness proof — but this is now a second thing they need before
+ * they can select, not a detail of the first.
  */
-function identityOf(resolved: string, version: string): string | undefined {
+function identityOf(resolved: string): string | undefined {
   const entry = storeEntryOf(resolved);
-  if (entry === undefined) return `${resolved}@${version}`;
-  return namesALocation(entry) ? undefined : entry;
+  if (entry === undefined || namesALocation(entry)) return undefined;
+  return entry;
 }
 
 /**
@@ -432,14 +463,17 @@ export function readInstalledInventory(cwd: string): InstalledInventory | undefi
     } catch {
       continue; // not a package, or one covsel cannot read: it falls open
     }
+    // Not part of the identity -- the store entry name already carries it, and
+    // more besides -- but a directory whose manifest declares no version is not
+    // a package covsel should vouch for at all.
     const version = manifest['version'];
     if (typeof version !== 'string' || version === '') continue;
     if (!shipsObservableJs(join(cwd, dir), manifest)) continue;
     // The edge, not the version: which resolver got which copy. A version set
     // is unchanged by a patch and by an importer moving between two versions
     // that both stay installed, and in each case the code a test runs moved.
-    const identity = identityOf(resolved, version);
-    // No identity means the entry names a location rather than contents, so
+    const identity = identityOf(resolved);
+    // No identity means the layout names a location rather than contents, so
     // this package has to fall open rather than be vouched for. The resolver
     // half is refused for the same reason and one more: a `file:` dependency's
     // entry is named for the path it was copied from, which may sit outside the
@@ -469,5 +503,20 @@ export function readInstalledInventory(cwd: string): InstalledInventory | undefi
     sorted[name] = edges.filter((e) => !isSelfEdge(e) || !named.has(identity(e))).sort();
   }
 
-  return { manager: found.manager, marker: found.marker, markerHash, inventory: sorted };
+  // An inventory that vouches for nothing is reported as no inventory at all.
+  //
+  // The two read the same way by design -- #47 has an empty inventory falling
+  // open on every package change, the way an absent one does -- but they are not
+  // equally hard to get wrong downstream. A missing `dependencies` field is the
+  // case every map recorded before that field existed presents, so no consumer
+  // can overlook it; an inventory that is present and empty is a second rule,
+  // and forgetting it means diffing `{}` against `{}`, finding nothing changed,
+  // and skipping the suite. Collapsing the two leaves one rule to honour.
+  //
+  // It is reached by a tree with no store to take identities from -- a hoisted
+  // linker, an npm or yarn layout -- and by a project with no dependencies at
+  // all, where there is equally nothing to select on.
+  return Object.keys(sorted).length === 0
+    ? undefined
+    : { manager: found.manager, marker: found.marker, markerHash, inventory: sorted };
 }

@@ -238,17 +238,33 @@ reformatted array does not, because the map records the values it was recorded
 under and compares against those. See
 [the fail-open guarantee](/guide/fail-open).
 
-The default `sentinels` list is `package.json`, `tsconfig*.json`, and every
-lockfile covsel recognises -- `pnpm-lock.yaml`, `yarn.lock`,
-`package-lock.json`, `npm-shrinkwrap.json`, `bun.lock`, and `bun.lockb`. The
-lockfiles matter because a dependency change is the one change covsel cannot see
-any other way: code under `node_modules` is outside what a recording maps, so
+The default `sentinels` list is `package.json`, `tsconfig*.json`, every lockfile
+covsel recognises -- `pnpm-lock.yaml`, `yarn.lock`, `package-lock.json`,
+`npm-shrinkwrap.json`, `bun.lock`, and `bun.lockb` -- and every file that decides
+how one of those becomes a `node_modules`: `.npmrc`, `.pnpmfile.cjs`,
+`.yarnrc.yml`, `.yarnrc`, and `bunfig.toml`.
+
+The lockfiles matter because a dependency change is the one change covsel cannot
+see any other way: code under `node_modules` is outside what a recording maps, so
 nothing in the map moves when a dependency version does.
 
+The install configs matter for a subtler reason. A lockfile says which packages
+are installed; these say where they are put and what resolves to them. pnpm's
+`hoist-pattern` fills the directory that resolves undeclared ("phantom") imports,
+so narrowing it turns a working `import` into `MODULE_NOT_FOUND` -- with the
+lockfile unchanged, and nothing in the map moved. `.pnpmfile.cjs` can rewrite any
+package's manifest at install time. Neither shows up anywhere else.
+
 Setting `sentinels` **replaces** that list rather than adding to it, so restate
-whatever you still want. Dropping your lockfile from it means a `bun update` or
-a lockfile-maintenance pull request selects against a map recorded before the
-bump.
+whatever you still want -- and note that a default added in a later covsel
+version reaches every project except the ones that wrote their own list. Dropping
+your lockfile from it means a `bun update` or a lockfile-maintenance pull request
+selects against a map recorded before the bump.
+
+What no sentinel can cover: the same install settings can be set outside the
+repository, in a user-level `~/.npmrc` or an `NPM_CONFIG_*` environment variable,
+where no diff could ever show them. A CI runner configured differently from the
+machine that recorded the map is beyond what covsel can see.
 
 ### Bundled code
 

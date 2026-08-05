@@ -2,7 +2,7 @@ import { existsSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { pathToFileURL } from 'node:url';
 
-import { LOCKFILE_NAMES } from './lockfiles.js';
+import { INSTALL_CONFIG_NAMES, LOCKFILE_NAMES } from './lockfiles.js';
 import { type Granularity, GRANULARITIES, isGranularity } from './schema.js';
 import type { BuildDirMapping } from './source-map.js';
 
@@ -88,7 +88,15 @@ export const DEFAULT_CONFIG: CovselConfig = {
   testGlobs: ['**/*.{test,spec}.?(c|m)[jt]s?(x)'],
   sourceGlobs: ['**/*'],
   alwaysRun: [],
-  sentinels: ['package.json', ...LOCKFILE_NAMES, 'tsconfig*.json'],
+  // What is installed, how it is laid out, and how it is compiled. The install
+  // configs are here for the same reason the lockfiles are: they decide what a
+  // source's imports resolve to, and nothing covsel records moves when they do.
+  sentinels: [
+    'package.json',
+    ...LOCKFILE_NAMES,
+    ...INSTALL_CONFIG_NAMES,
+    'tsconfig*.json',
+  ],
   granularity: 'block',
   sourceMaps: { buildDirs: [], http: true, allowUnmappable: [] },
   store: { dir: '.covsel', archiveDir: 'archive' },
