@@ -1600,6 +1600,16 @@ export async function explainPath(init: ExplainInit): Promise<ExplainResult> {
   const units: ExplainedUnit[] = [];
   const unitsByBlock = new Map<string, TestId[]>();
   const recordedHashes = new Set<string>();
+  // Entries are read as recorded, including ones naming a test file the suite no
+  // longer has. Selection drops those, because there is nothing to run for a file
+  // that is not there -- and it was tempting to match that here, since a source
+  // "covered by" a deleted test is covered by nothing that can run.
+  //
+  // It would be the wrong reading of this command. `explain` answers what the map
+  // says, for someone who distrusts what selection did with it, and a map
+  // describing tests the project has removed is exactly the thing such a person
+  // is trying to see. Filtering would hide the evidence and leave the report
+  // looking healthy. `status` carries the signal instead, as `staleEntryCount`.
   for (const entry of map.entries) {
     if (entry.test.file === rel) {
       units.push({
