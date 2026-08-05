@@ -104,7 +104,7 @@ can't be sure, we run it.**
 
 ## Does it actually work?
 
-Measured on two real projects, through the generic wrap with no runner
+Measured by hand on two real projects, through the generic wrap with no runner
 integration. Each edits one function body, and compares what covsel selected
 against what file-level selection would have picked for the same edit:
 
@@ -122,8 +122,10 @@ seconds and recording the map costs thirteen times that, so there is no time
 saving there worth having. covsel pays off when a suite is slow enough that the
 saving outruns what recording cost.
 
-Method, caveats, and how to run it yourself:
-[Benchmarks](https://waviisoft.github.io/covsel/guide/benchmarks).
+These are single edits, not a replay of the changes either project merges, and
+`benchmarks/` does not reproduce this table -- it replays commits, which is a
+different measurement, and no replay results are published yet. Method and
+caveats: [Benchmarks](https://waviisoft.github.io/covsel/guide/benchmarks).
 
 ## Supported runners
 

@@ -28,8 +28,16 @@ describe('parseProject', () => {
     expect(project.covsel.testGlobs).toEqual(['test/**/*.js']);
   });
 
-  it('defaults covsel configuration to empty, which means covsel defaults', () => {
-    expect(parseProject(without('covsel'), 'x.json').covsel).toEqual({});
+  // covsel fills an unset testGlobs from the adapter's defaults; the harness
+  // does not, so an unset value lets the two measure different suites.
+  it('rejects a project that does not state its testGlobs', () => {
+    expect(() => parseProject(without('covsel'), 'x.json')).toThrow('testGlobs');
+    expect(() =>
+      parseProject({ ...valid, covsel: { sourceGlobs: ['lib/**'] } }, 'x.json'),
+    ).toThrow('testGlobs');
+    expect(() => parseProject({ ...valid, covsel: { testGlobs: [] } }, 'x.json')).toThrow(
+      'testGlobs',
+    );
   });
 
   it('keeps an optional rationale and omits it when absent', () => {
@@ -58,6 +66,15 @@ describe('parseProject', () => {
     );
   });
 
+  // A moving ref would let two runs measure different trees with nothing in the
+  // results to say so.
+  it.each(['main', 'v1.2.3', 'ae6dd37', ''])(
+    'rejects a ref that is not a full SHA: %j',
+    (ref) => {
+      expect(() => parseProject({ ...valid, ref }, 'x.json')).toThrow('ref');
+    },
+  );
+
   it('rejects a repo that is not owner/name', () => {
     expect(() => parseProject({ ...valid, repo: 'express' }, 'x.json')).toThrow('repo');
     expect(() => parseProject({ ...valid, repo: 'a/b/c' }, 'x.json')).toThrow('repo');
@@ -81,22 +98,40 @@ describe('parseProject', () => {
   // numbers -- for a source set nobody chose.
   it('rejects a slash-less glob, which would match the basename anywhere', () => {
     expect(() =>
-      parseProject({ ...valid, covsel: { sourceGlobs: ['index.js'] } }, 'x.json'),
+      parseProject(
+        { ...valid, covsel: { testGlobs: ['test/**/*.js'], sourceGlobs: ['index.js'] } },
+        'x.json',
+      ),
     ).toThrow(/no '\/'/);
   });
 
   it('accepts the same glob written as a path', () => {
     expect(() =>
-      parseProject({ ...valid, covsel: { sourceGlobs: ['./index.js'] } }, 'x.json'),
+      parseProject(
+        {
+          ...valid,
+          covsel: { testGlobs: ['test/**/*.js'], sourceGlobs: ['./index.js'] },
+        },
+        'x.json',
+      ),
     ).not.toThrow();
     expect(() =>
-      parseProject({ ...valid, covsel: { sourceGlobs: ['**/index.js'] } }, 'x.json'),
+      parseProject(
+        {
+          ...valid,
+          covsel: { testGlobs: ['test/**/*.js'], sourceGlobs: ['**/index.js'] },
+        },
+        'x.json',
+      ),
     ).not.toThrow();
   });
 
   it('rejects a slash-less glob in any covsel field, not just sourceGlobs', () => {
     expect(() =>
-      parseProject({ ...valid, covsel: { alwaysRun: ['fixture.js'] } }, 'x.json'),
+      parseProject(
+        { ...valid, covsel: { testGlobs: ['test/**/*.js'], alwaysRun: ['fixture.js'] } },
+        'x.json',
+      ),
     ).toThrow('alwaysRun');
   });
 });

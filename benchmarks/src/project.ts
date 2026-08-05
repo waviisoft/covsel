@@ -91,6 +91,16 @@ export function parseProject(raw: unknown, source: string): BenchmarkProject {
   requireCommand(value.install, 'install', source);
   requireCommand(value.runner, 'runner', source);
 
+  // A full commit SHA, never a branch or tag. The point of the field is that a
+  // rerun measures the same tree; a moving ref would let two runs disagree with
+  // no sign in the results that they measured different code.
+  if (!/^[0-9a-f]{40}$/.test(value.ref)) {
+    throw new ProjectConfigError(
+      `${source}: 'ref' must be a full 40-character commit SHA so a rerun ` +
+        `measures the same tree, got ${JSON.stringify(value.ref)}`,
+    );
+  }
+
   if (!/^[^/\s]+\/[^/\s]+$/.test(value.repo)) {
     throw new ProjectConfigError(
       `${source}: 'repo' must be 'owner/name', got ${JSON.stringify(value.repo)}`,
@@ -102,6 +112,21 @@ export function parseProject(raw: unknown, source: string): BenchmarkProject {
     throw new ProjectConfigError(`${source}: 'covsel' must be an object`);
   }
   const covsel = covselRaw as ProjectCovselConfig;
+
+  // Required, never defaulted. covsel fills an unset `testGlobs` from the
+  // adapter's own defaults, which the harness does not consult when it discovers
+  // the suite -- so leaving it unset lets the two disagree about which files the
+  // suite even contains. For an adapter whose defaults are feature files, the
+  // harness would discover none and score a clean, zero-miss result for a
+  // project it never measured.
+  if (!Array.isArray(covsel.testGlobs) || covsel.testGlobs.length === 0) {
+    throw new ProjectConfigError(
+      `${source}: 'covsel.testGlobs' must be set explicitly, so that the harness ` +
+        `and covsel agree on which files the suite contains -- covsel would ` +
+        `otherwise fill it from the adapter's defaults, which the harness does ` +
+        `not see`,
+    );
+  }
 
   // A slash-less glob is matched against a path's basename anywhere in the tree,
   // which quietly pulls example and fixture directories into a project's source

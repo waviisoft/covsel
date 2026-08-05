@@ -66,16 +66,31 @@ come from whole-suite runs instead.
 
 An "expected set" built from the files each test covers is wider than the right
 answer at block granularity: a test covering a changed file is correctly left
-out when the blocks it actually executed did not change. Measured on covsel's
-own suite, a narrow edit had covsel correctly select 4 of 37 test files while a
-file-level oracle called 17 of them missing. Asking what a change _broke_, as
-the miss oracle does, avoids that trap; asking what it _touched_ does not.
+out when the blocks it actually executed did not change. Asking what a change
+_broke_, as the miss oracle does, avoids that trap; asking what it _touched_
+does not.
 
-## Measured so far
+covsel's own selection validator
+([`scripts/validate-selection.mjs`](https://github.com/waviisoft/covsel/blob/main/scripts/validate-selection.mjs))
+records the same reasoning and the measurement behind it — a narrow edit on this
+repository where covsel correctly selected 4 of 37 test files and a file-level
+oracle called 17 of them missing. That figure is quoted from there rather than
+reproduced here; no file-level oracle ships in this repository.
 
-Two projects, both through the generic wrap with no runner integration, on
-Node 22. Each edits a single function body and compares what block granularity
-selected against what file granularity would have.
+## Measured by hand, not by the harness
+
+The numbers below predate the harness and were taken by hand: record the map,
+edit one function body, run `covsel affected`, and count. The file-granularity
+column was derived by counting map entries that cover the edited file, which is
+what selection would have chosen without block hashes. **Nothing in
+`benchmarks/` reproduces this table** — the harness replays commits, which is a
+different measurement, and no replay results are published yet.
+
+They are reported because they isolate one variable cleanly. They are not
+evidence about what covsel does across the changes a project actually merges.
+
+Both projects run through the generic wrap with no runner integration, on
+Node 22.
 
 |                                | [express](https://github.com/expressjs/express) | [fastify](https://github.com/fastify/fastify) |
 | ------------------------------ | ----------------------------------------------- | --------------------------------------------- |
@@ -101,9 +116,13 @@ Three things this does not say:
   and 45.3s for identical work on one container. Selection counts are
   deterministic and comparable across machines; wall-clock is not.
 - **Neither is a replay of a real change.** They are single-function edits, which
-  isolate granularity but do not tell you what selection does against the
-  distribution of changes a project actually merges. That is what the replay
-  harness is for, and those results are not collected yet.
+  isolate granularity but say nothing about the distribution of changes a project
+  actually merges.
+- **A test file already failing at the base is outside what the miss oracle can
+  score.** One verdict per file cannot tell a still-failing file from an
+  unaffected one, so a replay reports how many files were in that state
+  alongside the miss count; a zero miss count means less when that number is
+  high.
 
 ## Adding a project
 

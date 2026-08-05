@@ -18,6 +18,7 @@ import {
   splitSelection,
   stratumOf,
   type Stratum,
+  unscorable,
   wallClockRatio,
 } from './metrics.js';
 import { collectOutcomes } from './outcomes.js';
@@ -49,6 +50,12 @@ export interface ReplayResult {
   selectionRatio: number;
   /** Test files whose outcome the change altered. */
   outcomesChanged: string[];
+  /**
+   * Test files already failing at the base. A verdict per file cannot tell a
+   * still-failing file from an unaffected one, so these are outside what the
+   * miss oracle can score, and a zero miss count means less when this is high.
+   */
+  unscorable: string[];
   /** The safety measurement: altered outcomes selection left out. Must be empty. */
   misses: string[];
   timings: {
@@ -107,11 +114,30 @@ function run(command: string[], cwd: string): Timed {
   };
 }
 
-/** Run a command `repetitions` times and report the median wall-clock. */
-function timeRepeatedly(command: string[], cwd: string, repetitions: number): number {
+interface TimedRuns {
+  ms: number;
+  /** The last status observed; `null` when the command died on a signal. */
+  status: number | null;
+}
+
+/**
+ * Run a command `repetitions` times, reporting the median wall-clock and how it
+ * finished.
+ *
+ * The status is carried out rather than dropped because these two durations are
+ * the published numbers. A runner that exits in 200ms because it could not start
+ * produces a spectacular speedup, and a duration alone cannot be told apart from
+ * a genuinely fast suite.
+ */
+function timeRepeatedly(command: string[], cwd: string, repetitions: number): TimedRuns {
   const samples: number[] = [];
-  for (let i = 0; i < repetitions; i++) samples.push(run(command, cwd).ms);
-  return median(samples) ?? 0;
+  let status: number | null = 0;
+  for (let i = 0; i < repetitions; i++) {
+    const result = run(command, cwd);
+    samples.push(result.ms);
+    status = result.status;
+  }
+  return { ms: median(samples) ?? 0, status };
 }
 
 function git(args: string[], cwd: string): string {
@@ -160,6 +186,17 @@ export function measure(init: MeasureInit): ReplayResult {
 
   const config = resolveConfig(project.covsel);
   const discovered = discoverTestFiles(repo, config);
+  // Discovering nothing is not a suite that selection narrowed perfectly: with
+  // no test files there are no outcomes, so nothing can change, so nothing can
+  // be missed. It would score as 0/0 selected with a clean oracle -- the most
+  // flattering result the harness can produce, from the least measurement.
+  if (discovered.length === 0) {
+    throw new Error(
+      `no test files matched ${config.testGlobs.join(', ')} at ${init.head} -- ` +
+        `there is nothing to measure, and scoring it would report zero misses ` +
+        `for a suite that never ran`,
+    );
+  }
   const changed = changedFilesBetween(init.base, init.head, repo);
 
   emit('affected');
@@ -189,14 +226,42 @@ export function measure(init: MeasureInit): ReplayResult {
   const effectiveSelection = decision.fullRun ? discovered : selected;
 
   emit('selected-run');
-  const selectedMs = timeRepeatedly(
+  const selectedRun = timeRepeatedly(
     [process.execPath, covselBin, 'run', '--', ...project.runner],
     repo,
     repetitions,
   );
 
   emit('full-run');
-  const fullMs = timeRepeatedly([...project.runner, ...discovered], repo, repetitions);
+  const fullRunTimed = timeRepeatedly(
+    [...project.runner, ...discovered],
+    repo,
+    repetitions,
+  );
+
+  // A non-zero status is expected here: a change that breaks a test makes the
+  // runner exit non-zero, and that is a result rather than a fault. These two
+  // combinations are not. A signal means the process was killed rather than
+  // finishing, and a selected run that failed while the full run passed cannot
+  // be a test failure -- the selected files are a subset of the full ones, so
+  // the same tests passed a moment later. Both would otherwise publish a
+  // duration for work that did not happen.
+  for (const [what, timed] of [
+    ['selected run', selectedRun],
+    ['full run', fullRunTimed],
+  ] as const) {
+    if (timed.status === null) {
+      throw new Error(`the ${what} was killed by a signal, so its timing is not real`);
+    }
+  }
+  if (selectedRun.status !== 0 && fullRunTimed.status === 0) {
+    throw new Error(
+      `the selected run failed (exit ${selectedRun.status}) while the full run ` +
+        `passed. The selected files are a subset of the full ones, so this is a ` +
+        `harness or runner fault rather than a test failure, and its timing ` +
+        `would publish a saving for work that did not happen.`,
+    );
+  }
 
   emit('head-outcomes');
   const headOutcomes = collectOutcomes({
@@ -206,18 +271,24 @@ export function measure(init: MeasureInit): ReplayResult {
   });
 
   const changedTestFiles = changed.filter((file) => matchesAny(file, config.testGlobs));
-  const split = splitSelection({
-    selected: effectiveSelection,
-    changedTestFiles,
-    alwaysRun: discovered.filter((file) => matchesAny(file, config.alwaysRun)),
-    creditingNoSource: entriesCreditingNoSource(repo, config),
-  });
+  // A fall-open is policy start to finish: covsel declined to consult coverage
+  // at all. Splitting it as though the suite had been chosen file by file would
+  // credit nearly every test to coverage-driven selection, which is the exact
+  // misreading the split exists to prevent.
+  const split = decision.fullRun
+    ? { coverage: [], policy: [...discovered] }
+    : splitSelection({
+        selected: effectiveSelection,
+        changedTestFiles,
+        alwaysRun: discovered.filter((file) => matchesAny(file, config.alwaysRun)),
+        creditingNoSource: entriesCreditingNoSource(repo, config),
+      });
 
   const timings = {
     recordMs: init.recordMs,
     affectedMs: affected.ms,
-    selectedMs,
-    fullMs,
+    selectedMs: selectedRun.ms,
+    fullMs: fullRunTimed.ms,
   };
   const payback = breakEvenRuns(timings);
 
@@ -237,6 +308,7 @@ export function measure(init: MeasureInit): ReplayResult {
     ...(decision.reason === undefined ? {} : { fullRunReason: decision.reason }),
     selectionRatio: selectionRatio(effectiveSelection.length, discovered.length),
     outcomesChanged: changedOutcomes(init.baseOutcomes, headOutcomes),
+    unscorable: unscorable(init.baseOutcomes, headOutcomes),
     misses: outcomeMisses(init.baseOutcomes, headOutcomes, effectiveSelection),
     timings,
     wallClockRatio: wallClockRatio(timings),

@@ -1,7 +1,7 @@
 {
   "name": "express",
   "repo": "expressjs/express",
-  "ref": "0210be90ad9909a130624b24f72b666d86de9e2a",
+  "ref": "ae6dd37680e3a00618d6c8a3e522f0ee4eeba1a4",
   "adapter": "@covsel/adapter-generic",
   "adapterName": "generic",
   "install": ["npm", "install", "--no-audit", "--no-fund"],

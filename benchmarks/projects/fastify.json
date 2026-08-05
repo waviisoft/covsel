@@ -1,12 +1,13 @@
 {
   "name": "fastify",
   "repo": "fastify/fastify",
-  "ref": "52ed51025a9c051545f5f862debe1529bdfd099b",
+  "ref": "b912c24f422adb59f6a165fee7bf78857762f079",
   "adapter": "@covsel/adapter-generic",
   "adapterName": "generic",
   "install": ["npm", "install", "--no-audit", "--no-fund"],
   "runner": ["node", "--test"],
   "covsel": {
+    "testGlobs": ["test/**/*.test.js", "test/**/*.test.mjs"],
     "sourceGlobs": ["lib/**/*.js", "build/**/*.js", "./fastify.js"]
   },
   "rationale": "A plugin architecture that wires itself together at run time, which is exactly what a static import graph cannot see: registering a plugin is a function call, not an import. Large enough that the whole suite takes real time, so it carries the speed case as well as the precision one."

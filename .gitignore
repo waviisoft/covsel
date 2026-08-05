@@ -9,8 +9,9 @@ coverage/
 # under .claude/ stay tracked.
 .claude/worktrees/
 
-# Clones the benchmark harness works in. Results under benchmarks/results/ are
-# tracked on purpose, so a change in the numbers shows up in review.
+# Clones the benchmark harness works in. Its results are written to
+# benchmarks/results/, which is deliberately not ignored: once results exist,
+# tracking them is what makes a change in the numbers show up in review.
 benchmarks/.work/
 
 # VitePress

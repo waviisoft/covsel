@@ -1,18 +1,12 @@
-import { spawnSync } from 'node:child_process';
-import {
-  appendFileSync,
-  existsSync,
-  mkdirSync,
-  readFileSync,
-  writeFileSync,
-} from 'node:fs';
+import { appendFileSync, existsSync, mkdirSync, readFileSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 import { discoverTestFiles, resolveConfig } from '@covsel/core';
 
 import { collectOutcomes } from './outcomes.js';
-import { type BenchmarkProject, parseProject } from './project.js';
+import { prepareClone, recordMap } from './prepare.js';
+import { parseProject } from './project.js';
 import { measure, type ReplayResult } from './replay.js';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
@@ -40,18 +34,23 @@ branch. Build the CLI first (pnpm build).
 
 const log = (message: string): void => void process.stderr.write(`${message}\n`);
 
-function flags(argv: string[], name: string): string[] {
+export function flags(argv: string[], name: string): string[] {
   const found: string[] = [];
   for (let i = 0; i < argv.length; i++) {
-    if (argv[i] === `--${name}`) {
-      const value = argv[i + 1];
-      if (value !== undefined) found.push(value);
+    if (argv[i] !== `--${name}`) continue;
+    const value = argv[i + 1];
+    // A following `--flag` is the next option, not this one's value. Swallowing
+    // it would leave `--head --repetitions 3` replaying a commit called
+    // "--repetitions" and silently drop the option the user did pass.
+    if (value === undefined || value.startsWith('--')) {
+      throw new Error(`--${name} needs a value`);
     }
+    found.push(value);
   }
   return found;
 }
 
-function flag(argv: string[], name: string): string | undefined {
+export function flag(argv: string[], name: string): string | undefined {
   return flags(argv, name)[0];
 }
 
@@ -60,7 +59,7 @@ function flag(argv: string[], name: string): string | undefined {
  * would run every timed command zero times and report a wall-clock of nothing,
  * which reads as an extraordinary result rather than as the mistake it is.
  */
-function positiveNumber(argv: string[], name: string, fallback: number): number {
+export function positiveNumber(argv: string[], name: string, fallback: number): number {
   const raw = flag(argv, name);
   if (raw === undefined) return fallback;
   const value = Number(raw);
@@ -70,94 +69,7 @@ function positiveNumber(argv: string[], name: string, fallback: number): number 
   return value;
 }
 
-function must(command: string[], cwd: string, what: string): void {
-  const [bin, ...rest] = command;
-  if (bin === undefined) throw new Error(`${what}: empty command`);
-  const result = spawnSync(bin, rest, { cwd, encoding: 'utf8', stdio: 'inherit' });
-  if (result.status !== 0) {
-    throw new Error(`${what} failed (exit ${result.status ?? 'signal'})`);
-  }
-}
-
-/**
- * Link the workspace build into the clone rather than installing from a
- * registry, because these packages are not published yet. The clone resolves
- * `@covsel/*` the same way a real project would; only where the files came from
- * differs.
- */
-function linkCovselInto(repo: string, project: BenchmarkProject): void {
-  const scope = join(repo, 'node_modules', '@covsel');
-  mkdirSync(scope, { recursive: true });
-  const packages = ['core', project.adapter.replace(/^@covsel\//, '')];
-  for (const name of packages) {
-    const target = join(REPO_ROOT, 'packages', name);
-    if (!existsSync(target)) throw new Error(`no workspace package for ${name}`);
-    const link = join(scope, name);
-    if (!existsSync(link)) {
-      spawnSync('ln', ['-sfn', target, link], { encoding: 'utf8' });
-    }
-  }
-}
-
-function prepare(project: BenchmarkProject, work: string): string {
-  const repo = join(work, project.name);
-  if (!existsSync(repo)) {
-    mkdirSync(work, { recursive: true });
-    log(`cloning ${project.repo}`);
-    must(
-      ['git', 'clone', '--quiet', `https://github.com/${project.repo}.git`, repo],
-      work,
-      'clone',
-    );
-  }
-  log(`checking out ${project.ref}`);
-  must(['git', 'checkout', '--quiet', project.ref], repo, 'checkout base');
-
-  log('installing project dependencies');
-  must(project.install, repo, 'install');
-  linkCovselInto(repo, project);
-
-  writeFileSync(
-    join(repo, 'covsel.json'),
-    `${JSON.stringify(project.covsel, null, 2)}\n`,
-  );
-  return repo;
-}
-
 const DEFAULT_RECORD_TIMEOUT_MS = 45 * 60 * 1000;
-
-/**
- * Record the map, with recording's progress passed straight through and a
- * ceiling on the whole thing.
- *
- * Recording drives one process per test file and waits for each, so a test file
- * that hangs stalls the run for as long as it is allowed to. A real repository
- * in the slate turned out to have one, which is why both halves matter here:
- * inherited output names the file recording is waiting on, and the ceiling stops
- * a stalled run from consuming a machine indefinitely.
- */
-function recordMap(project: BenchmarkProject, repo: string, timeoutMs: number): number {
-  log('recording the map');
-  const started = process.hrtime.bigint();
-  const result = spawnSync(
-    process.execPath,
-    [COVSEL_BIN, 'record', '--adapter', project.adapterName, '--', ...project.runner],
-    { cwd: repo, encoding: 'utf8', stdio: 'inherit', timeout: timeoutMs },
-  );
-  const ms = Number(process.hrtime.bigint() - started) / 1e6;
-  if (result.signal !== null) {
-    throw new Error(
-      `record was killed (${result.signal}) after ${(ms / 1000).toFixed(0)}s -- ` +
-        `the last file it named above is where it stopped. Raise --record-timeout ` +
-        `if the suite is simply slow.`,
-    );
-  }
-  if (result.status !== 0) {
-    throw new Error(`record failed (exit ${result.status ?? 'unknown'})`);
-  }
-  log(`recorded in ${(ms / 1000).toFixed(1)}s`);
-  return ms;
-}
 
 export function main(argv: string[] = process.argv.slice(2)): number {
   if (argv.length === 0 || argv.includes('--help') || argv.includes('-h')) {
@@ -195,8 +107,19 @@ export function main(argv: string[] = process.argv.slice(2)): number {
     DEFAULT_RECORD_TIMEOUT_MS,
   );
 
-  const repo = prepare(project, work);
-  const recordMs = recordMap(project, repo, recordTimeoutMs);
+  const repo = prepareClone({
+    project,
+    work,
+    packagesRoot: join(REPO_ROOT, 'packages'),
+    log,
+  });
+  const recordMs = recordMap({
+    project,
+    repo,
+    covselBin: COVSEL_BIN,
+    timeoutMs: recordTimeoutMs,
+    log,
+  });
 
   // Collected while the checkout is still on the base, since establishing what
   // each test did before the change is the only way to know which ones the
@@ -229,7 +152,10 @@ export function main(argv: string[] = process.argv.slice(2)): number {
     log(
       `  selected ${result.selectedTests}/${result.totalTests}` +
         ` (${(result.selectionRatio * 100).toFixed(0)}%)` +
-        `, misses ${result.misses.length}`,
+        `, misses ${result.misses.length}` +
+        // Named on every line, not only when non-zero: a reader comparing miss
+        // counts needs to know how many files the oracle could not score.
+        `, unscorable ${result.unscorable.length}`,
     );
   }
 
@@ -244,12 +170,19 @@ export function main(argv: string[] = process.argv.slice(2)): number {
   return 0;
 }
 
-try {
-  const exitCode = main();
-  if (exitCode !== 0) process.exitCode = exitCode;
-} catch (error) {
-  // A replay clones repositories and runs whole suites, so a failure part way
-  // through is normal enough to deserve a readable line rather than a stack.
-  log(`replay: ${error instanceof Error ? error.message : String(error)}`);
-  process.exitCode = 1;
+// Only when run as a command. Imported -- as the tests import it -- the module
+// must define its argument parsing without also executing a replay.
+if (
+  process.argv[1] !== undefined &&
+  resolve(process.argv[1]) === resolve(HERE, 'cli.js')
+) {
+  try {
+    const exitCode = main();
+    if (exitCode !== 0) process.exitCode = exitCode;
+  } catch (error) {
+    // A replay clones repositories and runs whole suites, so a failure part way
+    // through is normal enough to deserve a readable line rather than a stack.
+    log(`replay: ${error instanceof Error ? error.message : String(error)}`);
+    process.exitCode = 1;
+  }
 }

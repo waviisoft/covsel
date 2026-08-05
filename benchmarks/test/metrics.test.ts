@@ -6,9 +6,9 @@ import {
   median,
   type Outcome,
   outcomeMisses,
-  percentile,
   selectionRatio,
   splitSelection,
+  unscorable,
   stratumOf,
   wallClockRatio,
 } from '../src/metrics.js';
@@ -44,6 +44,42 @@ describe('changedOutcomes', () => {
   it('is empty when the change altered nothing', () => {
     const both = outcomes({ 'test/a.js': 'passed', 'test/b.js': 'failed' });
     expect(changedOutcomes(both, both)).toEqual([]);
+  });
+});
+
+describe('unscorable', () => {
+  // A verdict per file is one bit, so a file red at the base stays red whatever
+  // the change did inside it -- and can never be counted as a miss.
+  it('names files already failing at the base', () => {
+    const base = outcomes({ 'test/a.js': 'failed', 'test/b.js': 'passed' });
+    const head = outcomes({ 'test/a.js': 'failed', 'test/b.js': 'passed' });
+    expect(unscorable(base, head)).toEqual(['test/a.js']);
+  });
+
+  it('counts a base failure even when the change fixed it', () => {
+    const base = outcomes({ 'test/a.js': 'failed' });
+    const head = outcomes({ 'test/a.js': 'passed' });
+    expect(unscorable(base, head)).toEqual(['test/a.js']);
+  });
+
+  it('ignores a file the change added, which had nothing to be red at', () => {
+    const base = outcomes({});
+    const head = outcomes({ 'test/new.js': 'failed' });
+    expect(unscorable(base, head)).toEqual([]);
+  });
+
+  it('is empty for a suite green at the base', () => {
+    const both = outcomes({ 'test/a.js': 'passed' });
+    expect(unscorable(both, both)).toEqual([]);
+  });
+
+  // The pairing that matters: a still-failing file is invisible to the oracle,
+  // so it must be visible in the count instead.
+  it('covers exactly what the miss oracle cannot see', () => {
+    const base = outcomes({ 'test/a.js': 'failed' });
+    const head = outcomes({ 'test/a.js': 'failed' });
+    expect(outcomeMisses(base, head, [])).toEqual([]);
+    expect(unscorable(base, head)).toEqual(['test/a.js']);
   });
 });
 
@@ -211,7 +247,7 @@ describe('stratumOf', () => {
   });
 });
 
-describe('median and percentile', () => {
+describe('median', () => {
   it('takes the middle of an odd-length input', () => {
     expect(median([3, 1, 2])).toBe(2);
   });
@@ -222,15 +258,5 @@ describe('median and percentile', () => {
 
   it('has no median for no observations', () => {
     expect(median([])).toBeUndefined();
-    expect(percentile([], 0.9)).toBeUndefined();
-  });
-
-  it('reports an observed value rather than an interpolation', () => {
-    expect(percentile([1, 2, 3, 4, 5, 6, 7, 8, 9, 10], 0.9)).toBe(9);
-  });
-
-  it('clamps a percentile at or beyond the top to the largest observation', () => {
-    expect(percentile([1, 2, 3], 1)).toBe(3);
-    expect(percentile([1, 2, 3], 2)).toBe(3);
   });
 });

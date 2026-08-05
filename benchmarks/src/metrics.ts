@@ -31,6 +31,23 @@ export function changedOutcomes(base: Outcomes, head: Outcomes): string[] {
 }
 
 /**
+ * Test files already failing before the change, which the oracle cannot score.
+ *
+ * A verdict per file is one bit, so a file that failed at the base and fails at
+ * the head reads as unchanged whatever the change did inside it — and can
+ * therefore never be counted as a miss. A large repository at a pinned commit
+ * routinely has a few, so reporting the count is what stops `misses: 0` from
+ * being read as "every file was watched" when some of them never were.
+ */
+export function unscorable(base: Outcomes, head: Outcomes): string[] {
+  const red: string[] = [];
+  for (const file of head.keys()) {
+    if (base.get(file) === 'failed') red.push(file);
+  }
+  return red.sort();
+}
+
+/**
  * The safety measurement: test files the change broke or fixed that selection
  * left out. This is the one number that must be zero — every entry in it is a
  * test whose behaviour the diff altered and which covsel decided not to run.
@@ -143,16 +160,4 @@ export function median(values: readonly number[]): number | undefined {
   const mid = Math.floor(sorted.length / 2);
   if (sorted.length % 2 === 1) return sorted[mid] as number;
   return ((sorted[mid - 1] as number) + (sorted[mid] as number)) / 2;
-}
-
-/**
- * The value at `p` (0..1) by nearest-rank, so the result is always one of the
- * observations rather than an interpolation between two of them.
- */
-export function percentile(values: readonly number[], p: number): number | undefined {
-  if (values.length === 0) return undefined;
-  const sorted = [...values].sort((a, b) => a - b);
-  const rank = Math.ceil(p * sorted.length);
-  const index = Math.min(Math.max(rank, 1), sorted.length) - 1;
-  return sorted[index] as number;
 }

@@ -9,6 +9,7 @@ import { discoverTestFiles, resolveConfig } from '@covsel/core';
 
 import { outcomeMisses } from '../src/metrics.js';
 import { collectOutcomes } from '../src/outcomes.js';
+import { writeCovselConfig } from '../src/prepare.js';
 import { parseProject } from '../src/project.js';
 import { measure } from '../src/replay.js';
 
@@ -23,12 +24,13 @@ const project = parseProject(
   {
     name: 'fixture',
     repo: 'covsel/fixture',
-    ref: 'unused-here',
+    // A real-shaped SHA; the fixture's own commits are what these tests use.
+    ref: '0000000000000000000000000000000000000000',
     adapter: '@covsel/adapter-generic',
     adapterName: 'generic',
     install: ['true'],
     runner: [process.execPath, '--test'],
-    covsel: { sourceGlobs: ['lib/**/*.mjs'] },
+    covsel: { testGlobs: ['test/**/*.test.mjs'], sourceGlobs: ['lib/**/*.mjs'] },
   },
   'fixture.json',
 );
@@ -70,7 +72,6 @@ beforeEach(() => {
       "test('mul', () => assert.strictEqual(mul(2, 3), 6))\n",
   );
   write('package.json', '{ "name": "fixture", "private": true, "type": "module" }\n');
-  write('covsel.json', `${JSON.stringify(project.covsel, null, 2)}\n`);
   write('.gitignore', '.covsel/\nnode_modules/\n');
 
   const scope = join(repo, 'node_modules', '@covsel');
@@ -84,6 +85,12 @@ beforeEach(() => {
   git(['config', 'user.name', 'covsel benchmarks']);
   git(['add', '-A']);
   git(['commit', '--quiet', '-m', 'base']);
+
+  // Deliberately through the production path, and deliberately after the commit,
+  // exactly as prepareClone does it. Writing the config before committing would
+  // leave the fixture on a clean tree by accident and hide the whole class of
+  // failure where an uncommitted file leaves the map unanchored.
+  writeCovselConfig(repo, project);
 });
 
 afterEach(() => {
@@ -242,5 +249,9 @@ describe.skipIf(!built)('measure', () => {
     expect(result.selectedTests).toBe(result.totalTests);
     expect(result.selectionRatio).toBe(1);
     expect(result.misses).toEqual([]);
+    // A fall-open is policy from end to end. Crediting the suite to coverage
+    // here would publish a fall-open as covsel's most precise selection ever.
+    expect(result.selectedByCoverage).toBe(0);
+    expect(result.selectedByPolicy).toBe(result.totalTests);
   }, 120_000);
 });

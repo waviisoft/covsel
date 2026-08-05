@@ -37,6 +37,7 @@ The harness links the workspace build into each clone rather than installing
 | `selectedTests` / `totalTests`            | How much of the suite selection chose                        |
 | `selectedByCoverage` / `selectedByPolicy` | Split by what put a file there — see below                   |
 | `outcomesChanged`                         | Test files whose pass/fail the change altered                |
+| `unscorable`                              | Files already failing at the base — see below                |
 | `misses`                                  | Altered outcomes selection left out. **Must be empty.**      |
 | `timings`                                 | Recording, deciding, the selected run, the full run          |
 | `wallClockRatio`                          | `(deciding + selected run) / full run` — below 1 is a saving |
@@ -50,6 +51,11 @@ a fail-open improvement look like a precision regression. A release that starts
 always running tests it cannot reason about selects strictly more; a benchmark
 that only counts files calls that worse. The split keeps the safety rule and the
 selector's precision on separate lines.
+
+**A file already failing at the base cannot be scored.** One verdict per file
+cannot tell a still-failing file from an unaffected one, so such a file can never
+be counted as a miss whatever the change did inside it. `unscorable` reports how
+many there were, because `misses: 0` means less when that number is high.
 
 ## How outcomes are established
 
@@ -67,6 +73,17 @@ from whole-suite runs instead.
 Add a JSON file to `projects/`. The fields are validated before anything is
 cloned, because a typo that only surfaces an hour into a run costs more than
 every check put together.
+
+**A project file is executable code.** Its `install` and `runner` commands are
+run as given, and its repository is cloned and its suite executed. Validation
+checks their shape, never their content. Review one the way you would review a
+script someone asked you to run.
+
+`covsel.testGlobs` must be stated explicitly. covsel fills an unset value from
+the adapter's own defaults and the harness does not, so leaving it out lets the
+two disagree about which files the suite even contains -- and for an adapter
+whose defaults are feature files, the harness would discover none and report a
+clean, zero-miss result for a project it never measured.
 
 Globs must contain a `/`. A slash-less glob is also matched against a path's
 basename anywhere in the tree, so `sourceGlobs: ["index.js"]` silently grows to
