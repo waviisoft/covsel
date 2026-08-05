@@ -295,6 +295,46 @@ describe('explain: a source file', () => {
     const r = await explainPath({ cwd, config, path: 'package.json' });
 
     expect(r.forcesFullRun).toBeTruthy();
+    expect(r.forcesFullRun?.always).toBe(true);
+  });
+
+  it('stops calling a lockfile unconditional once the map records an inventory', async () => {
+    // A lockfile is a sentinel that no longer always fires: a bump the map can
+    // account for selects just the tests that ran the packages that moved. Saying
+    // "always" here would be telling a reader something `affected` contradicts on
+    // the next bump -- the same drift `status` is kept clear of, one command
+    // further out.
+    const cwd = project(
+      { 'pnpm-lock.yaml': 'lockfileVersion: 9.0\n' },
+      {
+        entries: [covered],
+        dependencies: {
+          manager: 'pnpm',
+          marker: 'node_modules/.pnpm/lock.yaml',
+          markerHash: 'sha256:x',
+          inventory: { 'left-pad': ['.:node_modules/.pnpm/left-pad@1.3.0'] },
+        },
+      },
+    );
+
+    const r = await explainPath({ cwd, config, path: 'pnpm-lock.yaml' });
+
+    expect(r.forcesFullRun?.always).toBe(false);
+    expect(r.forcesFullRun?.why).toContain('packages that moved');
+  });
+
+  it('keeps calling a lockfile unconditional when the map records no inventory', async () => {
+    // Which is every map recorded before that field existed, so this is what
+    // almost every reader gets.
+    const cwd = project(
+      { 'pnpm-lock.yaml': 'lockfileVersion: 9.0\n' },
+      { entries: [covered] },
+    );
+
+    const r = await explainPath({ cwd, config, path: 'pnpm-lock.yaml' });
+
+    expect(r.forcesFullRun?.always).toBe(true);
+    expect(r.forcesFullRun?.why).toContain('sentinel');
   });
 
   it("says covsel's own config forces a full run, though it is not a sentinel", async () => {

@@ -165,6 +165,24 @@ export function dependencyOnlyManifestChange(
 const MANIFEST = 'package.json';
 
 /**
+ * Whether a changed path is one a dependency change shows up in.
+ *
+ * By basename, matching how the sentinel list reads these names: `makeMatcher`
+ * widens a slash-less glob to basenames, so a workspace's own `package.json` and
+ * a nested lockfile are sentinels exactly as the root ones are, and this has to
+ * agree with that or the two would disagree about which files are accounted for.
+ *
+ * Exported because three commands now ask this question -- `affected` to resolve
+ * the change, `status` to predict what `affected` will do, and `explain` to say
+ * what a change to the path would cost. Three copies of the answer is how they
+ * drift apart.
+ */
+export function isDependencyFile(rel: string): boolean {
+  const name = rel.slice(rel.lastIndexOf('/') + 1);
+  return name === MANIFEST || (LOCKFILE_NAMES as readonly string[]).includes(name);
+}
+
+/**
  * What a diff's dependency-related changes amount to.
  *
  * Three answers, and the middle one is why this is not a boolean. `undefined`
@@ -231,17 +249,34 @@ export function dependencyChange(init: {
   changes: readonly Change[];
 }): DependencyChange | undefined {
   const { cwd, map, changes } = init;
-  const lockfiles = new Set<string>(LOCKFILE_NAMES);
   const basename = (rel: string): string => rel.slice(rel.lastIndexOf('/') + 1);
-
-  const locks = changes.filter((c) => lockfiles.has(basename(c.file)));
-  const manifests = changes.filter((c) => basename(c.file) === MANIFEST);
+  const dependencyFiles = changes.filter((c) => isDependencyFile(c.file));
+  const manifests = dependencyFiles.filter((c) => basename(c.file) === MANIFEST);
+  const locks = dependencyFiles.filter((c) => basename(c.file) !== MANIFEST);
   if (locks.length === 0 && manifests.length === 0) return undefined;
 
-  // Asked before anything expensive, and answered from the diff alone. A
-  // manifest that moved something other than its dependency blocks is not a
-  // dependency change at all, so this says nothing and the sentinel fires as it
-  // always did -- no fall-open reason, because nothing here was downgraded.
+  const recorded = map.dependencies;
+  // Not a downgrade that failed -- a question this map cannot be asked, so it is
+  // not asked, and the diff is answered exactly as it was before any of this
+  // existed. The distinction is worth the branch for two reasons. Every map
+  // recorded before the field existed is in this position, so this is the path
+  // almost every real map takes, and "sentinel changed: pnpm-lock.yaml" is both
+  // truer and more useful to its owner than a sentence about an inventory they
+  // never opted into. And a project that deliberately dropped lockfiles from its
+  // `sentinels` keeps the behaviour it chose, where a fall-open reason here would
+  // quietly overrule it with a full run it had decided not to spend.
+  if (recorded === undefined) return undefined;
+  // An entry-less map credits packages to nothing, so there is no selection here
+  // to make and its own reason for the full run says so better than any of the
+  // ones below would.
+  if (map.entries.length === 0) return undefined;
+
+  // Answered from the diff and one `git show` per changed manifest, and asked
+  // only now: the two exits above are the ones almost every project takes, and
+  // this is the first step that costs a subprocess. A manifest that moved
+  // anything but its dependency blocks is not a dependency change at all, so it
+  // says nothing and the sentinel fires as it always did -- no fall-open reason,
+  // because nothing was downgraded.
   const base = map.commit;
   for (const manifest of manifests) {
     const before =
@@ -255,17 +290,6 @@ export function dependencyChange(init: {
     if (!dependencyOnlyManifestChange(before, after)) return undefined;
   }
 
-  const recorded = map.dependencies;
-  // Not a downgrade that failed -- a question this map cannot be asked, so it is
-  // not asked, and the diff is answered exactly as it was before any of this
-  // existed. The distinction is worth the branch for two reasons. Every map
-  // recorded before the field existed is in this position, so this is the path
-  // almost every real map takes, and "sentinel changed: pnpm-lock.yaml" is both
-  // truer and more useful to its owner than a sentence about an inventory they
-  // never opted into. And a project that deliberately dropped lockfiles from its
-  // `sentinels` keeps the behaviour it chose, where a fall-open reason here would
-  // quietly overrule it with a full run it had decided not to spend.
-  if (recorded === undefined) return undefined;
   const freshness = treeIsProvablyCurrent(cwd, recorded);
   if (!freshness.current) return { fallOpen: freshness.why };
 

@@ -11,7 +11,7 @@ import {
   recordedConfig,
   resolveConfig,
 } from './config.js';
-import { dependencyChange } from './dependencies.js';
+import { dependencyChange, isDependencyFile } from './dependencies.js';
 import { discoverTestFiles, isTestFile } from './discover.js';
 import {
   commitExists,
@@ -1469,6 +1469,21 @@ export async function explainPath(init: ExplainInit): Promise<ExplainResult> {
     recorded: CoverageMap | undefined,
   ): FullRunTrigger | undefined => {
     if (matchesAny(rel, config.sentinels)) {
+      // A lockfile is a sentinel that no longer always fires. Once a map records
+      // an inventory, a change here is resolved to the packages whose resolution
+      // moved and only the tests that ran them are selected -- so answering
+      // "always" would be telling the user something `affected` will contradict
+      // on the next bump. The same drift `status` was kept clear of, one command
+      // further out.
+      if (isDependencyFile(rel) && recorded?.dependencies !== undefined) {
+        return {
+          always: false,
+          why:
+            'a change here forces one only when it cannot be resolved to the ' +
+            'packages that moved -- the map records what was installed, and a ' +
+            'bump it can account for selects just the tests that ran them',
+        };
+      }
       return {
         always: true,
         why:
