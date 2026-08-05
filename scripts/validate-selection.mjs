@@ -20,11 +20,11 @@
  * So the checks here are the ones that hold whatever the granularity, and that a
  * selector bug cannot satisfy by accident:
  *
- *   - Every selected file is a discovered test file. This one fails today when a
- *     pull request deletes a test file and changes a source that test covered:
- *     the map entry outlives the file and the selection still names it. That is
- *     covsel/covsel#72, a defect in the selector rather than in this check --
- *     worth knowing before debugging the harness.
+ *   - Every selected file is a discovered test file. This one used to fail
+ *     whenever a pull request deleted a test file and changed a source that test
+ *     covered: the entry outlived the file and the selection still named it.
+ *     Fixed in the selector rather than here, which leaves this a guard against
+ *     it coming back.
  *   - Every changed test file is selected, whatever the map says about it.
  *   - Every `alwaysRun` test file is selected.
  *   - Every test whose entry credits **no source at all** is selected. Nothing

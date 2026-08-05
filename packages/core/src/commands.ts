@@ -857,7 +857,26 @@ export async function selectAffected(init: SelectInit): Promise<AffectedResult> 
   ]);
   const selected: TestId[] = [...wholeFile].map((file) => ({ file }));
   const seen = new Set<string>();
+  // The same rule the line above applies to `unmeasured`, applied to every unit
+  // an entry produced: a map entry outlives the test file it names, and there is
+  // nothing to run for a file that is no longer there.
+  //
+  // Deleting a test is the way in. Its entry survives in the map, the sources it
+  // covered are still credited to it, and changing one of them selects a path
+  // the checkout does not have. Nothing is skipped by it -- but what happens next
+  // is decided by the runner rather than by covsel, and the runners disagree:
+  // vitest ignores the path and quietly runs one fewer file than the selection
+  // named, while a runner that treats an unknown path as an error turns the
+  // whole run red over a stale entry. Neither is an answer covsel should be
+  // leaving to chance.
+  //
+  // Drawn from discovery, not from the diff, because a file can leave the suite
+  // without any diff saying so -- renamed, moved out of `testGlobs`, or excluded
+  // by a config change. Discovery is what `affected` selects from, so it is what
+  // a selection has to be expressible in.
+  const discovered = new Set(testFiles);
   for (const u of [...units, ...byPackage]) {
+    if (!discovered.has(u.file)) continue;
     if (wholeFile.has(u.file)) continue;
     const key = `${u.file} ${u.name ?? ''}`;
     if (seen.has(key)) continue;
@@ -1081,6 +1100,17 @@ export interface StatusResult {
    * them. Each such test is selected on every run.
    */
   unmeasuredEntryCount?: number;
+  /**
+   * Entries naming a test file discovery no longer finds — deleted, renamed, or
+   * moved out of `testGlobs` since the recording.
+   *
+   * Selection drops them, because there is nothing to run for a file that is not
+   * there, so this costs nothing and hides nothing. It is reported because it is
+   * the one number that says the map has drifted from the suite rather than from
+   * the sources: a map still describing tests the project removed is a map due to
+   * be recorded again, and nothing else in this report would say so.
+   */
+  staleEntryCount?: number;
   coveredFileCount?: number;
   coveredBlockCount?: number;
   changedSentinels: string[];
@@ -1201,6 +1231,14 @@ export async function computeStatus(init: StatusInit): Promise<StatusResult> {
     for (const b of entry.blocks ?? []) coveredBlocks.add(`${b.file}\0${b.blockHash}`);
   }
 
+  // Counted against discovery rather than the filesystem: a file that still
+  // exists but no longer matches `testGlobs` has left the suite just as surely
+  // as a deleted one, and selection treats them the same.
+  const inSuite = new Set(discovered);
+  const staleEntries = new Set(
+    map.entries.filter((e) => !inSuite.has(e.test.file)).map((e) => e.test.file),
+  ).size;
+
   const changedSentinels: string[] = [];
   for (const [rel, hash] of Object.entries(map.sentinelHashes)) {
     let current: string | undefined;
@@ -1227,6 +1265,7 @@ export async function computeStatus(init: StatusInit): Promise<StatusResult> {
     observed: [...map.observed],
     entryCount: map.entries.length,
     unmeasuredEntryCount: unmeasuredEntries,
+    staleEntryCount: staleEntries,
     coveredFileCount: coveredFiles.size,
     ...(coveredBlocks.size > 0 ? { coveredBlockCount: coveredBlocks.size } : {}),
     changedSentinels,

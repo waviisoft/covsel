@@ -931,6 +931,7 @@ function statusJson(s: StatusResult): unknown {
     ...(s.granularity !== undefined ? { granularity: s.granularity } : {}),
     ...(s.observed !== undefined ? { observed: s.observed } : {}),
     ...(s.entryCount !== undefined ? { entryCount: s.entryCount } : {}),
+    ...(s.staleEntryCount !== undefined ? { staleEntryCount: s.staleEntryCount } : {}),
     ...(s.unmeasuredEntryCount !== undefined
       ? { unmeasuredEntryCount: s.unmeasuredEntryCount }
       : {}),
@@ -1005,6 +1006,15 @@ async function cmdStatus(argv: string[]): Promise<number> {
       out(
         `unmeasured: ${s.unmeasuredEntryCount} entry(ies) cover no source -- every ` +
           'test file with one is selected on every run\n',
+      );
+    }
+    // Same rule as the line above: only when there are any. Unlike unmeasured
+    // entries this costs nothing at selection time -- they are simply dropped --
+    // so it is said as an observation about the map's age, not a warning.
+    if (s.staleEntryCount !== undefined && s.staleEntryCount > 0) {
+      out(
+        `stale:      ${s.staleEntryCount} entry(ies) name a test the suite no longer ` +
+          'has -- dropped from every selection, and a sign to record again\n',
       );
     }
     out(`sources:    ${s.coveredFileCount ?? 0}\n`);
