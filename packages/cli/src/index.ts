@@ -143,7 +143,16 @@ function readFormat(
   opts: string[],
   human: string,
 ): 'human' | 'json' | undefined {
-  const format = flag(opts, 'format') ?? human;
+  const value = flag(opts, 'format');
+  // `--format` with nothing after it is a caller who meant to name a format, not
+  // one asking for the default -- `covsel affected --format "$FMT"` with `FMT`
+  // unset produces exactly this. Defaulting there prints prose to a pipeline
+  // that asked for data, and the parser downstream reads it as an empty answer.
+  if (value === undefined && hasFlag(opts, 'format')) {
+    err(`covsel ${cmd}: --format needs a value ('${human}' or 'json')\n`);
+    return undefined;
+  }
+  const format = value ?? human;
   if (format === human) return 'human';
   if (format === 'json') return 'json';
   err(

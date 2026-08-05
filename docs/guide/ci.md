@@ -180,16 +180,50 @@ covsel affected --format json
 `files` is what the adapter would append to the runner's command line, so it is
 exactly what `covsel affected` prints without the flag. `tests` is the plain test
 files behind it — the two differ wherever selection is per-test, and a job
-splitting the suite across shards wants the second. `discovered` is the
+splitting the suite across shards wants the second, having first read `fullRun`
+as the section below insists. `discovered` is the
 denominator: one test selected out of two and one out of two hundred are the same
 `tests` list and completely different news, and a `testGlobs` that quietly
 stopped matching looks like a very precise selection without it.
 
-A full run says so, and says why, rather than listing every file as though it had
-chosen them:
+### Read `fullRun` first, always
+
+A full run still enumerates every test file discovery found. `fullRun` and
+`reason` are what say the list is not a selection:
 
 ```json
-{ "fullRun": true, "reason": "sentinel changed since the map was recorded: package.json", ... }
+{
+  "fullRun": true,
+  "reason": "sentinel changed since the map was recorded: package.json",
+  "files": ["test/math.test.js", "test/other.test.js"],
+  "tests": ["test/math.test.js", "test/other.test.js"],
+  "selected": [{ "file": "test/math.test.js" }, { "file": "test/other.test.js" }],
+  "discovered": 2
+}
+```
+
+So a job must branch on `fullRun` before it uses any of those lists, and run the
+suite **unfiltered** when it is true — the same thing `covsel run` does. Two
+reasons, and the second is the one that bites:
+
+- The lists are what covsel's own `testGlobs` discovered, which may be narrower
+  than the runner's. Handing them back on a full run would run fewer tests than
+  running the suite plainly.
+- **`tests` is empty precisely when covsel found nothing to choose between.** A
+  project whose `testGlobs` match nothing gets `fullRun: true` with `tests: []`
+  and a reason naming the glob, and a shard matrix built from `fromJSON` of that
+  is zero jobs — a green run that executed no tests at all. An empty `tests`
+  never means "run nothing"; it means covsel has no list to give and the runner's
+  own discovery has to apply.
+
+```bash
+# The shape to copy. Not `jq -r '.tests[]' | xargs <runner>`, which runs
+# the whole suite's worth of nothing on the runs that need all of it.
+if [ "$(jq -r '.fullRun' selection.json)" = true ]; then
+  npm test
+else
+  jq -r '.tests[]' selection.json | xargs npm test --
+fi
 ```
 
 `status --format json` carries the same facts its report does, including the

@@ -682,6 +682,11 @@ export interface AffectedResult {
    * and one chosen out of two hundred are the same `tests` list and completely
    * different news, and a glob that stopped matching looks like a precise
    * selection without it.
+   *
+   * Zero means discovery found none, never that it could not look: discovery
+   * reports an unreadable directory as no files rather than raising, so there is
+   * no third answer to distinguish. It always accompanies `fullRun: true`, since
+   * nothing to choose between is a full run.
    */
   discovered: number;
 }

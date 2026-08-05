@@ -219,6 +219,36 @@ describe('covsel affected --format json', () => {
     expect(err).toContain('covsel: full run');
   });
 
+  it('still enumerates every discovered test file on a full run', async () => {
+    // The anti-regression guard for the fail-open rule at this boundary. Emptying
+    // the lists when `fullRun` is true reads like tidiness -- covsel chose
+    // nothing, so report nothing -- and it is the one shape that turns
+    // `covsel affected --format json | jq -r '.files[]' | xargs <runner>` into a
+    // command that runs no tests at all, on exactly the runs that need every one.
+    // The other full-run cases here have no test files to list, so `[]` is the
+    // right answer there and only this fixture can tell the two apart.
+    const { code, out, files } = await inProject(
+      { 'package.json': pkg, 'a.test.js': '', 'b.test.js': '' },
+      async (cwd) => {
+        stubAdapter(cwd);
+        commitAll(cwd);
+        const machine = await capture(() => main(['affected', '--format', 'json']));
+        const human = await capture(() => main(['affected']));
+        return { ...machine, files: human.out };
+      },
+    );
+
+    expect(code).toBe(0);
+    const report = parseOne(out);
+    expect(report['fullRun']).toBe(true);
+    expect(report['files']).toEqual(['a.test.js', 'b.test.js']);
+    expect(report['tests']).toEqual(['a.test.js', 'b.test.js']);
+    expect(report['selected']).toEqual([{ file: 'a.test.js' }, { file: 'b.test.js' }]);
+    // And the two formats still agree, which is what stops the JSON drifting into
+    // a second opinion about what a full run means.
+    expect(report['files']).toEqual(files.split('\n').filter((l) => l !== ''));
+  });
+
   it('names why a full run is a full run, rather than implying every file was chosen', async () => {
     const { out } = await inProject({ 'package.json': pkg }, (cwd) => {
       stubAdapter(cwd);
@@ -401,13 +431,32 @@ describe('covsel fetch --format json', () => {
     expect(typeof report['reason']).toBe('string');
   });
 
-  it('still fails with --require, and still says why on stdout', async () => {
-    const { code, out } = await inProject({ 'package.json': pkg }, () =>
+  it('still fails with --require, and keeps the log a human reads', async () => {
+    const { code, out, err } = await inProject({ 'package.json': pkg }, () =>
       capture(() => main(['fetch', '--format', 'json', '--require'])),
     );
 
     expect(code).toBe(1);
     expect(parseOne(out)['ok']).toBe(false);
+    // The object is additive, not instead of. Without this, moving the human
+    // lines behind a `format !== 'json'` guard would pass the suite and leave a
+    // CI log that says nothing about why the map was not installed.
+    expect(err).toContain('covsel fetch:');
+  });
+
+  it('exits the same way with and without the flag, where the code is not 0', async () => {
+    // The parity that is worth asserting: a case where something returns
+    // non-zero. Comparing two commands that both always return 0 documents the
+    // contract without testing it.
+    const codes = await inProject({ 'package.json': pkg }, async () => {
+      const human = await capture(() => main(['fetch', '--require']));
+      const machine = await capture(() =>
+        main(['fetch', '--require', '--format', 'json']),
+      );
+      return [human.code, machine.code];
+    });
+
+    expect(codes).toEqual([1, 1]);
   });
 });
 
@@ -425,6 +474,25 @@ describe('--format', () => {
     expect(err).toContain(`covsel ${cmd}:`);
     expect(err).toContain("unsupported --format 'yaml'");
     expect(err).toContain(human);
+  });
+
+  it.each([
+    ['affected', 'files'],
+    ['status', 'text'],
+    ['fetch', 'text'],
+  ])('%s rejects --format with nothing after it', async (cmd, human) => {
+    // `covsel affected --format "$FMT"` with `FMT` unset is this argv, and
+    // defaulting to prose there answers a pipeline that asked for data with
+    // something its parser reads as nothing at all.
+    const { code, out, err } = await inProject({ 'package.json': pkg }, (cwd) => {
+      stubAdapter(cwd);
+      return capture(() => main([cmd, '--format']));
+    });
+
+    expect(code).toBe(1);
+    expect(err).toContain(`covsel ${cmd}: --format needs a value`);
+    expect(err).toContain(human);
+    expect(out).toBe('');
   });
 
   it.each(['status', 'fetch'])('%s prints its human report by default', async (cmd) => {

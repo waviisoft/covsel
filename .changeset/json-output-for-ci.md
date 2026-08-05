@@ -20,6 +20,16 @@ anyone else's, has to be built on.
 - Exit codes do not depend on the format. `fetch` finding nothing is still
   `ok: false` and still exits 0 — the tests still have to run, and they run in
   full — and `--require` still turns that into a failure.
+- A full run still enumerates every discovered test file; `fullRun` and `reason`
+  are what say the list is not a selection. Emptying the lists there reads like
+  tidiness and is the one shape that turns `covsel affected --format json | jq -r
+'.files[]' | xargs <runner>` into a command that runs no tests, on exactly the
+  runs that need every one. The CI guide says to branch on `fullRun` and run the
+  suite unfiltered, and a test pins the shape.
+- `--format` with nothing after it is now an error rather than the default.
+  `covsel affected --format "$FMT"` with `FMT` unset produced exactly that argv,
+  and answering a pipeline that asked for data with prose leaves its parser
+  reading an empty answer.
 - `affected` reports `files` and `tests` separately: `files` is the adapter's
   runner-native rendering, identical to what `--format files` prints, and `tests`
   the plain test files behind it. They are the same list until selection is
