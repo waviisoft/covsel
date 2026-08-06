@@ -933,6 +933,7 @@ function statusJson(s: StatusResult): unknown {
     ...(s.discoveredTestCount !== undefined
       ? { discoveredTestCount: s.discoveredTestCount }
       : {}),
+    ...(s.ignoredTestCount !== undefined ? { ignoredTestCount: s.ignoredTestCount } : {}),
     ...(s.recordedAt !== undefined ? { recordedAt: s.recordedAt } : {}),
     ...(s.commit !== undefined ? { commit: s.commit } : {}),
     ...(s.ageMs !== undefined ? { ageMs: s.ageMs } : {}),
@@ -989,6 +990,15 @@ async function cmdStatus(argv: string[]): Promise<number> {
       `discovered: ${s.discoveredTestCount} test file(s)${
         s.discoveredTestCount === 0 ? ' -- check testGlobs' : ''
       }\n`,
+    );
+  }
+  // Only when there are any. A project that told covsel to skip part of its
+  // suite should see that said back to it, rather than discovering later that
+  // the number it trusts has a subtraction inside it.
+  if (s.ignoredTestCount !== undefined && s.ignoredTestCount > 0) {
+    out(
+      `ignored:    ${s.ignoredTestCount} test file(s) excluded by testIgnore -- ` +
+        'never recorded, never selected\n',
     );
   }
   if (s.mapState === 'usable') {

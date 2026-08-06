@@ -88,13 +88,19 @@ describe('a malformed report entry is skipped, not fatal', () => {
     expect(result.files.map((f) => f.file)).toEqual(['src/a.js']);
   });
 
-  it('skips an entry whose counters are all zero, because nothing ran', () => {
+  it('credits an entry whose counters are all zero, because the file still loaded', () => {
+    // covsel/covsel#82. A module of nothing but declarations executes no
+    // statement when it loads, so every counter is zero -- and dropping it
+    // recorded no relationship at all between the test and a file it imported.
+    // That is the fail-closed direction: give the module a top-level side
+    // effect, or make it throw on import, and every importer's behaviour changes
+    // while none of them are selected.
     const abs = join(cwd, 'src', 'a.js');
     const result = istanbulCoverage(
       { [abs]: { path: abs, s: { 0: 0 }, f: { 0: 0 } } },
       { cwd, config },
     );
-    expect(result.files).toEqual([]);
+    expect(result.files.map((f) => f.file)).toEqual(['src/a.js']);
   });
 
   it('counts a branch hit as execution', () => {

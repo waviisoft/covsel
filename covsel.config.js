@@ -7,6 +7,8 @@
  * than `covsel.json` because two of the choices below are only defensible with
  * the reasoning attached.
  */
+import { BROWSER_TESTS } from './browser-tests.mjs';
+
 export default {
   // Recorded and selected through Vitest's own coverage, since Vitest evaluates
   // transformed sources and the generic wrap would never see `packages/*/src`.
@@ -34,12 +36,19 @@ export default {
     'actions/*/test/**/*.test.ts',
   ],
 
+  // `pnpm test` -- the command covsel wraps -- excludes these, so covsel must
+  // not try to record them. Read from the same list vitest excludes them by, so
+  // the two cannot drift: when they did, recording died on a browser test in a
+  // job with no browser and no map was written at all.
+  testIgnore: BROWSER_TESTS,
+
   // The sources behind those suites, and nothing else. These all carry a slash
   // because they describe directories, not because they have to: #20 stopped a
   // slash-less `sourceGlob` widening to that basename anywhere in the tree, so
   // one written here now means the path it names. `testGlobs` and `sentinels`
-  // above still widen, which is deliberate — matching more of those runs more
-  // tests, where matching more sources only records files nobody chose.
+  // still widen, which is deliberate — matching more of those runs more tests.
+  // `testIgnore` is read strictly for the opposite reason: one matching too much
+  // excludes a test from recording entirely.
   sourceGlobs: ['packages/*/src/**', 'benchmarks/src/**', 'actions/*/*.mjs'],
 
   /*

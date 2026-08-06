@@ -1,15 +1,7 @@
 import { fileURLToPath } from 'node:url';
 import { configDefaults, defineConfig } from 'vitest/config';
 
-/**
- * Tests that need a real browser, which `pnpm test` must not depend on having.
- *
- * The Playwright adapter's conformance suite drives Chromium against a served
- * application, so it is run on its own by `pnpm test:browser` — and CI runs it,
- * because a conformance suite nothing executes is a conformance suite that
- * certifies nothing.
- */
-export const BROWSER_TESTS = ['packages/adapter-playwright/test/conformance.test.ts'];
+import { BROWSER_TESTS } from './browser-tests.mjs';
 
 /** Workspace packages resolved to source, so tests run without a build step. */
 export const workspaceAlias: Record<string, string> = {

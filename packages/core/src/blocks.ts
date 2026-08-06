@@ -21,6 +21,25 @@ export interface SourceBlock {
 /** Name of the top-level skeleton block, which runs whenever a file loads. */
 export const MODULE_BLOCK = '<module>';
 
+/**
+ * Name of the block covering what a file *does* when it loads, as opposed to
+ * what it declares.
+ *
+ * The module block is the whole top level with function bodies blanked, so it
+ * moves whenever a signature is added, renamed, or re-typed. For a file a test
+ * merely imported and never called into, that is far too wide: the test cannot
+ * be affected by a signature it never invokes, and crediting it with the module
+ * block would re-select every importer of a module on every signature change.
+ *
+ * This block covers only the two things loading a module actually does — resolve
+ * and evaluate the modules it names, and run its top-level statements — so a
+ * file whose top level is nothing but declarations has an *empty* fingerprint,
+ * and an empty fingerprint never changes. Its importers stay unselected until
+ * someone gives the module load-time behaviour, at which point it changes once
+ * and selects them.
+ */
+export const LOAD_BLOCK = '<load>';
+
 function isFunctionLike(node: ts.Node): boolean {
   return (
     ts.isFunctionDeclaration(node) ||
@@ -206,11 +225,79 @@ export function extractBlocks(source: string, fileName = 'file.ts'): SourceBlock
     literalSpans(sf, sf),
     outermostBodySpans,
   );
+  // Load block second, module block first: the module block sorting first is a
+  // documented property, and consumers read the list in order.
+  blocks.unshift({
+    name: LOAD_BLOCK,
+    hash: hashString(`${LOAD_BLOCK} ${loadFingerprint(sf, source)}`),
+  });
   blocks.unshift({
     name: MODULE_BLOCK,
     hash: hashString(`${MODULE_BLOCK} ${moduleText}`),
   });
   return blocks;
+}
+
+/**
+ * What a module does when it is loaded, as text to hash: the specifiers it
+ * pulls in, then its top-level executable statements.
+ *
+ * Specifiers, not bindings. `import { a } from './x'` and `import { a, b } from
+ * './x'` load exactly the same module and run exactly the same code; which names
+ * are taken out of it is resolved at compile time and does nothing at run time.
+ * Including the bindings would move the fingerprint on the commonest edit there
+ * is — importing one more thing from somewhere already imported — for no change
+ * in behaviour. A re-export (`export * from './x'`) counts, because it loads the
+ * module just as an import does.
+ *
+ * Statements, not declarations. A `const` initialiser runs, a class body
+ * evaluates its decorators and static blocks, a bare call calls, a top-level
+ * `await` waits. A function declaration, an interface, and a type alias do
+ * nothing at all until something invokes or erases them, so they are left out —
+ * which is what lets a declarations-only module have an empty fingerprint.
+ *
+ * Ordered as written, since evaluation order is part of what loading does.
+ */
+function loadFingerprint(sf: ts.SourceFile, source: string): string {
+  const parts: string[] = [];
+  for (const node of sf.statements) {
+    if (ts.isImportDeclaration(node) || ts.isExportDeclaration(node)) {
+      // `import type` and `export type` are erased before anything runs, so they
+      // load nothing. An export declaration with no specifier (`export { a }`)
+      // names no module and belongs to neither half.
+      const specifier = (node as { moduleSpecifier?: ts.Expression }).moduleSpecifier;
+      const typeOnly = (node as { isTypeOnly?: boolean }).isTypeOnly === true;
+      if (specifier !== undefined && !typeOnly && ts.isStringLiteral(specifier)) {
+        parts.push(`import ${specifier.text}`);
+      }
+      continue;
+    }
+    if (isInertAtLoad(node)) continue;
+    parts.push(canonicalize(source, node.getStart(sf), node.getEnd(), [], []));
+  }
+  return parts.join('\n');
+}
+
+/**
+ * True for a top-level node that runs nothing when the file loads.
+ *
+ * An allowlist would be the safer shape, and this is deliberately the other one:
+ * a syntax nobody here has considered is treated as executable, so it lands in
+ * the fingerprint and over-selects. The opposite default would let the next
+ * thing TypeScript invents run at load time while covsel called the file inert.
+ */
+function isInertAtLoad(node: ts.Node): boolean {
+  // An enum is not on this list on purpose: it emits a real initialiser object
+  // at run time. A `const enum` does not, but telling them apart needs the
+  // compiler's own view of `preserveConstEnums`, and guessing wrong the other
+  // way would drop something that runs.
+  return (
+    ts.isFunctionDeclaration(node) ||
+    ts.isInterfaceDeclaration(node) ||
+    ts.isTypeAliasDeclaration(node) ||
+    ts.isImportEqualsDeclaration(node) ||
+    node.kind === ts.SyntaxKind.EmptyStatement
+  );
 }
 
 /** An executed-count region of a source, in character offsets. */
@@ -243,18 +330,39 @@ function executedAt(probe: number, regions: ExecRegion[]): boolean {
 }
 
 /**
- * The blocks of a file that a test executed: the module block (always, since the
- * file loaded) plus every function block whose body ran, judged by the coverage
- * regions. Uncovered probes default to "executed" so a block is never dropped.
+ * The blocks of a file that a test executed: every function block whose body
+ * ran, judged by the coverage regions, plus one block for the load itself.
+ * Uncovered probes default to "executed" so a block is never dropped.
+ *
+ * Which load block depends on what else ran. A file the test called into gets
+ * the module block, because it genuinely executes code there and a signature
+ * change can reach it. A file the test only *imported* gets the load
+ * fingerprint, which moves when the module's load-time behaviour moves and not
+ * when its declarations do.
+ *
+ * That distinction is the whole of covsel/covsel#82. Crediting an
+ * imported-but-uncalled module with nothing skips every importer when the module
+ * gains a top-level side effect or starts throwing on import — the sharpest form
+ * being a suite that is broken while `affected` reports nothing to run.
+ * Crediting it with the *module* block closes that hole and pays for it on every
+ * signature change: measured on this repository, a pull request that added
+ * functions to `commands.ts` selected 30 of 47 test files, and under module-block
+ * crediting would have selected essentially all 47.
  */
 export function selectExecutedBlocks(
   source: string,
   fileName: string,
   regions: ExecRegion[],
 ): SourceBlock[] {
-  return extractBlocks(source, fileName).filter(
-    (b) => b.probe === undefined || executedAt(b.probe, regions),
+  const blocks = extractBlocks(source, fileName);
+  const ran = blocks.filter(
+    (b) =>
+      b.name !== MODULE_BLOCK && b.name !== LOAD_BLOCK && executedAt(b.probe!, regions),
   );
+  const loaded = blocks.find(
+    (b) => b.name === (ran.length === 0 ? LOAD_BLOCK : MODULE_BLOCK),
+  );
+  return loaded ? [loaded, ...ran] : ran;
 }
 
 /** The set of distinct block hashes present in a source string. */
