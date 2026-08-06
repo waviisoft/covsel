@@ -79,7 +79,7 @@ jobs:
       - name: Mint a token for the mirror
         id: token
         if: env.APP_ID != ''
-        uses: actions/create-github-app-token@v2
+        uses: actions/create-github-app-token@v3
         with:
           app-id: ${{ secrets.COVSEL_ACTION_APP_ID }}
           private-key: ${{ secrets.COVSEL_ACTION_PRIVATE_KEY }}

@@ -170,7 +170,7 @@ runs:
     # map, and a pull request branched before the latest push then finds nothing
     # it can diff from.
     - name: Restore the map archive
-      uses: actions/cache/restore@v4
+      uses: actions/cache/restore@v6
       with:
         path: ${{ inputs.working-directory }}/${{ inputs.archive-path }}
         key: ${{ inputs.cache-key-prefix }}${{ github.sha }}
@@ -276,7 +276,7 @@ runs:
 
     - name: Save the map archive
       if: inputs.mode == 'record'
-      uses: actions/cache/save@v4
+      uses: actions/cache/save@v6
       with:
         path: ${{ inputs.working-directory }}/${{ inputs.archive-path }}
         key: ${{ inputs.cache-key-prefix }}${{ github.sha }}
