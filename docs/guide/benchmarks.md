@@ -131,10 +131,13 @@ Projects are JSON in
 so adding one is a pull request against a data file. The fields are validated
 before anything is cloned.
 
-Globs must contain a `/`. A slash-less glob is also matched against a path's
-basename anywhere in the tree, so `sourceGlobs: ["index.js"]` silently grows to
-every `index.js` in the repository — write `./index.js`, or `**/index.js` if you
-did mean all of them.
+Globs must contain a `/` — write `./index.js`, or `**/index.js` if you did mean
+all of them. A slash-less glob in `testGlobs`, `sentinels`, or `alwaysRun` is
+also matched against a path's basename anywhere in the tree, which is deliberate
+in covsel and unhelpful in a benchmark: a project's numbers should describe a set
+somebody chose rather than one a matching rule grew. `sourceGlobs` no longer
+widens that way, so the rule is a house style there rather than a guard, and it
+is kept for the one reading across every field.
 
 One practical warning from the projects already tried: recording drives one
 process per test file and waits for each, so a test file that hangs stalls
