@@ -65,7 +65,23 @@ export function isTestFile(
 export function makeSourceFilter(
   config: Pick<CovselConfig, 'sourceGlobs' | 'testGlobs'>,
 ): (rel: string) => boolean {
-  const isSource = makeMatcher(config.sourceGlobs);
+  // `sourceGlobs` strictly, `testGlobs` widened, and the asymmetry is the point.
+  //
+  // `makeMatcher` gives a slash-less glob a second chance against a path's
+  // basename anywhere in the tree, which is right for a sentinel — matching more
+  // of those runs more tests — and wrong here. `sourceGlobs: ['index.js']` means
+  // the entry point, and under widening it silently meant *every* `index.js` in
+  // the repository: on `expressjs/express` a map reporting 29 covered sources for
+  // a library with 7, the other 22 being example apps that ship to nobody. That
+  // is over-selection rather than a skipped test, but it makes the map useless as
+  // a diagnostic and quietly erodes the saving covsel exists to deliver. Anyone
+  // wanting the recursive reading writes `**/index.js`, which already works and
+  // says so.
+  //
+  // `testGlobs` keeps the widening because there it inverts: a glob that
+  // discovers fewer test files leaves the ones it missed unrun, and `*.test.js`
+  // meaning "only at the root" would be a skipped test rather than a wide map.
+  const isSource = makeStrictMatcher(config.sourceGlobs);
   const isTest = makeMatcher(config.testGlobs);
   return (rel: string): boolean => !isExcludedRel(rel) && !isTest(rel) && isSource(rel);
 }

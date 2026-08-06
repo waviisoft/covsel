@@ -42,10 +42,13 @@ export default {
   // job with no browser and no map was written at all.
   testIgnore: BROWSER_TESTS,
 
-  // The sources behind those suites, and nothing else. Written with a slash on
-  // purpose: a slash-less glob also matches by basename anywhere in the tree,
-  // which would pull every fixture and example file of the same name into the
-  // map (see #20).
+  // The sources behind those suites, and nothing else. These all carry a slash
+  // because they describe directories, not because they have to: #20 stopped a
+  // slash-less `sourceGlob` widening to that basename anywhere in the tree, so
+  // one written here now means the path it names. `testGlobs` and `sentinels`
+  // still widen, which is deliberate — matching more of those runs more tests.
+  // `testIgnore` is read strictly for the opposite reason: one matching too much
+  // excludes a test from recording entirely.
   sourceGlobs: ['packages/*/src/**', 'benchmarks/src/**', 'actions/*/*.mjs'],
 
   /*

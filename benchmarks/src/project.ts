@@ -128,10 +128,16 @@ export function parseProject(raw: unknown, source: string): BenchmarkProject {
     );
   }
 
-  // A slash-less glob is matched against a path's basename anywhere in the tree,
-  // which quietly pulls example and fixture directories into a project's source
-  // set. Selection only widens as a result, so a run still measures something --
-  // it just measures a source set nobody chose. Reject it at the door instead.
+  // A slash-less glob is matched against a path's basename anywhere in the tree
+  // for `testGlobs`, `sentinels`, and `alwaysRun`, which quietly pulls example
+  // and fixture directories into what a project counts. Selection only widens as
+  // a result, so a run still measures something -- it just measures a set nobody
+  // chose. Rejected at the door instead.
+  //
+  // `sourceGlobs` no longer widens that way (covsel/covsel#20), so for that field
+  // this is house style rather than a guard: benchmark data reads better for one
+  // rule across every field than for one with an exception, and a project author
+  // writing a path they mean loses nothing by the `/`.
   for (const [field, globs] of Object.entries(covsel)) {
     if (!Array.isArray(globs)) continue;
     for (const glob of globs) {

@@ -9,6 +9,7 @@ import {
   FailOpenPolicy,
   fullRunReason,
   isExcludedRel,
+  isTestFile,
   LOCKFILES,
   LocalStore,
   loadConfig,
@@ -104,6 +105,42 @@ describe('matching', () => {
     expect(isSource('node_modules/x/index.js')).toBe(false);
     expect(isSource('dist/a.js')).toBe(false);
     expect(isSource('test/a.test.ts')).toBe(false);
+  });
+
+  it('reads a slash-less sourceGlob as the path it names, not as a basename', () => {
+    // covsel/covsel#20. `sourceGlobs: ['index.js']` means the entry point.
+    // Widened to basenames it meant every `index.js` in the tree: measured on
+    // `expressjs/express`, a map reporting 29 covered sources for a library with
+    // 7, the other 22 being example apps. Over-selection rather than a skipped
+    // test, but it makes the map useless to read and erodes the saving.
+    const isSource = makeSourceFilter({
+      ...DEFAULT_CONFIG,
+      sourceGlobs: ['index.js'],
+    });
+
+    expect(isSource('index.js')).toBe(true);
+    expect(isSource('examples/demo/index.js')).toBe(false);
+  });
+
+  it('still reads a recursive sourceGlob recursively', () => {
+    // The reading the widening used to give, now asked for in a way that says
+    // so.
+    const isSource = makeSourceFilter({
+      ...DEFAULT_CONFIG,
+      sourceGlobs: ['**/index.js'],
+    });
+
+    expect(isSource('index.js')).toBe(true);
+    expect(isSource('examples/demo/index.js')).toBe(true);
+  });
+
+  it('keeps widening testGlobs, where a narrower read would skip tests', () => {
+    // The asymmetry: a source glob that matches too much costs precision, while
+    // a test glob that matches too little leaves the tests it missed unrun.
+    const config = { ...DEFAULT_CONFIG, testGlobs: ['*.test.js'] };
+
+    expect(isTestFile('a.test.js', config)).toBe(true);
+    expect(isTestFile('deep/nested/b.test.js', config)).toBe(true);
   });
 });
 

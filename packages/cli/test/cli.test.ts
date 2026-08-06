@@ -986,6 +986,57 @@ describe('covsel status on a map it cannot use', () => {
     expect(out).not.toContain('granularity');
     expect(out).not.toContain('entries:');
   });
+
+  /** A map crediting one entry with `sources`, at the path status reads. */
+  function writeSources(cwd: string, sources: string[]): void {
+    writeMapFile(
+      cwd,
+      JSON.stringify({
+        schemaVersion: MAP_SCHEMA_VERSION,
+        granularity: 'file',
+        recordedAt: new Date().toISOString(),
+        sentinelHashes: {},
+        observed: ['**'],
+        entries: [
+          {
+            test: { file: 'test/a.test.js' },
+            files: sources.map((file) => ({ file, fileHash: `sha256:${file}` })),
+          },
+        ],
+      }),
+    );
+  }
+
+  it('shows where the covered sources came from when they span directories', async () => {
+    // `sources: 5` is the number people read to judge whether their globs say
+    // what they meant, and alone it cannot answer that. The express shape,
+    // shrunk: a little real source and a lot of examples.
+    const { out } = await inProject({ 'package.json': pkg({}) }, async (cwd) => {
+      writeSources(cwd, [
+        'lib/application.js',
+        'lib/router.js',
+        'examples/auth/index.js',
+        'examples/mvc/index.js',
+        'examples/vhost/index.js',
+      ]);
+      return captureStdout(() => main(['status']));
+    });
+
+    expect(out).toMatch(/sources: +5/);
+    // Biggest first, so the directory nobody meant to include reads first.
+    expect(out).toMatch(/examples +3[\s\S]*lib +2/);
+  });
+
+  it('says nothing extra when every source is under one directory', async () => {
+    // There the breakdown only restates the line above it.
+    const { out } = await inProject({ 'package.json': pkg({}) }, async (cwd) => {
+      writeSources(cwd, ['lib/application.js', 'lib/router.js']);
+      return captureStdout(() => main(['status']));
+    });
+
+    expect(out).toMatch(/sources: +2/);
+    expect(out).not.toMatch(/^ +lib +2$/m);
+  });
 });
 
 describe('the persisted adapter', () => {

@@ -143,6 +143,19 @@ shows the store path, the map's age and size, the commit it was recorded on,
 whether any sentinel changed since record, and whether the next `affected` would
 be a full run.
 
+When the covered sources span more than one top-level directory, it breaks them
+down by directory, biggest first — because the source count is the number you
+read to judge whether `sourceGlobs` says what you meant, and on its own it cannot
+answer that:
+
+```
+sources:    29
+  examples  22
+  lib       7
+```
+
+A directory you did not mean to record is usually obvious the moment it is named.
+
 A map covsel cannot use is not a missing one, and `status` says which it is
 looking at:
 
@@ -233,6 +246,15 @@ Selection needs no configuration once an adapter is installed. To refine, add a 
   },
 }
 ```
+
+`sourceGlobs` means the paths it says, relative to the repo root: `"index.js"`
+is the entry point, not every `index.js` in the tree. Write `"**/index.js"` for
+the recursive reading. `testGlobs`, `sentinels`, and `alwaysRun` are matched more
+loosely — a slash-less pattern there also matches a path's basename at any depth,
+so `"package.json"` covers a workspace's own manifest and `"*.test.js"` finds
+nested tests. The asymmetry is deliberate: matching more test files or more
+sentinels runs more tests, while matching more _sources_ only bloats the map with
+files nobody meant to describe.
 
 `observes` is the one field most projects leave out. A recorder watching a Node
 process tree covsel started sees every script that tree loads, wherever it lives,

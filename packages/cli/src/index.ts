@@ -945,6 +945,9 @@ function statusJson(s: StatusResult): unknown {
       ? { unmeasuredEntryCount: s.unmeasuredEntryCount }
       : {}),
     ...(s.coveredFileCount !== undefined ? { coveredFileCount: s.coveredFileCount } : {}),
+    ...(s.coveredSourcesByDir !== undefined
+      ? { coveredSourcesByDir: s.coveredSourcesByDir }
+      : {}),
     ...(s.coveredBlockCount !== undefined
       ? { coveredBlockCount: s.coveredBlockCount }
       : {}),
@@ -1036,6 +1039,15 @@ async function cmdStatus(argv: string[]): Promise<number> {
       );
     }
     out(`sources:    ${s.coveredFileCount ?? 0}\n`);
+    // Only when the sources span more than one top-level directory, because with
+    // one the breakdown restates the line above it. Two or more is where the
+    // question this answers gets asked: `sources: 29` for a library with 7 says
+    // nothing about the 22 that came from `examples/`, and nothing else short of
+    // opening the map file would.
+    const byDir = Object.entries(s.coveredSourcesByDir ?? {});
+    if (byDir.length > 1) {
+      for (const [dir, count] of byDir) out(`  ${dir.padEnd(10)}${String(count)}\n`);
+    }
     if (s.coveredBlockCount !== undefined) out(`blocks:     ${s.coveredBlockCount}\n`);
     out(
       `sentinels:  ${
