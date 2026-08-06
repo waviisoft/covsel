@@ -77,6 +77,13 @@ try {
   const rec = run('node', [covselBin, 'record', '--', playwrightBin, 'test'], tmp);
   process.stderr.write(rec.stderr);
   assert(rec.status === 0, 'record exits 0');
+  if (rec.status !== 0) {
+    // Everything below reads the map, so carrying on turns a recording failure
+    // -- which just printed why -- into an ENOENT stack that buries it.
+    console.error('\nrecording failed; nothing further can be checked');
+    process.exitCode = 1;
+    process.exit(1);
+  }
 
   const map = JSON.parse(readFileSync(join(tmp, '.covsel', 'map.json'), 'utf8'));
   assert(map.entries.length === 2, 'records one entry per test (2)');

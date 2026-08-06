@@ -16,7 +16,11 @@ export default {
     // A dev server, not a production build: it serves modules close to 1:1 with
     // the sources and inlines nothing, which is what keeps block-level
     // selectivity through the projection.
-    command: 'vite dev --port 5273 --strictPort',
+    // Bound to the address this config names, not to `localhost`. A CI runner
+    // resolves `localhost` to `::1` as well as `127.0.0.1`, and a dev server
+    // that picks the first one is invisible to a `url` naming the other -- which
+    // surfaces only as `Timed out waiting from config.webServer`.
+    command: 'vite dev --host 127.0.0.1 --port 5273 --strictPort',
     url: 'http://127.0.0.1:5273',
     reuseExistingServer: false,
   },

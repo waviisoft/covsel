@@ -107,6 +107,19 @@ value is, because in a bundled SPA every statically imported module's top level
 runs on page load, so every test records every module and file granularity
 selects everything.
 
+Bind that server to the address your `webServer.url` names, rather than to
+`localhost`. A CI runner resolves `localhost` to `::1` as well as `127.0.0.1`,
+and a server that picks the first is invisible to a `url` naming the other — a
+failure that shows up only as `Timed out waiting from config.webServer`, long
+after the thing that caused it:
+
+```js
+webServer: {
+  command: 'vite dev --host 127.0.0.1 --port 5173 --strictPort',
+  url: 'http://127.0.0.1:5173',
+},
+```
+
 Against a minified production bundle, selection degrades toward file level:
 code inlined into several callers cannot be called idle by a range that never
 ran, so covsel keeps those blocks marked executed. That is the safe direction,
