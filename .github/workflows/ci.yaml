@@ -63,7 +63,7 @@ jobs:
       - run: pnpm install --frozen-lockfile
       - run: pnpm build
 
-      - uses: actions/cache/restore@v4
+      - uses: actions/cache/restore@v6
         with:
           path: .covsel/archive
           key: covsel-archive-${{ github.sha }}
@@ -88,6 +88,89 @@ jobs:
 
       - name: Run the affected tests
         run: node packages/cli/dist/bin.js run -- npx vitest run
+
+  action:
+    name: The action drives covsel end to end
+    runs-on: ubuntu-latest
+    # The action's contract is the CLI's JSON output, which is why it is
+    # developed here rather than in the repository it ships from: this job runs
+    # it against `packages/cli` at HEAD, so a change to a JSON shape goes red on
+    # the pull request that made it instead of reaching a user first.
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+      - uses: pnpm/action-setup@v6
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 22
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm build
+
+      # Against the real archive, so this exercises what a pull request in any
+      # repository hits: a map to fetch, or nothing to fetch and a full run.
+      # Nothing is run -- the `select` job above already runs the selection, and
+      # the `test` job runs the suite.
+      - name: Select, and report what it would have run
+        id: selection
+        uses: ./actions/ci
+        with:
+          command: npx vitest run
+          covsel-command: node packages/cli/dist/bin.js
+          dry-run: true
+
+      - name: Check the action answered with facts rather than blanks
+        env:
+          FULL_RUN: ${{ steps.selection.outputs.full-run }}
+          DISCOVERED: ${{ steps.selection.outputs.discovered-count }}
+          AFFECTED: ${{ steps.selection.outputs.affected }}
+          MAP_STATE: ${{ steps.selection.outputs.map-state }}
+        run: |
+          set -euo pipefail
+          echo "full-run=$FULL_RUN discovered=$DISCOVERED map=$MAP_STATE"
+          test "$FULL_RUN" = 'true' -o "$FULL_RUN" = 'false'
+          test "$DISCOVERED" -gt 0
+          node -e 'JSON.parse(process.env.AFFECTED)'
+          # A full run has to enumerate what it will run. An empty list here is
+          # the shape that makes a consumer pipe nothing into its runner and call
+          # it a pass, so it is checked rather than assumed.
+          if [ "$FULL_RUN" = 'true' ]; then
+            node -e 'if (JSON.parse(process.env.AFFECTED).length === 0) { throw new Error("a full run reported no test files") }'
+          fi
+
+      # The step above installed whichever map it fetched, and `covsel fetch`
+      # leaves an existing map alone when it finds nothing -- so an empty archive
+      # is not on its own a checkout with nothing to select from. Without this,
+      # the step below would select against the previous step's map, and on a
+      # pull request touching only `actions/**` that selection is empty: it would
+      # run no tests and pass, proving nothing about the path it exists to prove.
+      - name: Discard the map the previous step installed
+        run: rm -rf .covsel
+
+      # The run step, with nothing to select from, so the full-run path is the one
+      # exercised: covsel hands the runner its own command, unfiltered.
+      - name: Run the tests through the action, with no map to select from
+        id: full
+        uses: ./actions/ci
+        with:
+          command: npx vitest run actions/ci/test/report.test.ts
+          covsel-command: node packages/cli/dist/bin.js
+          cache-key-prefix: covsel-action-e2e-never-populated-
+          summary: 'false'
+
+      # Without this the step above proves nothing: its only signal is an exit
+      # code, and selecting against a map left behind by an earlier step would
+      # pass just as quietly -- which is the defect that made it worth writing.
+      - name: Check that really was the full-run path
+        env:
+          FULL_RUN: ${{ steps.full.outputs.full-run }}
+        run: |
+          set -euo pipefail
+          test "$FULL_RUN" = 'true' || {
+            echo "::error::the no-map invocation selected instead of running in full (full-run=$FULL_RUN)"
+            exit 1
+          }
 
   docs:
     name: Build docs

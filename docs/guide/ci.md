@@ -96,21 +96,21 @@ jobs:
   record:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
         with:
           fetch-depth: 0 # selection needs history back to the recorded commit
-      - uses: actions/setup-node@v5
+      - uses: actions/setup-node@v7
         with:
           node-version: 22
       - run: npm ci
-      - uses: actions/cache/restore@v4
+      - uses: actions/cache/restore@v6
         with:
           path: .covsel/archive
           key: covsel-archive-${{ github.sha }}
           restore-keys: covsel-archive-
       - run: npx covsel record -- npm test
       - run: npx covsel publish
-      - uses: actions/cache/save@v4
+      - uses: actions/cache/save@v6
         with:
           path: .covsel/archive
           key: covsel-archive-${{ github.sha }}
@@ -127,14 +127,14 @@ jobs:
   test:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
         with:
           fetch-depth: 0
-      - uses: actions/setup-node@v5
+      - uses: actions/setup-node@v7
         with:
           node-version: 22
       - run: npm ci
-      - uses: actions/cache/restore@v4
+      - uses: actions/cache/restore@v6
         with:
           path: .covsel/archive
           key: covsel-archive-${{ github.sha }}

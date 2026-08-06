@@ -20,14 +20,25 @@ export default {
   // the workspace directory is both accurate and inert.
   adapter: './packages/adapter-vitest',
 
-  // The suite vitest itself runs. The golden example end-to-end scripts under
-  // examples/ are shell, driven by their own CI steps, and are not selected.
-  testGlobs: ['packages/*/test/**/*.test.ts'],
+  // The suite vitest itself runs, which is what these have to keep up with:
+  // testable code outside `packages/` is invisible to selection until it is named
+  // here, and invisible means a change to it selects nothing at all -- so the job
+  // demonstrating covsel on itself would run nothing and pass while the code
+  // under it changed. Both `benchmarks/` and `actions/` are that case.
+  //
+  // The golden example end-to-end scripts under examples/ are shell, driven by
+  // their own CI steps, and are deliberately not selected.
+  testGlobs: [
+    'packages/*/test/**/*.test.ts',
+    'benchmarks/test/**/*.test.ts',
+    'actions/*/test/**/*.test.ts',
+  ],
 
-  // Only the packages' own sources. Written with a slash on purpose: a slash-less
-  // glob also matches by basename anywhere in the tree, which would pull every
-  // fixture and example file of the same name into the map (see #20).
-  sourceGlobs: ['packages/*/src/**'],
+  // The sources behind those suites, and nothing else. Written with a slash on
+  // purpose: a slash-less glob also matches by basename anywhere in the tree,
+  // which would pull every fixture and example file of the same name into the
+  // map (see #20).
+  sourceGlobs: ['packages/*/src/**', 'benchmarks/src/**', 'actions/*/*.mjs'],
 
   /*
    * Tests whose coverage the recorder cannot see, named here as well as left to
@@ -52,6 +63,13 @@ export default {
     'packages/cli/test/built-artifact.test.ts',
     'packages/core/test/coverage-observation.test.ts',
     'packages/core/test/inspector-observation.test.ts',
+    // Its subject is `actions/ci/action.yml`, which no coverage can ever credit
+    // it with: YAML is not executed, so no recording will ever attribute it to
+    // this test and no diff touching it can select this test through the map.
+    // It is selected today only because the entry credits nothing at all, and
+    // that stops being true the moment the file imports anything -- leaving the
+    // one test that guards action.yml skipped on the pull requests that edit it.
+    'actions/ci/test/action.test.ts',
   ],
 
   /*
