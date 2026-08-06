@@ -221,6 +221,7 @@ Selection needs no configuration once an adapter is installed. To refine, add a 
 {
   "adapter": "vitest", // the installed adapter to record with; --adapter overrides
   "testGlobs": ["**/*.{test,spec}.?(c|m)[jt]s?(x)"],
+  "testIgnore": [], // test files the runner you wrap will not run (see below)
   "sourceGlobs": ["**/*"], // repo minus node_modules/dist/coverage/.covsel and tests
   "alwaysRun": ["**/fixtures/**"], // test files that must always run
   "sentinels": ["package.json", "pnpm-lock.yaml", "tsconfig*.json"], // replaces the defaults below
@@ -241,6 +242,27 @@ layout and where your server lives — so the
 [Playwright adapter](/guide/adapters/playwright) asks, and refuses to record
 until you answer. Everything outside what you declare falls open: a change there
 runs the suite, because the map's silence about it means nothing.
+
+`testIgnore` is the other field worth knowing about, and only when your runner
+already excludes something. covsel finds test files by walking your tree, so it
+does not see your runner's own exclusions — a browser suite kept out of the
+default config and run by a second one, say. covsel would then try to record a
+test the runner refuses to run, and because a recording that fails writes **no
+map at all**, one such file stops the whole project selecting. Name those files
+here and covsel leaves them alone.
+
+Read the list from wherever your runner reads it, rather than writing it twice:
+
+```js
+// vitest.config.ts and covsel.config.js both import this
+export const BROWSER_TESTS = ['test/browser/app.test.ts'];
+```
+
+It subtracts from `testGlobs` rather than narrowing them, because "every test
+except this one" is not something a glob set can say. It is also a claim that
+skips tests when it is wrong — a file named here is never discovered, recorded,
+or selected — so `covsel status` reports how many files it removed, and changing
+the list forces a full run like any other configuration change.
 
 Any change matching `sentinels` forces a full run. A change to this file itself
 forces one when it moves a value covsel reads — a reworded comment or a

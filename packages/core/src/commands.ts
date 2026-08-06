@@ -12,7 +12,7 @@ import {
   resolveConfig,
 } from './config.js';
 import { dependencyChange, isDependencyFile } from './dependencies.js';
-import { discoverTestFiles, isTestFile } from './discover.js';
+import { discoverTestFiles, ignoredTestFiles, isTestFile } from './discover.js';
 import {
   commitExists,
   diffChanges,
@@ -155,9 +155,20 @@ export function measuredNothing(entry: Pick<MapEntry, 'files'>): boolean {
  * always that the project's layout is not the one the globs describe, and
  * `test/*.js` rather than `*.test.js` is common enough to be the first guess.
  */
-function noTestFilesFound(cwd: string, config: Pick<CovselConfig, 'testGlobs'>): string {
+function noTestFilesFound(
+  cwd: string,
+  config: Pick<CovselConfig, 'testGlobs'> & Partial<Pick<CovselConfig, 'testIgnore'>>,
+  ignoredCount = 0,
+): string {
+  // Name `testIgnore` when it is what emptied the suite. Sending someone to
+  // testGlobs -- which may be matching exactly what they intended -- is the one
+  // reading that cannot lead them to the setting that removed the files.
+  const removed =
+    ignoredCount > 0
+      ? `; testIgnore removed ${ignoredCount} more (${(config.testIgnore ?? []).join(', ')})`
+      : '';
   return (
-    `no test files matched ${config.testGlobs.join(', ')} under ${cwd} ` +
+    `no test files matched ${config.testGlobs.join(', ')} under ${cwd}${removed} ` +
     `-- set testGlobs to your project's layout (e.g. 'test/**/*.js')`
   );
 }
@@ -464,7 +475,7 @@ export async function recordMap(init: RecordInit): Promise<RecordResult> {
       failures: [],
       mapPath: store.path(),
       testFiles,
-      error: noTestFilesFound(cwd, config),
+      error: noTestFilesFound(cwd, config, ignoredTestFiles(cwd, config).length),
     };
   }
 
@@ -778,7 +789,9 @@ export async function selectAffected(init: SelectInit): Promise<AffectedResult> 
   // and an empty one would read as "nothing to run". A full run hands the runner
   // its own command unfiltered, which means its own discovery finds the tests
   // covsel's globs did not.
-  if (testFiles.length === 0) return fullRun(noTestFilesFound(cwd, config));
+  if (testFiles.length === 0) {
+    return fullRun(noTestFilesFound(cwd, config, ignoredTestFiles(cwd, config).length));
+  }
 
   const base = diffBase(cwd, map, init.since);
   if (base.kind === 'untrusted') return fullRun(base.reason);
@@ -819,7 +832,15 @@ export async function selectAffected(init: SelectInit): Promise<AffectedResult> 
       'the map records an inventory but an entry says nothing about packages',
     );
   }
-  const mandatory = await policy.mandatory(changes);
+  // Both are intersected with discovery, and for the same reason: a file the
+  // runner will not run cannot be run, whichever rule asks for it. `mandatory`
+  // matches a changed path against `testGlobs` alone, so without this an edit to
+  // an ignored test file would select the one file the project told covsel its
+  // runner refuses -- handing the runner a file it excludes, which fails the run
+  // rather than protecting it. Dropping it skips nothing: a full run does not
+  // include it either.
+  const inSuite = new Set(testFiles);
+  const mandatory = (await policy.mandatory(changes)).filter((t) => inSuite.has(t.file));
   const alwaysRun = testFiles.filter((f) => matchesAny(f, config.alwaysRun));
 
   // A test file the map says nothing about is a test whose coverage is unknown,
@@ -1080,6 +1101,13 @@ export interface StatusResult {
    * inferred from it.
    */
   discoveredTestCount?: number;
+  /**
+   * Test files `testIgnore` removed from discovery. Reported whenever there are
+   * any, because a project that has told covsel to skip part of its suite should
+   * see that said back to it -- an exclusion that grows silently is a suite
+   * shrinking without anyone deciding to.
+   */
+  ignoredTestCount?: number;
   recordedAt?: string;
   /**
    * The commit the map records, which is the tree selection measures change
@@ -1193,9 +1221,15 @@ export async function computeStatus(init: StatusInit): Promise<StatusResult> {
     discovered = [];
     discoveryFailed = `test discovery failed: ${e instanceof Error ? e.message : String(e)}`;
   }
+  // Reported only when there are any: a line reading 0 on every project that
+  // ignores nothing is noise, and this is worth seeing the moment it appears.
+  const ignoredCount =
+    discoveryFailed === undefined ? ignoredTestFiles(cwd, config).length : 0;
+
   const noTests =
     discoveryFailed ??
-    (discovered.length === 0 ? noTestFilesFound(cwd, config) : undefined);
+    (discovered.length === 0 ? noTestFilesFound(cwd, config, ignoredCount) : undefined);
+  const ignored = ignoredCount > 0 ? { ignoredTestCount: ignoredCount } : {};
 
   if (!map) {
     return {
@@ -1203,6 +1237,7 @@ export async function computeStatus(init: StatusInit): Promise<StatusResult> {
       mapState: stored.state,
       ...(stored.state === 'unusable' ? { unusableReason: stored.reason } : {}),
       discoveredTestCount: discovered.length,
+      ...ignored,
       changedSentinels: [],
       nextIsFullRun: true,
       // Always a reason now. Falling back to a generic "the map cannot be
@@ -1258,6 +1293,7 @@ export async function computeStatus(init: StatusInit): Promise<StatusResult> {
     mapPath: store.path(),
     mapState: 'usable',
     discoveredTestCount: discovered.length,
+    ...ignored,
     recordedAt: map.recordedAt,
     ...(map.commit !== undefined ? { commit: map.commit } : {}),
     ageMs: now - Date.parse(map.recordedAt),

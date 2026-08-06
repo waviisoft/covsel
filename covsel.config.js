@@ -7,6 +7,8 @@
  * than `covsel.json` because two of the choices below are only defensible with
  * the reasoning attached.
  */
+import { BROWSER_TESTS } from './browser-tests.mjs';
+
 export default {
   // Recorded and selected through Vitest's own coverage, since Vitest evaluates
   // transformed sources and the generic wrap would never see `packages/*/src`.
@@ -33,6 +35,12 @@ export default {
     'benchmarks/test/**/*.test.ts',
     'actions/*/test/**/*.test.ts',
   ],
+
+  // `pnpm test` -- the command covsel wraps -- excludes these, so covsel must
+  // not try to record them. Read from the same list vitest excludes them by, so
+  // the two cannot drift: when they did, recording died on a browser test in a
+  // job with no browser and no map was written at all.
+  testIgnore: BROWSER_TESTS,
 
   // The sources behind those suites, and nothing else. Written with a slash on
   // purpose: a slash-less glob also matches by basename anywhere in the tree,

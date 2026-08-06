@@ -29,6 +29,7 @@ import { pathToFileURL } from 'node:url';
  * @property {string | undefined} fullRunReason
  * @property {number | undefined} selectedCount
  * @property {number | undefined} discoveredCount
+ * @property {number | undefined} ignoredCount
  * @property {string[]} affected
  * @property {string} mapState
  * @property {string | undefined} mapCommit
@@ -66,6 +67,10 @@ export function readFacts(input) {
     selectedCount: selected?.length,
     discoveredCount:
       affected === undefined ? status.discoveredTestCount : affected.discovered,
+    // The denominator above is already net of this, so a reader comparing "4 of
+    // 37" against a suite they think has 38 files has no way to account for the
+    // difference unless the subtraction is shown.
+    ignoredCount: status.ignoredTestCount,
     affected: selected ?? [],
     mapState: status.mapState ?? 'absent',
     mapCommit: status.commit,
@@ -135,6 +140,9 @@ export function summary(facts) {
     lines.push(
       `| Recorded at | \`${facts.mapCommit.slice(0, 12)}\`, ${age(facts.mapAgeMs)} ago |`,
     );
+  }
+  if (facts.ignoredCount !== undefined && facts.ignoredCount > 0) {
+    lines.push(`| Ignored | ${facts.ignoredCount} (testIgnore) |`);
   }
   if (facts.mode === 'select') {
     // `unknown`, not 0, for the same reason `headline` says so: the two

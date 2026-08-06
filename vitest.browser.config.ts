@@ -1,6 +1,7 @@
 import { defineConfig } from 'vitest/config';
 
-import { BROWSER_TESTS, workspaceAlias } from './vitest.config.js';
+import { BROWSER_TESTS } from './browser-tests.mjs';
+import { workspaceAlias } from './vitest.config.js';
 
 /**
  * The tests that drive a real browser, split out of `pnpm test` so the ordinary
