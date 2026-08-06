@@ -303,3 +303,41 @@ describe('fail-open acceptance', () => {
     }
   });
 });
+
+describe('naming the window a full-run reason measured', () => {
+  // covsel/covsel#79. The reason named the file and not the two states it
+  // differs between, and the obvious guess -- "changed in my branch" -- is wrong
+  // exactly when the message matters most. On a pull request the window is the
+  // recorded commit against the working tree, which includes everything merged
+  // to the default branch since; a branch that never touched covsel.config.js
+  // was told it changed, and the author went looking in a diff without it.
+  it('says the change is measured from the commit the map records', async () => {
+    write('package.json', FILES['package.json']!.replace('fixture', 'fixture2'));
+
+    const result = await selectAffected({ cwd, config });
+
+    expect(result.reason).toContain('sentinel changed: package.json');
+    expect(result.reason).toMatch(/measured since the map was recorded at [0-9a-f]{12}/);
+  });
+
+  it('names the ref instead when the caller supplied one', async () => {
+    // The sentence has to stay true for `--since`, where no recording happened
+    // at that ref at all.
+    write('package.json', FILES['package.json']!.replace('fixture', 'fixture3'));
+
+    const result = await selectAffected({ cwd, config, since: 'HEAD~1' });
+
+    expect(result.reason).toContain('measured since HEAD~1');
+    expect(result.reason).not.toContain('the map was recorded at');
+  });
+
+  it('leaves the answer where a reader and a grep already look for it', async () => {
+    // Appended, not woven in: the qualifier must not push the file out of the
+    // phrase it has always been the end of.
+    write('tsconfig.json', FILES['tsconfig.json']!.replace('true', 'false'));
+
+    const result = await selectAffected({ cwd, config });
+
+    expect(result.reason?.startsWith('sentinel changed: tsconfig.json')).toBe(true);
+  });
+});

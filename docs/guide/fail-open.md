@@ -238,6 +238,27 @@ it:
 map beside `discovered: 0 test file(s)` is the one combination worth noticing at a
 glance.
 
+## Since when a file changed
+
+A reason that names a file is about two states, and the guess a reader reaches
+for first — _changed in my branch_ — is the wrong one. The window is the commit
+the map records against your working tree, so on a pull request it takes in
+everything merged to the default branch since the recording as well as your own
+work. A branch that never touched `package.json` can honestly be told
+`package.json` changed.
+
+So the reasons that name a file say which window they measured over:
+
+```
+covsel: full run -- sentinel changed: package.json (measured since the map was recorded at a1b2c3d4e5f6)
+```
+
+The commit is abbreviated because it is a landmark, not something to copy. Pass
+`--since` and the clause names your ref instead, since no recording happened
+there: `(measured since origin/main)`. The reasons that describe the map itself —
+no usable map, an incompatible schema, a map with no entries — carry no window,
+because none of them is about a file having moved.
+
 ## What a config change is measured against
 
 A map is meaningful only under the configuration it was recorded with, which is

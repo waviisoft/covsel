@@ -194,7 +194,7 @@ A full run still enumerates every test file discovery found. `fullRun` and
 ```json
 {
   "fullRun": true,
-  "reason": "sentinel changed since the map was recorded: package.json",
+  "reason": "sentinel changed: package.json (measured since the map was recorded at a1b2c3d4e5f6)",
   "files": ["test/math.test.js", "test/other.test.js"],
   "tests": ["test/math.test.js", "test/other.test.js"],
   "selected": [{ "file": "test/math.test.js" }, { "file": "test/other.test.js" }],
