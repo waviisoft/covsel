@@ -1,6 +1,6 @@
 {
   "name": "@covsel/benchmarks",
-  "version": "0.0.0",
+  "version": "0.0.1",
   "description": "Replays merged pull requests from real repositories through covsel and measures what selection saved",
   "private": true,
   "license": "MIT",
