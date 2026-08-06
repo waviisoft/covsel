@@ -1,6 +1,6 @@
 ---
-'@covsel/core': major
-'@covsel/conformance': major
+'@covsel/core': minor
+'@covsel/conformance': minor
 '@covsel/adapter-cucumber': minor
 '@covsel/adapter-generic': minor
 '@covsel/adapter-jest': minor
@@ -12,8 +12,8 @@
 Move the adapter capability contract into `@covsel/core`, so an adapter is one
 object satisfying one type.
 
-**Breaking, hence the major bump on `@covsel/core`: the `Adapter` interface has
-new required members.** It was `name` + `formatSelection`; it now also requires
+**Breaking -- a minor bump only because covsel is pre-1.0, where a minor may
+carry breaking changes: the `Adapter` interface has new required members.** It was `name` + `formatSelection`; it now also requires
 `createRecorder(init)` and offers two optional capabilities, `runSelection(init)`
 for runners that can be narrowed below file level and `defaultTestGlobs` for
 runners whose tests are not `*.test.*` sources. Anything implementing `Adapter`

@@ -1,5 +1,5 @@
 ---
-'covsel': major
+'covsel': minor
 '@covsel/core': minor
 '@covsel/adapter-cucumber': minor
 '@covsel/adapter-generic': minor
@@ -11,8 +11,8 @@
 Resolve every adapter from the project that installed it. `covsel` now ships
 none of them.
 
-**Breaking, hence the major bump on `covsel`: installing the CLI is no longer
-enough.** Install the adapter for your runner alongside it --
+**Breaking -- a minor bump only because covsel is pre-1.0, where a minor may
+carry breaking changes: installing the CLI is no longer enough.** Install the adapter for your runner alongside it --
 `npm install --save-dev covsel @covsel/adapter-vitest` -- including
 `@covsel/adapter-generic` for the zero-integration wrap that `--adapter`
 defaults to. Until now the CLI depended on all five adapter packages and
