@@ -1,6 +1,6 @@
 {
   "name": "@covsel/conformance",
-  "version": "0.0.0",
+  "version": "0.1.0",
   "description": "The shared conformance suite every covsel adapter must pass",
   "license": "MIT",
   "author": "WAVIISoft, LLC",
