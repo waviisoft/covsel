@@ -117,6 +117,7 @@ describe('a block hash covers its own code', () => {
   it('still emits one block per function, module first, parents before children', () => {
     expect(extractBlocks(CART).map((b) => b.name)).toEqual([
       '<module>',
+      '<load>',
       'Cart',
       'onClick',
       'onHover',

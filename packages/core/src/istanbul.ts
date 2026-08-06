@@ -120,10 +120,24 @@ export interface IstanbulCoverageInit {
 /**
  * Turn a report into the covered files and blocks a `RecordedUnit` carries.
  *
- * Only sources inside the repository that the project counts as sources are kept,
- * and only those the report says actually ran. Blocks follow the configured
- * granularity, so a project asking for file granularity does not pay to hash
- * every function it executed.
+ * Only sources inside the repository that the project counts as sources are
+ * kept. Every one of those is credited, including the ones whose counters are
+ * all zero: a module of nothing but declarations executes no statement when it
+ * loads, and dropping it recorded no relationship between a test and a file that
+ * test genuinely imported. That is the fail-closed direction, and it was
+ * reachable — a module gaining a top-level side effect, or starting to throw on
+ * import, changes what every importer does while selecting none of them.
+ *
+ * The generic `NODE_V8_COVERAGE` recorder never behaved this way: V8 reports the
+ * script wrapper with a count, so the file survived. The two paths disagreeing
+ * about the same fixture is what surfaced it.
+ *
+ * What such a file is credited *with* is the narrow part, and belongs to
+ * `selectExecutedBlocks`: the load fingerprint rather than the module block, so
+ * a signature change in a module a test never called into does not select it.
+ *
+ * Blocks follow the configured granularity, so a project asking for file
+ * granularity does not pay to hash every function it executed.
  */
 export function istanbulCoverage(
   report: IstanbulReport,
@@ -141,7 +155,6 @@ export function istanbulCoverage(
     const abs = entry.path ?? key;
     const rel = toRepoRelative(init.cwd, abs);
     if (rel === undefined || !isSource(rel) || seen.has(rel)) continue;
-    if (!istanbulExecuted(entry)) continue;
     seen.add(rel);
     files.push({ file: rel, fileHash: hashFileContents(abs) });
     if (wantBlocks) blocks.push(...istanbulBlocks(entry, rel, abs));

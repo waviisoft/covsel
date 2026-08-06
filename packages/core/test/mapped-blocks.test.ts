@@ -149,7 +149,13 @@ describe('blocks for a source-mapped script', () => {
     expect(inA).toContain('fromA');
     // Not merely "fromB is absent": under a projection that credited the wrong
     // source, b would have no blocks at all and that would pass too.
-    expect(inB).toEqual(['<module>']);
+    //
+    // The load block rather than the module block, because nothing in b ran --
+    // the bundle loaded it and called only into a. That is the whole of what
+    // covsel/covsel#82 turns on: b is credited, so a top-level side effect added
+    // to it selects this test, while a signature change in the function it never
+    // called does not.
+    expect(inB).toEqual(['<load>']);
   });
 
   it('records nothing for a source the map no longer describes', async () => {
