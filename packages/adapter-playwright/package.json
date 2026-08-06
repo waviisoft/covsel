@@ -1,0 +1,54 @@
+{
+  "name": "@covsel/adapter-playwright",
+  "version": "0.0.0",
+  "description": "Playwright adapter for covsel: per-test browser coverage recorded in one run",
+  "license": "MIT",
+  "author": "WAVIISoft, LLC",
+  "type": "module",
+  "main": "./dist/index.cjs",
+  "module": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js",
+      "require": "./dist/index.cjs"
+    },
+    "./fixture": {
+      "types": "./dist/fixture.d.ts",
+      "import": "./dist/fixture.js",
+      "require": "./dist/fixture.cjs"
+    }
+  },
+  "files": [
+    "dist"
+  ],
+  "scripts": {
+    "build": "tsup src/index.ts src/fixture.ts --format esm,cjs --dts --sourcemap --shims --clean",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@covsel/core": "workspace:*"
+  },
+  "peerDependencies": {
+    "@playwright/test": "*"
+  },
+  "engines": {
+    "node": ">=22"
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/waviisoft/covsel.git",
+    "directory": "packages/adapter-playwright"
+  },
+  "keywords": [
+    "test-impact-analysis",
+    "coverage",
+    "adapter",
+    "playwright",
+    "e2e"
+  ],
+  "devDependencies": {
+    "@types/node": "^22.20.1"
+  }
+}

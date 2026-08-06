@@ -41,6 +41,31 @@ jobs:
         run: pnpm --filter @covsel/example-mocha-basic e2e
       - run: pnpm format:check
 
+  browser:
+    name: Playwright conformance & example (Chromium)
+    runs-on: ubuntu-latest
+    # Its own job because it needs a browser, and because every conformance check
+    # here records against one — a browser launch and an application boot per
+    # check. Kept out of `test` so the suite that gates most changes needs
+    # nothing installed but Node, and run on every change so the Playwright
+    # adapter is held to the same conformance suite as every other adapter. A
+    # conformance suite nothing executes certifies nothing.
+    steps:
+      - uses: actions/checkout@v7
+      - uses: pnpm/action-setup@v6
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 22
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm build
+      - name: Install Chromium
+        run: pnpm --filter @covsel/example-playwright-basic exec playwright install --with-deps chromium
+      - name: Playwright adapter conformance (records against a served application)
+        run: pnpm test:browser
+      - name: Golden example — Playwright per-test selection end-to-end
+        run: pnpm --filter @covsel/example-playwright-basic e2e
+
   select:
     name: covsel selects covsel's own tests
     runs-on: ubuntu-latest

@@ -1,0 +1,7 @@
+{
+  "adapter": "playwright",
+  "observes": ["src/**"],
+  "sourceMaps": {
+    "allowUnmappable": ["**/@vite/client", "**/@fs/**"]
+  }
+}

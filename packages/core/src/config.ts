@@ -44,6 +44,27 @@ export interface CovselConfig {
    * still wins over it.
    */
   adapter?: string;
+  /**
+   * Repo-relative globs the project asserts its recording can observe execution
+   * within, for a recorder that cannot work this out for itself.
+   *
+   * Most recorders can. One watching a Node process tree covsel started sees
+   * every script that tree loads, wherever it lives, so it declares everything
+   * and needs nothing here. A recorder watching a *browser* sees only what the
+   * build shipped to it, and which repo paths those are depends on the project's
+   * build layout and where its server lives — neither of which the adapter can
+   * infer, and both of which the project knows.
+   *
+   * This is a claim about recall, and it is read exactly as written: declare a
+   * path only when, had code there run, the recording would have seen it. Every
+   * path outside falls open on change, because the map's silence about it means
+   * nothing. Under-claiming costs CI minutes; over-claiming skips tests, which is
+   * why no adapter defaults it and one that needs it refuses to record without it.
+   *
+   * It is a ceiling, not a filter: it does not decide what gets recorded, only
+   * what the resulting map claims it was in a position to see.
+   */
+  observes?: string[];
   /** Globs identifying test files. */
   testGlobs: string[];
   /** Globs identifying source files whose changes can affect tests. */
@@ -127,12 +148,48 @@ function resolveGranularity(value: unknown): Granularity {
 }
 
 /**
+ * A glob list as the project wrote it, refused if it is not one.
+ *
+ * `observes` is the one setting whose job is to *suppress* full runs, so a
+ * mis-shaped one is not a cosmetic error. Written as a bare string —
+ * `"observes": "src/**"`, the plausible typo, since every other list in the file
+ * is a list — it survives every check downstream: a scope is iterated for its
+ * globs, and iterating a string yields its characters, so the map is stamped
+ * with `["s","r","c","/","*"]`. Those match nothing, which means a change to any
+ * path they fail to match reads as *observed and uncovered* rather than
+ * unobserved, and the full run it should have caused never happens. The
+ * over-claim check does not catch it either: it asks whether the declaration
+ * includes `**`, and `"src/**".includes('**')` is true of the string.
+ *
+ * So it is refused where it is read, before anything has been selected on it.
+ */
+function resolveObserves(value: unknown): string[] {
+  if (Array.isArray(value) && value.every((glob) => typeof glob === 'string')) {
+    return [...(value as string[])];
+  }
+  throw new Error(
+    `covsel config: observes ${JSON.stringify(value)} is not a list of globs ` +
+      '-- write it as an array, e.g. ["src/**"]. A scope that is not one claims ' +
+      'paths nothing watched, and a change to those is read as covered by no ' +
+      'test rather than as unobserved, so the full run it should cause never ' +
+      'happens.',
+  );
+}
+
+/**
  * Merge a partial config over the defaults (arrays replace; the grouped fields
  * merge field by field).
  */
 export function resolveConfig(partial?: CovselConfigInput): CovselConfig {
   return {
     ...(partial?.adapter !== undefined ? { adapter: partial.adapter } : {}),
+    // Left absent when unset rather than defaulted, because both defaults are
+    // wrong: `**` is the over-claim that skips tests, and `[]` would make every
+    // change a full run for every recorder that knows its own reach. Absent is
+    // the recorder's cue to use its own declaration, or to refuse.
+    ...(partial?.observes !== undefined
+      ? { observes: resolveObserves(partial.observes) }
+      : {}),
     testGlobs: partial?.testGlobs ?? DEFAULT_CONFIG.testGlobs,
     sourceGlobs: partial?.sourceGlobs ?? DEFAULT_CONFIG.sourceGlobs,
     alwaysRun: partial?.alwaysRun ?? DEFAULT_CONFIG.alwaysRun,

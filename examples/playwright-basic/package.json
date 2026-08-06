@@ -1,0 +1,19 @@
+{
+  "name": "@covsel/example-playwright-basic",
+  "version": "0.0.0",
+  "private": true,
+  "description": "End-to-end example: covsel record -> affected selecting individual Playwright tests from browser coverage",
+  "license": "MIT",
+  "author": "WAVIISoft, LLC",
+  "type": "module",
+  "scripts": {
+    "test": "playwright test",
+    "e2e": "node ./e2e.mjs"
+  },
+  "devDependencies": {
+    "@covsel/adapter-playwright": "workspace:*",
+    "@playwright/test": "^1.62.1",
+    "covsel": "workspace:*",
+    "vite": "^8.2.0"
+  }
+}

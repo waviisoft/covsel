@@ -42,6 +42,7 @@ export default defineConfig({
             { text: 'node:test', link: '/guide/adapters/node-test' },
             { text: 'Mocha', link: '/guide/adapters/mocha' },
             { text: 'cucumber-js', link: '/guide/adapters/cucumber' },
+            { text: 'Playwright', link: '/guide/adapters/playwright' },
             { text: 'Writing an adapter', link: '/guide/adapters/writing-an-adapter' },
           ],
         },
