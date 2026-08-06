@@ -23,6 +23,7 @@
       "@covsel/adapter-jest": ["packages/adapter-jest/src/index.ts"],
       "@covsel/adapter-node-test": ["packages/adapter-node-test/src/index.ts"],
       "@covsel/adapter-cucumber": ["packages/adapter-cucumber/src/index.ts"],
+      "@covsel/adapter-playwright": ["packages/adapter-playwright/src/index.ts"],
       "@covsel/adapter-mocha": ["packages/adapter-mocha/src/index.ts"],
       "@covsel/conformance": ["packages/conformance/src/index.ts"],
       "@covsel/conformance/vitest": ["packages/conformance/src/vitest.ts"]

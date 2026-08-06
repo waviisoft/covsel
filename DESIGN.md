@@ -59,9 +59,9 @@ it's opt-in.
 ### Layered design
 
 ```
-Adapters      generic-wrap, vitest, jest, node:test, cucumber
+Adapters      generic-wrap, vitest, jest, node:test, mocha, cucumber, playwright
    (thin, per-runner, OPTIONAL -- only for per-test precision & native selection syntax)
-Observer      V8 inspector snapshot-diff | NODE_V8_COVERAGE (process)
+Observer      V8 inspector snapshot-diff | NODE_V8_COVERAGE (process) | browser coverage (CDP)
    (shared -- turns "a test ran" into a set of executed source ranges)
 Mapper        source-maps -> original files, bundler awareness, block-hash granularity
    (shared -- the hard part; maps transpiled/bundled execution back to src/**)
@@ -253,7 +253,7 @@ covsel/
 |   |-- core/                 # Observer + Mapper + Store + Selector + Policy + map schema
 |   |-- cli/                  # `covsel` command; thin over core
 |   |-- adapter-generic/      # wrap-any-command (NODE_V8_COVERAGE)
-|   |-- adapter-*/            # per-runner adapters (vitest, jest, node-test, cucumber)
+|   |-- adapter-*/            # per-runner adapters (vitest, jest, node-test, mocha, cucumber, playwright)
 |   `-- conformance/          # the shared suite every adapter must pass
 |-- docs/                     # VitePress site (deployed to GitHub Pages)
 |-- examples/                 # runnable end-to-end fixtures, driven by CI

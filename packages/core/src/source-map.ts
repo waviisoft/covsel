@@ -437,7 +437,7 @@ export class SourceMapResolver {
   private locate(named: NamedSource, mapUrl: string): SourceOutcome {
     const source = named.path;
     let insideRepo = false;
-    for (const candidate of this.candidates(source, this.localPath(mapUrl))) {
+    for (const candidate of this.candidates(source, mapUrl)) {
       const rel = toRepoRelative(this.cwd, candidate.abs);
       if (rel === undefined) continue; // someone else's tree
       insideRepo = true;
@@ -460,13 +460,14 @@ export class SourceMapResolver {
 
   /**
    * Where a source could be on disk. `anchored` marks a location derived from
-   * where the map itself lives, which is exact; everything else is a guess that
-   * has to be confirmed before it can be credited.
+   * where the map itself lives *on disk*, which is exact; everything else is a
+   * guess that has to be confirmed before it can be credited.
    */
   private *candidates(
     source: string,
-    anchor: string | undefined,
+    mapUrl: string,
   ): Generator<{ abs: string; anchored: boolean }> {
+    const anchor = this.localPath(mapUrl);
     if (source.startsWith('file://')) {
       try {
         yield { abs: fileURLToPath(stripUrlQuery(source)), anchored: true };
@@ -503,6 +504,31 @@ export class SourceMapResolver {
       return;
     }
     // Unanchored: the server root stands in for the repo root.
+    //
+    // Two readings of a relative source, because dev servers and production
+    // builds write them differently and neither can be told from the other.
+    //
+    // A dev server serves a module at its own path and names its source
+    // relative to *that* — Vite answers `/src/cart.ts` with a map naming
+    // `cart.ts` — so the URL's own directory is the only thing that says which
+    // `cart.ts` is meant. Read against the repo root alone, that source is
+    // looked for at the top of the tree, found nowhere, and reported as coverage
+    // this recording could not locate. A whole dev-server recording fails on it.
+    //
+    // A production bundle names its sources relative to where the map sits
+    // beside it — `../src/cart.ts` from `/assets/app.js.map` — which the same
+    // URL-relative reading resolves identically. What it does not cover is a map
+    // whose sources are written relative to the build root rather than to
+    // itself, which is the second reading below.
+    //
+    // Both are guesses, and both go on to be confirmed against the text the
+    // build published. Trying two costs a `stat` and never widens what may be
+    // credited.
+    const fromUrl = resolveAgainst(mapUrl, source);
+    if (fromUrl !== undefined && /^https?:\/\//.test(fromUrl)) {
+      // `pathname` is already normalised, so this cannot walk out of the repo.
+      yield { abs: resolve(this.cwd, `.${new URL(fromUrl).pathname}`), anchored: false };
+    }
     yield {
       abs: isAbsolute(source)
         ? resolve(this.cwd, `.${source}`)

@@ -46,7 +46,7 @@ jobs:
       # Restore the archive before publishing into it. Without this each run
       # would save an archive of exactly one map, and a pull request branched
       # before the latest push would find nothing it can diff from.
-      - uses: actions/cache/restore@v4
+      - uses: actions/cache/restore@v6
         with:
           path: .covsel/archive
           key: covsel-archive-${{ github.sha }}
@@ -58,7 +58,7 @@ jobs:
       - name: Publish the map under this commit
         run: node packages/cli/dist/bin.js publish
 
-      - uses: actions/cache/save@v4
+      - uses: actions/cache/save@v6
         with:
           path: .covsel/archive
           key: covsel-archive-${{ github.sha }}

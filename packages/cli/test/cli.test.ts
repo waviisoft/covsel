@@ -447,12 +447,12 @@ describe('covsel init', () => {
 
   it('exits non-zero for a runner no adapter records', async () => {
     const { code, err } = await inProject(
-      { 'package.json': pkg({ devDependencies: { '@playwright/test': '^1.0.0' } }) },
+      { 'package.json': pkg({ devDependencies: { cypress: '^15.0.0' } }) },
       () => capture(() => main(['init'])),
     );
 
     expect(code).toBe(1);
-    expect(err).toContain('no adapter records playwright yet');
+    expect(err).toContain('no adapter records cypress yet');
     expect(err).toContain('Keep running that suite in full');
   });
 });
