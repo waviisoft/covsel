@@ -1112,6 +1112,22 @@ export interface StatusResult {
    */
   staleEntryCount?: number;
   coveredFileCount?: number;
+  /**
+   * Covered sources counted by the top-level directory they sit in, biggest
+   * first, with `.` for files at the root.
+   *
+   * `coveredFileCount` alone says how many sources a map describes and nothing
+   * about *which*, and the number is the one people read to judge whether their
+   * `sourceGlobs` say what they meant. On `expressjs/express` it read 29 for a
+   * library with 7 sources, the other 22 being example apps — visible only by
+   * opening the map file. One line per top-level directory is enough to make
+   * that obvious, because the directories a project did not mean to include are
+   * almost always the ones with names like `examples` and `fixtures`.
+   *
+   * Top-level and no deeper, deliberately: it is a glance rather than a report,
+   * and a level that varies with the repository would be neither.
+   */
+  coveredSourcesByDir?: Record<string, number>;
   coveredBlockCount?: number;
   changedSentinels: string[];
   nextIsFullRun: boolean;
@@ -1231,6 +1247,19 @@ export async function computeStatus(init: StatusInit): Promise<StatusResult> {
     for (const b of entry.blocks ?? []) coveredBlocks.add(`${b.file}\0${b.blockHash}`);
   }
 
+  const byDir = new Map<string, number>();
+  for (const file of coveredFiles) {
+    const slash = file.indexOf('/');
+    const dir = slash === -1 ? '.' : file.slice(0, slash);
+    byDir.set(dir, (byDir.get(dir) ?? 0) + 1);
+  }
+  // Biggest first, name breaking ties so the report is the same on every
+  // filesystem. Biggest first because the directory nobody meant to include is
+  // usually the one that grew the count.
+  const coveredSourcesByDir = Object.fromEntries(
+    [...byDir].sort((a, b) => b[1] - a[1] || (a[0] < b[0] ? -1 : 1)),
+  );
+
   // Counted against discovery rather than the filesystem: a file that still
   // exists but no longer matches `testGlobs` has left the suite just as surely
   // as a deleted one, and selection treats them the same.
@@ -1267,6 +1296,7 @@ export async function computeStatus(init: StatusInit): Promise<StatusResult> {
     unmeasuredEntryCount: unmeasuredEntries,
     staleEntryCount: staleEntries,
     coveredFileCount: coveredFiles.size,
+    coveredSourcesByDir,
     ...(coveredBlocks.size > 0 ? { coveredBlockCount: coveredBlocks.size } : {}),
     changedSentinels,
     nextIsFullRun,

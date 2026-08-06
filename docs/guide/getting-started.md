@@ -143,6 +143,19 @@ shows the store path, the map's age and size, the commit it was recorded on,
 whether any sentinel changed since record, and whether the next `affected` would
 be a full run.
 
+When the covered sources span more than one top-level directory, it breaks them
+down by directory, biggest first — because the source count is the number you
+read to judge whether `sourceGlobs` says what you meant, and on its own it cannot
+answer that:
+
+```
+sources:    29
+  examples  22
+  lib       7
+```
+
+A directory you did not mean to record is usually obvious the moment it is named.
+
 A map covsel cannot use is not a missing one, and `status` says which it is
 looking at:
 

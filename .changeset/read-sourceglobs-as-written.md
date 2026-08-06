@@ -32,3 +32,12 @@ skipped test rather than a wide map.
 `sourceGlobs` contain a slash-less pattern that was matching nested files. Their
 next recording will credit fewer sources; a map recorded before the upgrade keeps
 describing what it described, since the config value itself has not moved.
+
+`covsel status` also gained a breakdown of covered sources by top-level
+directory, biggest first, printed when they span more than one. The source count
+is the number people read to judge whether their globs say what they meant, and
+on its own it cannot answer that — the express map read `29` with nothing to say
+where the other 22 came from. It is the second half of the same problem: a
+project whose sources come from somewhere it did not intend can now see so at a
+glance, whatever put them there. Also in `status --format json`, as
+`coveredSourcesByDir`.
