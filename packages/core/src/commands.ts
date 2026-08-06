@@ -2,7 +2,7 @@ import { spawnSync } from 'node:child_process';
 import { readFileSync, statSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 
-import { blockHashesOf, extractBlocks } from './blocks.js';
+import { blockHashesOf, extractBlocks, LOAD_BLOCK, MODULE_BLOCK } from './blocks.js';
 import { agreedScope } from './combine.js';
 import {
   CONFIG_FILES,
@@ -1671,8 +1671,20 @@ export async function explainPath(init: ExplainInit): Promise<ExplainResult> {
           const current = extractBlocks(readFileSync(abs, 'utf8'), rel);
           const currentHashes = new Set(current.map((b) => b.hash));
           changedBlocks = [...recordedHashes].filter((h) => !currentHashes.has(h)).length;
+          // A unit that recorded the module block executed the file's top level,
+          // which is the load. So it ran the load block too, whether or not the
+          // recording named it: a recording says one or the other, never both.
+          // Without this the load block of a file tests plainly cover reads
+          // `uncovered` — "nothing recorded executes this code" — about the one
+          // block that runs every single time the file is imported.
+          const moduleUnits =
+            unitsByBlock.get(current.find((b) => b.name === MODULE_BLOCK)?.hash ?? '') ??
+            [];
           blocks = current.map((block) => {
-            const ran = distinctUnits(unitsByBlock.get(block.hash) ?? []);
+            const ran = distinctUnits([
+              ...(unitsByBlock.get(block.hash) ?? []),
+              ...(block.name === LOAD_BLOCK ? moduleUnits : []),
+            ]);
             // Order matters: each verdict below is a weaker statement than the
             // one before it, and only the last one claims nothing runs this
             // code. Anything that could account for the silence outranks it.

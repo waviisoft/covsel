@@ -11,6 +11,7 @@ import {
   gitHeadCommit,
   type MapEntry,
   MAP_SCHEMA_VERSION,
+  LOAD_BLOCK,
   MODULE_BLOCK,
   recordedConfig,
   recordMap,
@@ -226,6 +227,13 @@ describe('explain: a source file', () => {
     // Nothing drifted and no entry credits the file whole, so this one is a
     // measurement: no recorded test ran it.
     expect(blocks['subtract']?.verdict).toBe('uncovered');
+    // The load block, which the recording did not name because this test called
+    // into the file and so got the module block instead. A unit that ran the
+    // module block ran the top level, which is the load -- reporting it as
+    // `uncovered`, "nothing recorded executes this code", would be saying that
+    // about the one block that runs every time the file is imported.
+    expect(blocks[LOAD_BLOCK]?.verdict).toBe('covered');
+    expect(blocks[LOAD_BLOCK]?.coveredBy).toEqual([{ file: 'test/add.test.js' }]);
     expect(r.source?.changedBlocks).toBe(0);
   });
 
