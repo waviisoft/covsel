@@ -239,3 +239,21 @@ describe('the outputs', () => {
     expect(JSON.parse(line!.slice('affected='.length))).toEqual(['test/math.test.js']);
   });
 });
+
+describe('an exclusion behind the denominator', () => {
+  it('is shown, since the discovered count is already net of it', () => {
+    // "1 of 37" against a suite someone believes has 38 files is unaccountable
+    // unless the subtraction appears somewhere they read.
+    const facts = readFacts({
+      mode: 'select',
+      affected: narrowed,
+      status: { ...status, ignoredTestCount: 2 },
+    });
+    expect(summary(facts)).toContain('| Ignored | 2 (testIgnore) |');
+  });
+
+  it('is absent from the summary when a project ignores nothing', () => {
+    const facts = readFacts({ mode: 'select', affected: narrowed, status });
+    expect(summary(facts)).not.toContain('Ignored');
+  });
+});

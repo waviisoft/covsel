@@ -184,6 +184,24 @@ function resolveGranularity(value: unknown): Granularity {
  *
  * So it is refused where it is read, before anything has been selected on it.
  */
+function resolveTestIgnore(value: unknown): string[] {
+  if (value === undefined) return [...DEFAULT_CONFIG.testIgnore];
+  if (Array.isArray(value) && value.every((glob) => typeof glob === 'string')) {
+    return [...(value as string[])];
+  }
+  // Refused for the same reason `observes` is: this is the other setting whose
+  // job is to make covsel do less, so a mis-shaped one costs tests rather than
+  // tidiness. Written as a bare string -- the plausible typo, since every other
+  // list here is a list -- it would reach the matcher as an array of characters
+  // and quietly ignore whatever those happened to match.
+  throw new Error(
+    `covsel config: testIgnore ${JSON.stringify(value)} is not a list of globs ` +
+      '-- write it as an array, e.g. ["test/browser/app.test.ts"]. Every file it ' +
+      'names is one covsel never discovers, records, or selects, so a list that ' +
+      'is not one removes tests nobody chose to remove.',
+  );
+}
+
 function resolveObserves(value: unknown): string[] {
   if (Array.isArray(value) && value.every((glob) => typeof glob === 'string')) {
     return [...(value as string[])];
@@ -212,7 +230,7 @@ export function resolveConfig(partial?: CovselConfigInput): CovselConfig {
       ? { observes: resolveObserves(partial.observes) }
       : {}),
     testGlobs: partial?.testGlobs ?? DEFAULT_CONFIG.testGlobs,
-    testIgnore: partial?.testIgnore ?? DEFAULT_CONFIG.testIgnore,
+    testIgnore: resolveTestIgnore(partial?.testIgnore),
     sourceGlobs: partial?.sourceGlobs ?? DEFAULT_CONFIG.sourceGlobs,
     alwaysRun: partial?.alwaysRun ?? DEFAULT_CONFIG.alwaysRun,
     sentinels: partial?.sentinels ?? DEFAULT_CONFIG.sentinels,

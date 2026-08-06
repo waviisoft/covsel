@@ -7,11 +7,12 @@ import {
   computeStatus,
   discoverTestFiles,
   ignoredTestFiles,
+  MAP_SCHEMA_VERSION,
   recordedConfig,
   resolveConfig,
   selectAffected,
 } from '../src/index.js';
-import { commitAll, write } from './helpers/repo.js';
+import { commitAll, git, write } from './helpers/repo.js';
 
 /**
  * `testIgnore` exists because covsel walks the tree while the runner it wraps
@@ -50,6 +51,50 @@ function project(): { cwd: string; config: ReturnType<typeof resolveConfig> } {
   return { cwd, config };
 }
 
+/**
+ * A project whose selection narrows: a committed tree and a map recorded at that
+ * commit, so `selectAffected` reaches the rules that only run when there is a
+ * map to narrow by. A full run is built straight from discovery and would pass
+ * without executing any of them.
+ */
+function narrowing(extra: Record<string, unknown> = {}): {
+  cwd: string;
+  config: ReturnType<typeof resolveConfig>;
+} {
+  const cwd = tempRepo();
+  write(cwd, 'src/math.ts', 'export const add = (a: number, b: number) => a + b;\n');
+  write(cwd, 'test/unit.test.ts', 'export {};\n');
+  write(cwd, 'test/browser.test.ts', 'export {};\n');
+  commitAll(cwd);
+  const commit = git(cwd, ['rev-parse', 'HEAD']);
+  write(
+    cwd,
+    '.covsel/map.json',
+    `${JSON.stringify({
+      schemaVersion: MAP_SCHEMA_VERSION,
+      granularity: 'file',
+      recordedAt: new Date(Date.now() - 60_000).toISOString(),
+      commit,
+      sentinelHashes: {},
+      observed: ['**'],
+      entries: [
+        {
+          test: { file: 'test/unit.test.ts' },
+          files: [{ file: 'src/math.ts', fileHash: 'sha256:math' }],
+        },
+      ],
+    })}\n`,
+  );
+  const config = resolveConfig({
+    testGlobs: ['test/**/*.test.ts'],
+    sourceGlobs: ['src/**'],
+    testIgnore: ['test/browser.test.ts'],
+    granularity: 'file',
+    ...extra,
+  });
+  return { cwd, config };
+}
+
 describe('a test the runner will not run', () => {
   it('is not discovered', () => {
     const { cwd, config } = project();
@@ -74,21 +119,62 @@ describe('a test the runner will not run', () => {
   });
 
   it('is left out of alwaysRun too, since the runner still cannot run it', async () => {
-    // The two claims conflict, and only one of them can be honoured: a file the
-    // runner will not run cannot be run whatever else the config asks for.
+    // Narrowing, not a full run: a full run is built straight from discovery, so
+    // it would pass without the alwaysRun path ever executing. The map is what
+    // makes selection reach that branch at all.
+    const { cwd, config } = narrowing({ alwaysRun: ['test/browser.test.ts'] });
+    write(cwd, 'src/math.ts', 'export const add = (a: number, b: number) => b + a;\n');
+    const result = await selectAffected({ cwd, config });
+    expect(result.fullRun).toBe(false);
+    expect(result.tests).not.toContain('test/browser.test.ts');
+  });
+
+  it('is not selected by being edited itself', async () => {
+    // The one rule that reaches a changed test file directly: a modified test
+    // runs whatever the map says. It cannot here -- covsel would be handing the
+    // runner the single file the project said it refuses, which fails the run
+    // rather than protecting it.
+    const { cwd, config } = narrowing();
+    write(cwd, 'test/browser.test.ts', 'export const changed = true;\n');
+    const result = await selectAffected({ cwd, config });
+    expect(result.fullRun).toBe(false);
+    expect(result.tests).not.toContain('test/browser.test.ts');
+  });
+});
+
+describe('a bare filename', () => {
+  it('takes nothing with it, rather than every file of that name', () => {
+    // `makeMatcher` widens a slash-less glob to the basename anywhere in the
+    // tree, which is safe wherever a match runs more tests. Here a match runs
+    // fewer, so widening would delete a suite: someone writing this to mean one
+    // file would silently lose both, and whatever only the other one covered
+    // would be selected by nothing thereafter.
+    //
+    // Strict matching answers it in the safe direction. A bare name matches no
+    // repo-relative path, so it ignores nothing and the project over-selects
+    // until the entry is written out in full.
     const cwd = tempRepo();
-    write(cwd, 'src/math.ts', 'export const add = (a: number, b: number) => a + b;\n');
-    write(cwd, 'test/browser.test.ts', 'export {};\n');
-    write(cwd, 'test/unit.test.ts', 'export {};\n');
-    commitAll(cwd);
+    write(cwd, 'test/a/browser.test.ts', 'export {};\n');
+    write(cwd, 'test/b/browser.test.ts', 'export {};\n');
     const config = resolveConfig({
       testGlobs: ['test/**/*.test.ts'],
-      sourceGlobs: ['src/**'],
-      testIgnore: ['test/browser.test.ts'],
-      alwaysRun: ['test/browser.test.ts'],
+      testIgnore: ['browser.test.ts'],
     });
-    const result = await selectAffected({ cwd, config });
-    expect(result.tests).not.toContain('test/browser.test.ts');
+    expect(discoverTestFiles(cwd, config)).toEqual([
+      'test/a/browser.test.ts',
+      'test/b/browser.test.ts',
+    ]);
+  });
+
+  it('written out in full, removes exactly the one file', () => {
+    const cwd = tempRepo();
+    write(cwd, 'test/a/browser.test.ts', 'export {};\n');
+    write(cwd, 'test/b/browser.test.ts', 'export {};\n');
+    const config = resolveConfig({
+      testGlobs: ['test/**/*.test.ts'],
+      testIgnore: ['test/a/browser.test.ts'],
+    });
+    expect(discoverTestFiles(cwd, config)).toEqual(['test/b/browser.test.ts']);
   });
 });
 
