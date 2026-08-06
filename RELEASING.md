@@ -6,17 +6,18 @@ publish` by hand.
 
 ## Published packages
 
-| Package                     | Purpose                                   |
-| --------------------------- | ----------------------------------------- |
-| `covsel`                    | The CLI                                   |
-| `@covsel/core`              | Observer, Mapper, Store, Selector, Policy |
-| `@covsel/conformance`       | The shared suite every adapter must pass  |
-| `@covsel/adapter-generic`   | Wrap-any-command adapter                  |
-| `@covsel/adapter-vitest`    | Vitest adapter                            |
-| `@covsel/adapter-jest`      | Jest adapter                              |
-| `@covsel/adapter-node-test` | node:test adapter                         |
-| `@covsel/adapter-mocha`     | Mocha adapter                             |
-| `@covsel/adapter-cucumber`  | cucumber-js adapter                       |
+| Package                      | Purpose                                   |
+| ---------------------------- | ----------------------------------------- |
+| `covsel`                     | The CLI                                   |
+| `@covsel/core`               | Observer, Mapper, Store, Selector, Policy |
+| `@covsel/conformance`        | The shared suite every adapter must pass  |
+| `@covsel/adapter-generic`    | Wrap-any-command adapter                  |
+| `@covsel/adapter-vitest`     | Vitest adapter                            |
+| `@covsel/adapter-jest`       | Jest adapter                              |
+| `@covsel/adapter-node-test`  | node:test adapter                         |
+| `@covsel/adapter-mocha`      | Mocha adapter                             |
+| `@covsel/adapter-cucumber`   | cucumber-js adapter                       |
+| `@covsel/adapter-playwright` | Playwright adapter                        |
 
 All of them are versioned by semver, independently. The docs site
 (`covsel-docs`) and the benchmark harness (`@covsel/benchmarks`) are `private`,
@@ -89,7 +90,7 @@ Once every package exists, regenerate a token scoped to exactly those packages
 and replace the secret. Broad-then-narrow is the only order npm allows.
 
 Check the organisation's publishing policy too (org → Settings → Publishing
-access). Set to "require two-factor authentication", token publishes are rejected
+access). Set to "require two-factor authentication", it rejects token publishes
 outright and CI cannot publish at all.
 
 **An expiring token fails loudly, not silently.** The secret still exists, so the

@@ -42,7 +42,10 @@ jobs:
       # Read once, so every guard below asks the same question. Publishing is
       # skipped rather than failed when the app is not configured: a dispatch on
       # a fork, or before the secrets exist, should not go red for it.
-      APP_ID: ${{ secrets.COVSEL_ACTION_APP_ID }}
+      #
+      # The App's Client ID, not its App ID: `create-github-app-token` still
+      # accepts `app-id` but calls it legacy and recommends `client-id`.
+      CLIENT_ID: ${{ secrets.COVSEL_ACTION_CLIENT_ID }}
       MIRROR: covsel-action
     steps:
       - uses: actions/checkout@v7
@@ -72,22 +75,22 @@ jobs:
       - run: pnpm vitest run actions
 
       - name: Say why nothing was published
-        if: env.APP_ID == ''
+        if: env.CLIENT_ID == ''
         run: |
-          echo "::warning::COVSEL_ACTION_APP_ID is not set, so nothing was published. Configure the GitHub App and its private key first."
+          echo "::warning::COVSEL_ACTION_CLIENT_ID is not set, so nothing was published. Set it to the GitHub App's Client ID (the Iv23... value on the App's settings page, not the numeric App ID), alongside COVSEL_ACTION_PRIVATE_KEY."
 
       - name: Mint a token for the mirror
         id: token
-        if: env.APP_ID != ''
+        if: env.CLIENT_ID != ''
         uses: actions/create-github-app-token@v3
         with:
-          app-id: ${{ secrets.COVSEL_ACTION_APP_ID }}
+          client-id: ${{ secrets.COVSEL_ACTION_CLIENT_ID }}
           private-key: ${{ secrets.COVSEL_ACTION_PRIVATE_KEY }}
           owner: ${{ github.repository_owner }}
           repositories: covsel-action
 
       - name: Publish the action and move the tags
-        if: env.APP_ID != ''
+        if: env.CLIENT_ID != ''
         env:
           TOKEN: ${{ steps.token.outputs.token }}
           VERSION: ${{ inputs.version }}
@@ -159,7 +162,7 @@ jobs:
           git remote set-url origin "https://github.com/$OWNER/$MIRROR.git"
 
       - name: Cut the release the Marketplace listing hangs off
-        if: env.APP_ID != ''
+        if: env.CLIENT_ID != ''
         env:
           GH_TOKEN: ${{ steps.token.outputs.token }}
           VERSION: ${{ inputs.version }}
@@ -178,7 +181,7 @@ jobs:
           The README in this repository documents the inputs and outputs. covsel itself, and the map lifecycle this action drives, are documented in the [covsel guide](https://waviisoft.github.io/covsel/guide/ci)."
 
       - name: Say what to do next
-        if: env.APP_ID != ''
+        if: env.CLIENT_ID != ''
         env:
           VERSION: ${{ inputs.version }}
           OWNER: ${{ github.repository_owner }}
