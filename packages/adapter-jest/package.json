@@ -1,6 +1,6 @@
 {
   "name": "@covsel/adapter-jest",
-  "version": "0.0.0",
+  "version": "0.1.0",
   "description": "Jest adapter for covsel: per-file selection recorded via Jest's own coverage",
   "license": "MIT",
   "author": "WAVIISoft, LLC",

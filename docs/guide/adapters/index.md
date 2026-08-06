@@ -68,24 +68,43 @@ and which one an adapter uses depends on the runner:
   coverage, which remaps execution back to your sources through the runner's
   source maps, and reads the resulting report.
 
-Both produce the same thing: the set of source files a test executed. The rest
-of covsel is identical regardless of which path recorded the map.
+- **A browser's own coverage, and the server's** (the
+  [Playwright](/guide/adapters/playwright) adapter). The code a UI test is really
+  about runs in a page, in bytes a build produced, on the far side of an HTTP
+  boundary no process-level dump reaches. Its adapter collects Chromium's V8
+  coverage per test and projects those offsets back through the application's
+  source maps to your `src/**` — and, when the project asks, opens a per-test
+  inspector session against the application server as well. Each window declares
+  what it alone could see, they combine onto the test, and covsel falls open on
+  everything neither of them watched.
+
+All three produce the same thing: the set of source files a test executed. The
+rest of covsel is identical regardless of which path recorded the map.
 
 ## Available adapters
 
-| Adapter (install separately) | Runner                  | How it records                     |
-| ---------------------------- | ----------------------- | ---------------------------------- |
-| `@covsel/adapter-generic`    | any direct-exec command | `NODE_V8_COVERAGE` process         |
-| `@covsel/adapter-vitest`     | Vitest                  | Vitest's own V8 coverage           |
-| `@covsel/adapter-jest`       | Jest                    | Jest's own coverage                |
-| `@covsel/adapter-node-test`  | node:test               | inspector snapshot-diff (per-test) |
-| `@covsel/adapter-mocha`      | Mocha                   | inspector snapshot-diff (per-test) |
-| `@covsel/adapter-cucumber`   | cucumber-js             | inspector snapshot-diff (scenario) |
+| Adapter (install separately) | Runner                  | How it records                        |
+| ---------------------------- | ----------------------- | ------------------------------------- |
+| `@covsel/adapter-generic`    | any direct-exec command | `NODE_V8_COVERAGE` process            |
+| `@covsel/adapter-vitest`     | Vitest                  | Vitest's own V8 coverage              |
+| `@covsel/adapter-jest`       | Jest                    | Jest's own coverage                   |
+| `@covsel/adapter-node-test`  | node:test               | inspector snapshot-diff (per-test)    |
+| `@covsel/adapter-mocha`      | Mocha                   | inspector snapshot-diff (per-test)    |
+| `@covsel/adapter-cucumber`   | cucumber-js             | inspector snapshot-diff (scenario)    |
+| `@covsel/adapter-playwright` | Playwright              | Chromium + server coverage (per test) |
 
 The generic, Vitest, and Jest adapters record at whole-file granularity. The
-node:test, Mocha, and cucumber-js adapters record each **test** or **scenario**
-individually and run only the affected ones -- which for cucumber-js is the only
-selection it has natively.
+node:test, Mocha, cucumber-js, and Playwright adapters record each **test** or
+**scenario** individually and run only the affected ones -- which for cucumber-js
+is the only selection it has natively.
+
+The Playwright adapter is the one that observes something other than the process
+covsel started: it reads what the **browser** executed and maps it back through
+the application's source maps, and optionally what the **server** behind the page
+ran, over Node's inspector. Because it sees part of a test rather than all of it,
+it declares a scope instead of claiming to see everything, and every change
+outside that scope falls open to a full run. Its conformance run is the only one
+that needs a browser and a served application, so it lives in its own CI job.
 
 Any other runner that executes your source directly is already covered at file
 level by the generic adapter, which does not care what it is wrapping: Mocha

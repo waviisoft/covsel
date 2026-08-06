@@ -140,6 +140,13 @@ sources and nothing of the server the page talks to; claiming everything there
 would let a change to that server skip the tests it breaks. Under-claiming costs
 CI minutes, over-claiming costs correctness — so when in doubt, claim less.
 
+Sometimes the narrower scope is not yours to write down. Which of a project's
+paths reach a browser depends on its build layout and where its server lives,
+neither of which an adapter can infer, so the Playwright adapter reads
+`observes` from the project's own config and refuses to record without it. Take
+that route only when the answer really does belong to the project: a scope your
+recorder can establish is one no user should have to get right.
+
 One boundary this cannot express: paths say _where in the repo_, not _in which
 process_. A recorder tied to a single isolate will not see a test that shells out
 to another one, and no glob describes that. If your runner works that way, say so
