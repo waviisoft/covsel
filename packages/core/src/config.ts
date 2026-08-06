@@ -67,6 +67,26 @@ export interface CovselConfig {
   observes?: string[];
   /** Globs identifying test files. */
   testGlobs: string[];
+  /**
+   * Test files the runner covsel wraps will never run, so covsel must not try.
+   *
+   * Runners have their own exclusions -- a browser suite kept out of the default
+   * config and run by a second one, say -- and covsel cannot see them: it walks
+   * the tree with `testGlobs` and finds files the runner has been told to skip.
+   * Recording one then fails for a reason that has nothing to do with the test,
+   * and a recording that fails writes no map at all, so a single such file stops
+   * the project selecting anything.
+   *
+   * This subtracts from `testGlobs` rather than narrowing them, because "every
+   * test except this one" is not something a glob set can say.
+   *
+   * It is a claim about what the runner does, and a wrong one skips tests: a
+   * file named here is never discovered, never recorded, and never selected. Say
+   * it only for tests the wrapped command genuinely does not run -- `covsel
+   * status` reports how many files it removed, so the claim stays visible rather
+   * than becoming a quiet hole in the suite.
+   */
+  testIgnore: string[];
   /** Globs identifying source files whose changes can affect tests. */
   sourceGlobs: string[];
   /** Test files that must always run regardless of the diff. */
@@ -107,6 +127,7 @@ export interface CovselConfigInput extends Partial<
 
 export const DEFAULT_CONFIG: CovselConfig = {
   testGlobs: ['**/*.{test,spec}.?(c|m)[jt]s?(x)'],
+  testIgnore: [],
   sourceGlobs: ['**/*'],
   alwaysRun: [],
   // What is installed, how it is laid out, and how it is compiled. The install
@@ -191,6 +212,7 @@ export function resolveConfig(partial?: CovselConfigInput): CovselConfig {
       ? { observes: resolveObserves(partial.observes) }
       : {}),
     testGlobs: partial?.testGlobs ?? DEFAULT_CONFIG.testGlobs,
+    testIgnore: partial?.testIgnore ?? DEFAULT_CONFIG.testIgnore,
     sourceGlobs: partial?.sourceGlobs ?? DEFAULT_CONFIG.sourceGlobs,
     alwaysRun: partial?.alwaysRun ?? DEFAULT_CONFIG.alwaysRun,
     sentinels: partial?.sentinels ?? DEFAULT_CONFIG.sentinels,

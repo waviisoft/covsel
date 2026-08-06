@@ -12,7 +12,7 @@ import {
   resolveConfig,
 } from './config.js';
 import { dependencyChange, isDependencyFile } from './dependencies.js';
-import { discoverTestFiles, isTestFile } from './discover.js';
+import { discoverTestFiles, ignoredTestFiles, isTestFile } from './discover.js';
 import {
   commitExists,
   diffChanges,
@@ -1080,6 +1080,13 @@ export interface StatusResult {
    * inferred from it.
    */
   discoveredTestCount?: number;
+  /**
+   * Test files `testIgnore` removed from discovery. Reported whenever there are
+   * any, because a project that has told covsel to skip part of its suite should
+   * see that said back to it -- an exclusion that grows silently is a suite
+   * shrinking without anyone deciding to.
+   */
+  ignoredTestCount?: number;
   recordedAt?: string;
   /**
    * The commit the map records, which is the tree selection measures change
@@ -1197,12 +1204,19 @@ export async function computeStatus(init: StatusInit): Promise<StatusResult> {
     discoveryFailed ??
     (discovered.length === 0 ? noTestFilesFound(cwd, config) : undefined);
 
+  // Reported only when there are any: a line reading 0 on every project that
+  // ignores nothing is noise, and this is worth seeing the moment it appears.
+  const ignoredCount =
+    discoveryFailed === undefined ? ignoredTestFiles(cwd, config).length : 0;
+  const ignored = ignoredCount > 0 ? { ignoredTestCount: ignoredCount } : {};
+
   if (!map) {
     return {
       mapPath: store.path(),
       mapState: stored.state,
       ...(stored.state === 'unusable' ? { unusableReason: stored.reason } : {}),
       discoveredTestCount: discovered.length,
+      ...ignored,
       changedSentinels: [],
       nextIsFullRun: true,
       // Always a reason now. Falling back to a generic "the map cannot be
@@ -1258,6 +1272,7 @@ export async function computeStatus(init: StatusInit): Promise<StatusResult> {
     mapPath: store.path(),
     mapState: 'usable',
     discoveredTestCount: discovered.length,
+    ...ignored,
     recordedAt: map.recordedAt,
     ...(map.commit !== undefined ? { commit: map.commit } : {}),
     ageMs: now - Date.parse(map.recordedAt),
