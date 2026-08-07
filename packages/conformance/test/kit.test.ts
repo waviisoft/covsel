@@ -569,4 +569,38 @@ describe('the conformance kit', () => {
     expect(check(results, 'records a usable map')?.ok).toBe(false);
     expect(check(results, 'records a usable map')?.detail).toContain('tsconfig.json');
   }, 180_000);
+
+  it('skips the listing check for an adapter that cannot ask its runner', async () => {
+    // Most runners have no listing mode, and their adapters must still certify.
+    const results = await runAdapterConformance(conformingSpec);
+    expect(check(results, 'list its runner')?.ok).toBe(true);
+    expect(check(results, 'list its runner')?.detail).toContain('not applicable');
+  }, 180_000);
+
+  it('fails an adapter that lists its runner’s tests as absolute paths', async () => {
+    // The mistake a real adapter author makes, because every runner reports
+    // absolute paths and covsel discovers repo-relative ones. Unguarded, it
+    // reads as a project whose entire suite drifted at once — on a project where
+    // nothing is wrong.
+    const absolute: Adapter = {
+      ...probeAdapter,
+      listTests: async (init) =>
+        Object.keys(conformingSpec.fixture.files)
+          .filter((f) => f.startsWith('test/'))
+          .map((f) => join(init.cwd, f)),
+    };
+    const results = await runAdapterConformance({ ...conformingSpec, adapter: absolute });
+    expect(check(results, 'list its runner')?.ok).toBe(false);
+  }, 180_000);
+
+  it('fails an adapter that lists nothing at all', async () => {
+    // An empty listing agrees with covsel's discovery about no file in
+    // particular, so it would certify here while telling every real project
+    // that its whole suite had drifted.
+    const results = await runAdapterConformance({
+      ...conformingSpec,
+      adapter: { ...probeAdapter, listTests: async () => [] },
+    });
+    expect(check(results, 'list its runner')?.ok).toBe(false);
+  }, 180_000);
 });

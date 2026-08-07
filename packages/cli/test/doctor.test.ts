@@ -88,7 +88,8 @@ describe('the two configurations agreeing', () => {
   it('passes, and says what it compared', async () => {
     const { code, stdout } = await doctor(SUITE, ['test/a.test.js', 'test/b.test.js']);
     expect(code).toBe(0);
-    expect(stdout).toContain('2');
+    expect(stdout).toContain('covsel discovers 2 test file(s)');
+    expect(stdout).toContain('collects  2 test file(s)');
     expect(stdout).toMatch(/agree/i);
   });
 });
@@ -105,10 +106,44 @@ describe('a file the runner collects and covsel does not discover', () => {
     expect(stdout).toMatch(/never be selected|no change can select/i);
   });
 
-  it('names testGlobs, since that is the field that fixes it', async () => {
-    const { code, stdout } = await doctor(SUITE, ['test/a.test.js', 'other/c.test.js']);
+  it('names testGlobs and not testIgnore, since only one of them fixes it', async () => {
+    // Both directions at once would satisfy an assertion for either field, so
+    // this fixture drifts in one direction only: the runner collects everything
+    // covsel does, plus one more.
+    const { code, stdout } = await doctor(SUITE, [
+      'test/a.test.js',
+      'test/b.test.js',
+      'other/c.test.js',
+    ]);
     expect(code).toBe(1);
     expect(stdout).toContain('testGlobs');
+    expect(stdout).not.toContain('testIgnore');
+  });
+});
+
+describe('a file in a directory covsel never walks', () => {
+  it('is not repaired by widening testGlobs, and says so', async () => {
+    // `dist/`, `node_modules/`, `coverage/` and `.covsel/` are excluded from
+    // discovery at any depth with no config knob, so "widen testGlobs" is advice
+    // that cannot work -- on a report someone is reading because something is
+    // already not working.
+    const { code, stdout } = await doctor(SUITE, [
+      'test/a.test.js',
+      'test/b.test.js',
+      'dist/test/a.test.js',
+    ]);
+    expect(code).toBe(1);
+    expect(stdout).toContain('dist/test/a.test.js');
+    expect(stdout).toMatch(/never walks/i);
+  });
+
+  it('says nothing about exclusions when none of the drift is excluded', async () => {
+    const { stdout } = await doctor(SUITE, [
+      'test/a.test.js',
+      'test/b.test.js',
+      'other/c.test.js',
+    ]);
+    expect(stdout).not.toMatch(/never walks/i);
   });
 });
 
@@ -123,12 +158,41 @@ describe('a file covsel discovers and the runner does not collect', () => {
 
 describe('a runner that collected nothing', () => {
   it('is a failure, not an agreement', async () => {
-    // The way a set comparison passes loudest when it is least true: both sides
-    // empty, or the runner's side empty against a suite that exists. Neither is
-    // evidence that two configurations agree.
     const { code, stdout } = await doctor(SUITE, []);
     expect(code).toBe(1);
     expect(stdout).not.toMatch(/agree/i);
+  });
+
+  it('is a failure even when covsel discovered nothing either', async () => {
+    // The way a set comparison passes loudest when it is least true: nothing
+    // compared against nothing is not evidence that two configurations agree.
+    // The test above does not reach this -- with files on disk, an empty listing
+    // still exits 1 through the ordinary drift path, so it passes against an
+    // implementation with the empty-listing guard deleted. This one does not.
+    const { code, stdout } = await doctor(
+      { 'covsel.json': JSON.stringify({ testGlobs: ['test/**/*.test.js'] }) },
+      [],
+    );
+    expect(code).toBe(1);
+    expect(stdout).not.toMatch(/agree/i);
+  });
+});
+
+describe('a command that narrows what the runner collects', () => {
+  it('is what the report warns about, since no syntax check catches every one', async () => {
+    // No syntax check catches every narrowing command -- `--project`, or a bare
+    // word after a value-taking flag -- so the direction that could be read as
+    // "hide these files" has to carry the warning in prose.
+    const { code, stdout } = await doctor(SUITE, ['test/a.test.js']);
+    expect(code).toBe(1);
+    expect(stdout).toMatch(/whole suite/i);
+    expect(stdout).toContain('--project');
+  });
+
+  it('names the command it asked with, so the reader can check it', async () => {
+    const { stdout } = await doctor(SUITE, ['test/a.test.js']);
+    expect(stdout).toContain('asked:');
+    expect(stdout).toContain('runner');
   });
 });
 
@@ -202,12 +266,55 @@ describe('--format json', () => {
 
   it('says the check was unavailable rather than reporting empty drift', async () => {
     // The JSON equivalent of the green-check-that-never-looked: two empty lists
-    // are what agreement looks like, so the unavailable case must be a different
-    // shape and not merely a different exit code.
+    // are what agreement looks like, so `available` is what tells them apart.
     const { stdout } = await doctor(SUITE, undefined, ['--format', 'json']);
     const parsed = JSON.parse(stdout);
     expect(parsed.available).toBe(false);
-    expect(parsed.unselectable).toBeUndefined();
+    expect(parsed.ok).toBe(true);
+  });
+
+  it('keeps the same shape when the listing failed, so a script can still read it', async () => {
+    // `covsel fetch` emits its object on the failing path too. A caller reading
+    // `.unselectable.length` must not throw on exactly the states that mean the
+    // question was never answered.
+    const dir = project(SUITE, []);
+    writeFileSync(
+      join(dir, 'node_modules', '@covsel', 'adapter-generic', 'index.js'),
+      'export const adapter = {\n' +
+        "  name: 'generic',\n" +
+        '  formatSelection: (tests) => tests.map((t) => t.file),\n' +
+        "  createRecorder: () => ({ observes: ['**'], record: async () => [] }),\n" +
+        "  listTests: async () => { throw new Error('narrows the run'); },\n" +
+        '};\n',
+    );
+    let stdout = '';
+    const outSpy = vi
+      .spyOn(process.stdout, 'write')
+      .mockImplementation((chunk) => ((stdout += String(chunk)), true));
+    const errSpy = vi.spyOn(process.stderr, 'write').mockImplementation(() => true);
+    const original = process.cwd();
+    process.chdir(dir);
+    try {
+      expect(await main(['doctor', '--format', 'json', '--', 'runner'])).toBe(1);
+      const parsed = JSON.parse(stdout);
+      expect(parsed.ok).toBe(false);
+      expect(parsed.available).toBe(false);
+      expect(parsed.reason).toContain('narrows the run');
+      expect(parsed.unselectable).toEqual([]);
+      expect(parsed.unrecordable).toEqual([]);
+    } finally {
+      process.chdir(original);
+      outSpy.mockRestore();
+      errSpy.mockRestore();
+    }
+  });
+
+  it('reports ok:false for an empty listing, which is not two lists that match', async () => {
+    const { stdout } = await doctor(SUITE, [], ['--format', 'json']);
+    const parsed = JSON.parse(stdout);
+    expect(parsed.ok).toBe(false);
+    expect(parsed.available).toBe(false);
+    expect(parsed.collectedCount).toBe(0);
   });
 });
 
@@ -222,7 +329,7 @@ describe('the command', () => {
     process.chdir(dir);
     try {
       expect(await main(['doctor'])).toBe(1);
-      expect(stderr).toContain('--');
+      expect(stderr).toContain('expected a runner command after `--`');
     } finally {
       process.chdir(original);
       errSpy.mockRestore();

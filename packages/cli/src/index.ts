@@ -12,6 +12,7 @@ import {
   type CoverageMap,
   type CovselConfig,
   DEFAULT_ARCHIVE_KEEP,
+  DEFAULT_EXCLUDES,
   discoverTestFiles,
   type ExplainResult,
   explainPath,
@@ -27,6 +28,7 @@ import {
   applyInit,
   loadConfig,
   isDirtyWorkTree,
+  isExcludedRel,
   isUsableMap,
   loadRawConfig,
   LocalStore,
@@ -39,6 +41,7 @@ import {
   runAffectedSelection,
   selectAffected,
   type StatusResult,
+  type SuiteDrift,
   type TestId,
   watchAffected,
   type WatchEvent,
@@ -76,7 +79,7 @@ Usage:
   covsel --version                                 Show version
 
 Options:
-  --adapter <name>   Installed adapter package for record/affected/run/watch
+  --adapter <name>   Installed adapter package for record/affected/run/watch/doctor
                      (default: the config's adapter, else '${DEFAULT_ADAPTER}';
                      adapters install separately)
   --since <ref>      Diff against <ref> instead of the commit the map records
@@ -993,11 +996,40 @@ async function cmdDoctor(argv: string[]): Promise<number> {
   const config = await loadConfigFor(cwd, adapter);
   const requireCheck = hasFlag(opts, 'require');
 
+  // One object on every path, including the ones that fail. A caller reading
+  // `.unselectable.length` must not throw on exactly the states that mean the
+  // question was never answered, so the arrays are always present and `ok` and
+  // `available` are what a script branches on. `covsel fetch` sets the same
+  // precedent: the object survives the failure.
+  const answer = (fields: {
+    ok: boolean;
+    available: boolean;
+    reason?: string;
+    discoveredCount?: number;
+    collectedCount?: number;
+    drift?: SuiteDrift;
+  }): void =>
+    json({
+      ok: fields.ok,
+      available: fields.available,
+      adapter: adapter.name,
+      ...(fields.reason !== undefined ? { reason: fields.reason } : {}),
+      ...(fields.discoveredCount !== undefined
+        ? { discoveredCount: fields.discoveredCount }
+        : {}),
+      ...(fields.collectedCount !== undefined
+        ? { collectedCount: fields.collectedCount }
+        : {}),
+      unselectable: fields.drift?.unselectable ?? [],
+      unrecordable: fields.drift?.unrecordable ?? [],
+    });
+
   // Absent is not "no drift". An adapter with no way to ask its runner leaves
   // the question unanswered, and answering it as agreement would be a green
   // check that never looked at anything.
   if (adapter.listTests === undefined) {
-    if (format === 'json') json({ available: false, adapter: adapter.name });
+    const reason = `the ${adapter.name} adapter cannot ask its runner what it collects`;
+    if (format === 'json') answer({ ok: !requireCheck, available: false, reason });
     else {
       out(
         `The ${adapter.name} adapter cannot ask its runner which files it collects, ` +
@@ -1012,11 +1044,14 @@ async function cmdDoctor(argv: string[]): Promise<number> {
     return 0;
   }
 
+  const shown = command.join(' ');
   let collected: string[];
   try {
     collected = await adapter.listTests({ command, cwd, config });
   } catch (e) {
-    err(`covsel doctor: ${e instanceof Error ? e.message : String(e)}\n`);
+    const reason = e instanceof Error ? e.message : String(e);
+    err(`covsel doctor: ${reason}\n`);
+    if (format === 'json') answer({ ok: false, available: false, reason });
     return 1;
   }
 
@@ -1026,8 +1061,15 @@ async function cmdDoctor(argv: string[]): Promise<number> {
   // reads as drift in the wrong direction. Either way the answer is that the
   // question did not get asked properly.
   if (collected.length === 0) {
+    const reason = `\`${shown}\` reported that it collects no test files at all`;
     if (format === 'json') {
-      json({ available: true, collectedCount: 0, discoveredCount: discovered.length });
+      answer({
+        ok: false,
+        available: false,
+        reason,
+        discoveredCount: discovered.length,
+        collectedCount: 0,
+      });
     } else {
       out(
         `The ${adapter.name} adapter reported that its runner collects no test files ` +
@@ -1040,19 +1082,23 @@ async function cmdDoctor(argv: string[]): Promise<number> {
   }
 
   const drift = compareSuites(discovered, collected);
+  const collectedCount = new Set(collected).size;
   if (format === 'json') {
-    json({
+    answer({
+      ok: !hasDrift(drift),
       available: true,
       discoveredCount: discovered.length,
-      collectedCount: new Set(collected).size,
-      unselectable: drift.unselectable,
-      unrecordable: drift.unrecordable,
+      collectedCount,
+      drift,
     });
     return hasDrift(drift) ? 1 : 0;
   }
 
+  // The command is what the runner's answer depends on, so a report that omits
+  // it cannot be checked by the person reading it.
+  out(`asked:      ${shown}\n`);
   out(`covsel discovers ${discovered.length} test file(s)\n`);
-  out(`${adapter.name} collects  ${new Set(collected).size} test file(s)\n\n`);
+  out(`${adapter.name} collects  ${collectedCount} test file(s)\n\n`);
   if (!hasDrift(drift)) {
     out('The two agree: every file the runner collects is one covsel discovers.\n');
     return 0;
@@ -1060,19 +1106,39 @@ async function cmdDoctor(argv: string[]): Promise<number> {
   // Named separately because the repair differs, and a reader is looking at this
   // precisely because they do not yet know which case they have.
   if (drift.unselectable.length > 0) {
+    // Discovery never walks into `node_modules`, `dist`, `coverage` or `.covsel`
+    // at any depth, and no glob reopens them. Telling someone to widen
+    // `testGlobs` for a file under one of those is advice that cannot work, on a
+    // report they are reading precisely because something is not working.
+    const excluded = drift.unselectable.filter(isExcludedRel);
     out(
       `${drift.unselectable.length} file(s) the runner collects that covsel does not discover.\n` +
         'No change can select these, so they stop running the moment covsel decides ' +
         'what runs -- silently, on a green job. Widen `testGlobs` to cover them:\n',
     );
     for (const f of drift.unselectable) out(`  ${f}\n`);
+    if (excluded.length > 0) {
+      out(
+        `\n${excluded.length} of those sit in a directory covsel never walks ` +
+          `(${DEFAULT_EXCLUDES.join(', ')}), so no \`testGlobs\` entry can reach them. ` +
+          'Point the runner at the sources these were built from, or leave them out ' +
+          'of its collection.\n',
+      );
+    }
     out('\n');
   }
   if (drift.unrecordable.length > 0) {
     out(
       `${drift.unrecordable.length} file(s) covsel discovers that the runner does not collect.\n` +
         'covsel would ask the runner to record these and the runner was configured ' +
-        'not to run them. Add them to `testIgnore`, or collect them:\n',
+        'not to run them. Add them to `testIgnore`, or collect them.\n' +
+        // The dangerous misreading. Following the advice above on a narrowed run
+        // puts real test files beyond covsel's reach for good -- they stop being
+        // discovered, recorded and selected, which is the failure this whole
+        // command exists to prevent.
+        'First check that the command above is your whole suite: a filter, ' +
+        '`--project`, or a narrowed run makes every file it left out appear here, ' +
+        'and none of those is a config problem.\n',
     );
     for (const f of drift.unrecordable) out(`  ${f}\n`);
     out('\n');

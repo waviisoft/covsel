@@ -162,13 +162,15 @@ selected — green, and quietly outside the suite. `covsel doctor` compares the 
 and exits non-zero when they disagree:
 
 ```yaml
-- run: npx covsel doctor -- npx vitest run
+- run: npx covsel doctor --require -- npx vitest run
 ```
 
-It is a cheap step and it belongs on the pull request rather than beside
-recording, because the drift it catches arrives with the commit that adds the
-directory. See [the fail-open guarantee](/guide/fail-open) for what each
-direction of the disagreement costs, and which runners can answer.
+`--require` matters here: covsel can only run this check through an adapter that
+can ask its runner, and without the flag a project whose adapter cannot would get
+a permanently green step that compares nothing. It is a cheap step and it belongs
+on the pull request rather than beside recording, because the drift it catches
+arrives with the commit that adds the directory. See [the fail-open guarantee](/guide/fail-open) for what
+each direction of the disagreement costs, and which adapters can answer.
 
 ## Reading covsel's answer from a script
 
@@ -177,8 +179,8 @@ that wants to _report_ what covsel decided — a step output, a job summary, a
 shard matrix — needs the answer as data rather than as prose, and scraping the
 log for it would break the first time a sentence is reworded.
 
-`affected`, `status`, and `fetch` take `--format json` and write one object on
-one line to stdout:
+`affected`, `status`, `fetch`, and `doctor` take `--format json` and write one
+object on one line to stdout:
 
 ```bash
 covsel affected --format json

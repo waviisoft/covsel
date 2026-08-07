@@ -107,6 +107,54 @@ describe('asking vitest what it collects', () => {
   }, 120_000);
 });
 
+describe('a command that narrows the run', () => {
+  it('is refused, because a subset compared against the whole suite is not drift', async () => {
+    // The catastrophe: `vitest run test/a.test.js` lists exactly that file,
+    // exits 0, and produces well-shaped JSON -- so every other test file in the
+    // project lands under "covsel discovers these, the runner does not collect
+    // them; add them to testIgnore". Following that advice removes real tests
+    // from discovery, recording and selection permanently.
+    const cwd = project(COLLECTS_EVERYTHING);
+    await expect(
+      vitestAdapter.listTests!({
+        command: [vitestBin, 'run', 'test/a.test.js'],
+        cwd,
+        config,
+      }),
+    ).rejects.toThrow(/narrows the run/);
+  }, 120_000);
+
+  it('is refused for a filter that matches nothing, which would list nothing', async () => {
+    const cwd = project(COLLECTS_EVERYTHING);
+    await expect(
+      vitestAdapter.listTests!({
+        command: [vitestBin, 'run', 'no/such/path'],
+        cwd,
+        config,
+      }),
+    ).rejects.toThrow(/narrows the run/);
+  }, 120_000);
+
+  it('does not mistake a flag, or a flag’s value, for a filter', async () => {
+    // The refusal has to leave ordinary commands alone, or covsel is unusable
+    // for anyone whose test command carries options -- which is most of them.
+    const cwd = project(COLLECTS_EVERYTHING);
+    for (const extra of [
+      ['--coverage.enabled=false'],
+      ['--reporter', 'dot'],
+      ['--reporter=dot'],
+      ['--no-color'],
+    ]) {
+      const listed = await vitestAdapter.listTests!({
+        command: [vitestBin, 'run', ...extra],
+        cwd,
+        config,
+      });
+      expect(listed, `for ${extra.join(' ')}`).toContain('test/a.test.js');
+    }
+  }, 240_000);
+});
+
 describe('a command this adapter cannot turn into a listing', () => {
   it('is refused rather than answered with a set that reads as agreement', async () => {
     // A wrong-but-parseable answer is worse than no answer: an empty or partial

@@ -62,9 +62,41 @@ function listingCommand(command: readonly string[]): string[] {
   const args = [...command];
   if (at === -1) args.push('list');
   else args[at] = 'list';
+
+  // A positional argument after the mode token is a vitest filter, and a filter
+  // makes this answer worse than no answer at all. `vitest run packages/core`
+  // lists the files under that path, exits 0, and produces perfectly shaped
+  // JSON -- which compares against covsel's full discovery as "covsel discovers
+  // 35 files the runner does not collect", advice to put 35 real test files
+  // beyond covsel's reach. A narrowed run is a different question from the one
+  // being asked here, so it is refused rather than answered.
+  //
+  // Syntactic, so it catches the shape people actually type and not every one:
+  // a bare word after a value-taking flag is that flag's value, and covsel has
+  // no table of which vitest flags take values, so `run --coverage pkg/` reads
+  // as a value rather than a filter. This is one of two guards, not the only
+  // one -- the report itself says a narrowing command explains this direction,
+  // because no syntax check can be sure.
+  const filter = args.slice(at === -1 ? args.length : at + 1).find(isPositional);
+  if (filter !== undefined) {
+    throw new Error(
+      `could not ask vitest what it collects: \`${filter}\` narrows the run to part ` +
+        'of the suite, and covsel compares the answer against your whole test ' +
+        'discovery. Ask with the unfiltered command, e.g. `covsel doctor -- vitest run`.',
+    );
+  }
   // `--filesOnly` because the comparison is against discovered *files*; listing
   // every test name is slower and gives covsel nothing it can use.
   return [...args, '--filesOnly', '--json'];
+}
+
+/** A bare argument rather than a flag or a flag's value. */
+function isPositional(arg: string, index: number, args: readonly string[]): boolean {
+  if (arg.startsWith('-')) return false;
+  // `--reporter junit` puts a bare word after a flag that takes a value. Only
+  // the space-separated form is ambiguous; `--reporter=junit` is one token.
+  const previous = args[index - 1];
+  return previous === undefined || !previous.startsWith('-') || previous.includes('=');
 }
 
 /**
@@ -84,6 +116,9 @@ export interface VitestRecorderInit {
 /** The provider Vitest itself loads to produce V8 coverage. */
 const COVERAGE_PROVIDER = '@vitest/coverage-v8';
 
+/** How long to wait for a listing before giving up on it. */
+const LIST_TIMEOUT_MS = 120_000;
+
 /**
  * The test files Vitest itself would collect, repo-relative, under the
  * project's own config -- so covsel can compare that against what its
@@ -97,9 +132,23 @@ export async function listVitestTests(init: RecorderInit): Promise<string[]> {
     cwd: init.cwd,
     encoding: 'utf8',
     maxBuffer: 64 * 1024 * 1024,
+    // Listing is a question, not a run, so it has no business taking minutes.
+    // Without a bound, a command that does not exit -- a wrapper that waits, or
+    // `vitest watch` rewritten into `vitest watch list` -- hangs covsel with no
+    // output at all, which is the one failure a diagnostic must not have.
+    timeout: LIST_TIMEOUT_MS,
   });
   const shown = [bin, ...args].join(' ');
-  if (res.error) throw res.error;
+  if (res.error) {
+    const timedOut = (res.error as NodeJS.ErrnoException).code === 'ETIMEDOUT';
+    throw new Error(
+      timedOut
+        ? `could not ask vitest what it collects: \`${shown}\` did not finish within ` +
+            `${LIST_TIMEOUT_MS / 1000}s. A listing should be quick, so this is usually a ` +
+            'command that never exits -- watch mode, or a script that waits.'
+        : `could not ask vitest what it collects: \`${shown}\` -- ${res.error.message}`,
+    );
+  }
   if (res.status !== 0) {
     const output = `${res.stdout ?? ''}${res.stderr ?? ''}`.trim();
     throw new Error(

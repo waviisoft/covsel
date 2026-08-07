@@ -258,7 +258,7 @@ consequences are not symmetric:
 what covsel discovered:
 
 ```bash
-covsel doctor -- vitest run
+covsel doctor --require -- vitest run
 ```
 
 ```
@@ -269,7 +269,16 @@ vitest collects  76 test file(s)
 No change can select these, so they stop running the moment covsel decides what
 runs -- silently, on a green job. Widen `testGlobs` to cover them:
   benchmarks/test/cli.test.ts
+  benchmarks/test/metrics.test.ts
   ...
+
+1 file(s) covsel discovers that the runner does not collect.
+covsel would ask the runner to record these and the runner was configured not to
+run them. Add them to `testIgnore`, or collect them.
+First check that the command above is your whole suite: a filter, `--project`,
+or a narrowed run makes every file it left out appear here, and none of those is
+a config problem.
+  packages/adapter-playwright/test/conformance.test.ts
 ```
 
 It exits non-zero when the two disagree, so it belongs in CI beside your other
@@ -277,11 +286,10 @@ checks. Each direction names the field that repairs it: `testGlobs` to discover
 more, [`testIgnore`](/guide/getting-started) to subtract a file your runner
 deliberately excludes.
 
-The check needs a runner that can be asked what it collects, which not all can.
-`vitest`, `jest`, `mocha`, `cucumber-js` and Playwright all have a listing mode;
-`node --test` has none, and the generic wrap cannot know what an arbitrary
-command would collect. Where covsel cannot ask, `covsel doctor` says the check
-did not run rather than reporting that nothing is wrong — a green check that
+The check needs an adapter that can ask its runner what it collects, and today
+that is the Vitest adapter. Every other adapter, the generic wrap included, omits
+the capability, so `covsel doctor` says the check did not run rather than
+reporting that nothing is wrong — a green check that
 never looked at anything is exactly the failure this page is about. Pass
 `--require` to turn that into a non-zero exit, for a pipeline that wants the
 check or nothing.

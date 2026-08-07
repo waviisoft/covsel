@@ -66,6 +66,9 @@ npx covsel run --adapter cucumber -- cucumber-js
 # Inspect the map: age, size, sentinel drift, next action
 npx covsel status
 
+# Check that covsel and the runner still agree on which files are the tests
+npx covsel doctor --adapter vitest -- vitest run
+
 # Ask the map about one file: what covers it, or what a test covered
 npx covsel explain src/thing.ts
 npx covsel explain test/thing.test.ts
@@ -79,10 +82,11 @@ to record with so later commands need no flag. `covsel affected` prints a file l
 you can pipe it into any runner that accepts test files:
 `node --test $(covsel affected)`.
 
-`--adapter` is not just a `record` flag: `affected`, `run`, and `watch` resolve
-an adapter too, taking the flag first, then the adapter `init` wrote to your
-config, then `generic`. Without a config, a Vitest project passes the flag to
-each of them.
+`--adapter` is not just a `record` flag: `affected`, `run`, `watch`, and `doctor`
+resolve an adapter too, taking the flag first, then the adapter `init` wrote to
+your config, then `generic`. Without a config, a Vitest project passes the flag to
+each of them -- and `doctor` needs it most, since only an adapter that can ask its
+runner what it collects can run that check at all.
 
 Vitest and Jest transform sources before executing them, so raw V8 process
 coverage can't describe your `src/**`; `--adapter vitest` and `--adapter jest`
