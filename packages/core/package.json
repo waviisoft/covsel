@@ -1,6 +1,6 @@
 {
   "name": "@covsel/core",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "Runner-agnostic core for covsel: Observer, Mapper, Store, Selector, Policy, and the versioned map schema",
   "license": "MIT",
   "author": "WAVIISoft, LLC",

@@ -1,6 +1,6 @@
 {
   "name": "@covsel/adapter-playwright",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "Playwright adapter for covsel: per-test browser coverage recorded in one run",
   "license": "MIT",
   "author": "WAVIISoft, LLC",

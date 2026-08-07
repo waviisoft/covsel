@@ -1,5 +1,180 @@
 # @covsel/core
 
+## 0.2.0
+
+### Minor Changes
+
+- 2c18c09: Credit a module a test imported but never called into, without re-selecting on
+  every signature change.
+
+  `istanbulCoverage` dropped any file whose report entry showed no statement,
+  function, or branch hit. A module of nothing but declarations — imports,
+  `interface`, `type`, `function` — executes nothing when it loads, so every
+  counter is zero and it was dropped. The test imported it, the module ran to
+  completion at load, and the map recorded no relationship at all.
+
+  That is the fail-closed direction, and it was reachable. A module gaining a
+  top-level side effect — registering something, patching a prototype, installing
+  a polyfill — changes what every importer does while selecting none of them. The
+  sharpest form is a module that starts throwing on import: the suite is broken and
+  `covsel affected` reports nothing to run.
+
+  The generic `NODE_V8_COVERAGE` recorder never behaved this way, since V8 reports
+  the script wrapper with a count. The two paths disagreeing about the same fixture
+  is what surfaced it.
+
+  **Parity alone would have cost most of the precision**, which is why this is more
+  than deleting a line. Crediting a loaded file with the module block means
+  crediting the whole top level with function bodies blanked — and that moves
+  whenever a signature is added, renamed, or re-typed, which is the common edit. On
+  this repository, a pull request that added functions to `commands.ts` selected 30
+  of 47 test files; under module-block crediting, every test importing the core
+  barrel would have been selected too, for a change that could not have altered any
+  of them.
+
+  So a file a test only imported is credited with a new `<load>` block instead: a
+  fingerprint over what loading actually does — the module specifiers it pulls in,
+  and its top-level executable statements. Not the bindings taken from each
+  specifier, which are resolved before anything runs; not function declarations,
+  interfaces, or type aliases, which do nothing until something invokes them.
+
+  The property that follows is the one that matters: **a module with no load-time
+  behaviour has an empty fingerprint, and an empty fingerprint never changes.** Its
+  importers stay unselected until someone gives it top-level behaviour, at which
+  point it changes exactly once and selects them. Adding, renaming, or re-signing
+  functions does not touch it. A re-export counts, because `export * from './x'`
+  loads that module just as an import does.
+
+  A file the test genuinely called into still gets the module block, because it
+  executes code there and a signature change can reach it.
+
+  This applies to both recording paths, since both funnel through
+  `selectExecutedBlocks` — so the generic recorder also stops over-selecting on
+  signature changes to modules its tests only imported.
+
+  `extractBlocks` now emits a `<load>` block for every file, after `<module>`, so
+  `blockHashesOf` and the change detection built on it pick it up with no schema
+  change.
+
+- 07f570a: Read `sourceGlobs` as the paths they name, not as basenames anywhere in the tree.
+
+  `makeMatcher` gives a slash-less glob a second chance against a path's basename
+  at any depth, so that a sentinel like `package.json` also catches a workspace's
+  own manifest. That reasoning holds for `sentinels`, where matching more runs more
+  tests. It did not hold for `sourceGlobs`, which shared the same matcher.
+
+  A project writing `sourceGlobs: ["index.js"]` to mean _the package entry point_
+  silently got every `index.js` in the repository — examples, fixtures, scripts —
+  recorded as covered source. Measured on `expressjs/express` with
+  `sourceGlobs: ["lib/**/*.js", "index.js"]`: a map reporting **29 covered sources
+  for a library that has 7**, the other 22 being example apps that ship to nobody.
+
+  No test was ever skipped by it — the effect is over-selection, which is the safe
+  direction. What it cost was the map as a diagnostic and part of the saving:
+  `covsel status` reporting 29 sources with no way to see where they came from, and
+  editing an example app selecting tests that cannot depend on it.
+
+  `sourceGlobs` are now matched literally, repo-relative. Write `"**/index.js"` for
+  the recursive reading — it already worked and says what it means.
+
+  `testGlobs` keeps the widening, and the asymmetry is the point: a source glob
+  matching too much costs precision, while a test glob matching too little leaves
+  the tests it missed unrun. `"*.test.js"` meaning "only at the root" would be a
+  skipped test rather than a wide map.
+
+  **This changes what an existing config means** for any project whose
+  `sourceGlobs` contain a slash-less pattern that was matching nested files. Their
+  next recording will credit fewer sources; a map recorded before the upgrade keeps
+  describing what it described, since the config value itself has not moved.
+
+  `covsel status` also gained a breakdown of covered sources by top-level
+  directory, biggest first, printed when they span more than one. The source count
+  is the number people read to judge whether their globs say what they meant, and
+  on its own it cannot answer that — the express map read `29` with nothing to say
+  where the other 22 came from. It is the second half of the same problem: a
+  project whose sources come from somewhere it did not intend can now see so at a
+  glance, whatever put them there. Also in `status --format json`, as
+  `coveredSourcesByDir`.
+
+- 3edd43b: Let a project name the tests its runner will not run, with `testIgnore`.
+
+  covsel finds test files by walking the tree with `testGlobs`. The runner it wraps
+  finds them by reading its own configuration. When the runner excludes something
+  -- a browser suite kept out of the default config and run by a second one -- the
+  two disagree, and covsel tries to record a test the runner refuses to run.
+
+  That is worse than it sounds, because a recording that fails writes **no map at
+  all**: a partial map cannot be trusted, so one unrunnable file stops the project
+  selecting anything, and every pull request falls open to a full run until someone
+  works out why. It is the failure covsel's own `covsel map` workflow hit the day
+  its Playwright conformance suite arrived.
+
+  - `testIgnore` is a glob list of test files to leave alone. They are never
+    discovered, never recorded, and never selected. It subtracts from `testGlobs`
+    rather than narrowing them, because "every test except this one" is not
+    something a glob set can say.
+  - It applies to discovery alone. A file named here is still a test file
+    everywhere that asks what a path _is_, so it cannot be credited as a source of
+    its own coverage.
+  - It wins over `alwaysRun`. The two claims conflict and only one can hold: a file
+    the runner will not run cannot be run whatever else the config asks for.
+  - `covsel status` reports how many files it removed, in both the report and
+    `--format json` (`ignoredTestCount`), because an exclusion that grows silently
+    is a suite shrinking without anyone deciding to. It is a claim that skips tests
+    when it is wrong, so it says itself back to you.
+  - It is part of the recorded configuration, so changing it forces a full run
+    rather than quietly selecting against a map recorded over a different set of
+    tests. The first run after upgrading is a full one for the same reason.
+
+  A project that names nothing discovers exactly what it did before.
+
+### Patch Changes
+
+- 8f3646b: Say what a full-run reason measured the change against.
+
+  `sentinel changed: covsel.config.js` is about two states, and it named one. The
+  reader has to supply the other, and the obvious guess — _changed in my branch_ —
+  is wrong exactly when the message matters most. The window is the commit the map
+  records against the working tree, so on a pull request it includes everything
+  merged to the default branch since the recording. A branch that never touched
+  `covsel.config.js` gets told `covsel.config.js` changed, and the author's first
+  move is to search a diff that does not contain it.
+
+  The three reasons that name a changed file now end with the window they were
+  measured over:
+
+  ```diff
+  -sentinel changed: pnpm-lock.yaml
+  +sentinel changed: pnpm-lock.yaml (measured since the map was recorded at a1b2c3d4e5f6)
+  ```
+
+  With an explicit `--since`, no recording happened at that ref, so the sentence
+  changes to match: `(measured since origin/main)`.
+
+  The qualifier is appended rather than woven into the phrase. Weaving it splits
+  what a reader and a `grep` both key on — `sentinel changed: pnpm-lock.yaml`
+  becoming `sentinel changed since …: pnpm-lock.yaml` — which moves the answer to
+  make room for the note about how the question was asked. Trailing, the answer
+  stays where it has always been.
+
+  The reasons that describe the map itself (`no usable map recorded`, an
+  incompatible schema, a map with no entries) are unchanged, since none of them is
+  about a file having moved. Neither is the config-field comparison, which already
+  names its own two states.
+
+  `covsel status` and `covsel explain` now separate that reason with `--` instead
+  of wrapping it in parentheses, which is the separator `covsel affected` has
+  always used:
+
+  ```diff
+  -next:       full run (sentinel changed: package.json)
+  +next:       full run -- sentinel changed: package.json (measured since the map was recorded at a1b2c3d4e5f6)
+  ```
+
+  Brackets around a reason that now ends in brackets of its own read as
+  `full run (sentinel changed: package.json (measured since …))`. The three
+  commands that report the same verdict say it the same way instead.
+
 ## 0.1.0
 
 ### Minor Changes

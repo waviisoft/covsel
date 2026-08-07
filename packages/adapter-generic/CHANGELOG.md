@@ -1,5 +1,15 @@
 # @covsel/adapter-generic
 
+## 0.1.1
+
+### Patch Changes
+
+- Updated dependencies [2c18c09]
+- Updated dependencies [8f3646b]
+- Updated dependencies [07f570a]
+- Updated dependencies [3edd43b]
+  - @covsel/core@0.2.0
+
 ## 0.1.0
 
 ### Minor Changes

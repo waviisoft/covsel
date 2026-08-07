@@ -1,6 +1,6 @@
 {
   "name": "@covsel/adapter-vitest",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "Vitest adapter for covsel: per-file selection recorded via Vitest's own V8 coverage",
   "license": "MIT",
   "author": "WAVIISoft, LLC",
