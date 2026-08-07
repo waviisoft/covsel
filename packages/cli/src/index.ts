@@ -1057,10 +1057,15 @@ async function cmdStatus(argv: string[]): Promise<number> {
       }\n`,
     );
   }
+  // `-- reason`, not `(reason)`. A reason can now end with its own parenthesised
+  // clause naming the window it was measured over, and wrapping that in a second
+  // pair produced `full run (sentinel changed: package.json (measured since
+  // ...))`. This is also the separator `covsel affected` has always used, so the
+  // three commands that report the same verdict now say it the same way.
   out(
     `next:       ${
       s.nextIsFullRun
-        ? `full run (${s.nextFullRunReason ?? 'map cannot be trusted'})`
+        ? `full run -- ${s.nextFullRunReason ?? 'map cannot be trusted'}`
         : 'select'
     }\n`,
   );
@@ -1264,7 +1269,7 @@ async function cmdExplain(argv: string[]): Promise<number> {
   // "nothing runs" in exactly the states where everything does.
   out(
     result.nextIsFullRun === true
-      ? `next:       full run (${result.nextFullRunReason ?? 'map cannot be trusted'})\n`
+      ? `next:       full run -- ${result.nextFullRunReason ?? 'map cannot be trusted'}\n`
       : 'next:       select\n',
   );
   return 0;
