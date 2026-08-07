@@ -1,6 +1,6 @@
 {
   "name": "@covsel/adapter-cucumber",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "cucumber-js adapter for covsel: scenario-level selection via the inspector snapshot-diff observer",
   "license": "MIT",
   "author": "WAVIISoft, LLC",
