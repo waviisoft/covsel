@@ -33,3 +33,16 @@ The reasons that describe the map itself (`no usable map recorded`, an
 incompatible schema, a map with no entries) are unchanged, since none of them is
 about a file having moved. Neither is the config-field comparison, which already
 names its own two states.
+
+`covsel status` and `covsel explain` now separate that reason with `--` instead
+of wrapping it in parentheses, which is the separator `covsel affected` has
+always used:
+
+```diff
+-next:       full run (sentinel changed: package.json)
++next:       full run -- sentinel changed: package.json (measured since the map was recorded at a1b2c3d4e5f6)
+```
+
+Brackets around a reason that now ends in brackets of its own read as
+`full run (sentinel changed: package.json (measured since …))`. The three
+commands that report the same verdict say it the same way instead.

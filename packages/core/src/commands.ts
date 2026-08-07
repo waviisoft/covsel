@@ -720,6 +720,13 @@ type DiffBase =
  * `exact` is what tells the two apart: it is set only when the base is the
  * commit the map records, so an explicit `--since` reads as "since origin/main"
  * rather than claiming a recording that never happened there.
+ *
+ * Returning nothing costs a reason its window, and the reasons that name a file
+ * never take that path — not by a check, but because every route to one has a
+ * base: with no `--since` and no map the reason is "no usable map recorded",
+ * with no map commit it is either untrusted or not a git tree at all, and the
+ * latter throws out of `diffChanges` before any reason is chosen. Worth knowing
+ * if a fourth kind of base is ever added.
  */
 function windowOf(base: DiffBase): DiffWindow | undefined {
   if (base.kind !== 'base' || base.since === undefined) return undefined;
