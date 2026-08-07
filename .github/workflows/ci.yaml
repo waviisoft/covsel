@@ -103,6 +103,17 @@ jobs:
       - name: What covsel is about to do, and why
         run: node packages/cli/dist/bin.js status
 
+      # Three of this repository's own outages were one failure: covsel's
+      # testGlobs and vitest's include list disagreeing about what the suite is.
+      # Twice a directory was in vitest's list and not covsel's, so its tests
+      # could never be selected and this very job ran none of them; once the
+      # reverse, and recording died on a browser test in a job with no browser.
+      # `--require` because this repository's adapter can answer, so an
+      # unavailable check here means something broke rather than a runner that
+      # cannot list.
+      - name: Check covsel and vitest still agree on what the suite is
+        run: node packages/cli/dist/bin.js doctor --require -- npx vitest run
+
       # Running the selection proves the tests it chose pass. It says nothing
       # about whether the choice was right -- a selection that quietly ran
       # nothing would pass too -- so the promises that can be checked from

@@ -24,6 +24,7 @@ import {
   type RecordedUnit,
   type RecorderInit,
   type TestId,
+  toRepoRelative,
 } from '@covsel/core';
 
 export const vitestAdapter: Adapter = {
@@ -36,7 +37,35 @@ export const vitestAdapter: Adapter = {
   createRecorder(init: RecorderInit): Recorder {
     return createVitestRecorder(init);
   },
+  listTests(init: RecorderInit): Promise<string[]> {
+    return listVitestTests(init);
+  },
 };
+
+/**
+ * Turn the command that *runs* the suite into the one that lists it.
+ *
+ * `list` is a vitest subcommand rather than a flag, and it replaces `run`
+ * instead of joining it -- `vitest run list` reads `list` as a filename filter
+ * and runs whatever matches. The first `run` token is therefore substituted,
+ * and a command without one gets `list` appended, which covers `vitest`,
+ * `vitest run`, `npx vitest run` and the `node_modules/.bin` forms alike.
+ *
+ * A command that is not a vitest invocation at all -- `pnpm test`, a shell
+ * wrapper -- comes out of here as nonsense, and that is what the strict shape
+ * check on the output is for. Guessing wrong has to fail loudly: a partial list
+ * compares against covsel's discovery as drift, and would send someone editing
+ * `testGlobs` over a question the runner was never asked.
+ */
+function listingCommand(command: readonly string[]): string[] {
+  const at = command.indexOf('run');
+  const args = [...command];
+  if (at === -1) args.push('list');
+  else args[at] = 'list';
+  // `--filesOnly` because the comparison is against discovered *files*; listing
+  // every test name is slower and gives covsel nothing it can use.
+  return [...args, '--filesOnly', '--json'];
+}
 
 /**
  * The export the dynamic resolver reads, so this package is selectable by its
@@ -54,6 +83,66 @@ export interface VitestRecorderInit {
 
 /** The provider Vitest itself loads to produce V8 coverage. */
 const COVERAGE_PROVIDER = '@vitest/coverage-v8';
+
+/**
+ * The test files Vitest itself would collect, repo-relative, under the
+ * project's own config -- so covsel can compare that against what its
+ * `testGlobs` discovered and report where the two disagree.
+ */
+export async function listVitestTests(init: RecorderInit): Promise<string[]> {
+  const [bin, ...rest] = init.command;
+  if (bin === undefined) throw new Error('empty command');
+  const args = listingCommand(rest);
+  const res = spawnSync(bin, args, {
+    cwd: init.cwd,
+    encoding: 'utf8',
+    maxBuffer: 64 * 1024 * 1024,
+  });
+  const shown = [bin, ...args].join(' ');
+  if (res.error) throw res.error;
+  if (res.status !== 0) {
+    const output = `${res.stdout ?? ''}${res.stderr ?? ''}`.trim();
+    throw new Error(
+      `could not ask vitest what it collects: \`${shown}\` failed\n${output}`,
+    );
+  }
+
+  // Strictly shaped, and the strictness is the safety property. A command that
+  // was never a vitest invocation may still exit 0 having printed something --
+  // including vitest's own `--json` *run* report, which is an object rather than
+  // this array. Anything that is not a list of `{ file }` is treated as no
+  // answer, because a half-understood one compares as drift.
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(res.stdout ?? '');
+  } catch {
+    throw new Error(
+      `could not ask vitest what it collects: \`${shown}\` printed no JSON. ` +
+        'Point `covsel` at vitest directly (e.g. `npx vitest run`) rather than at a ' +
+        'script that wraps it, or leave the check out.',
+    );
+  }
+  if (!Array.isArray(parsed) || !parsed.every(isListedFile)) {
+    throw new Error(
+      `could not ask vitest what it collects: \`${shown}\` printed JSON that is not a ` +
+        'test file listing. Point `covsel` at vitest directly (e.g. `npx vitest run`) ' +
+        'rather than at a script that wraps it, or leave the check out.',
+    );
+  }
+
+  // A file outside the project is one covsel could never discover either, so
+  // reporting it as drift would name something no `testGlobs` edit could fix.
+  const files = parsed.map((entry) => toRepoRelative(init.cwd, entry.file));
+  return [...new Set(files.filter((rel): rel is string => rel !== undefined))].sort();
+}
+
+function isListedFile(entry: unknown): entry is { file: string } {
+  return (
+    typeof entry === 'object' &&
+    entry !== null &&
+    typeof (entry as { file?: unknown }).file === 'string'
+  );
+}
 
 /**
  * A recorder that runs `<command> <testFile>` once with Vitest's V8 coverage

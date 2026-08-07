@@ -219,7 +219,10 @@ export interface Recorder {
   unmappableAllowed?(): string[];
 }
 
-/** What an adapter needs to build a recorder for one project. */
+/**
+ * What an adapter needs to drive one project's runner — to build a recorder for
+ * it, or to ask it which files it collects.
+ */
 export interface RecorderInit {
   /** The runner command to wrap, as the user gave it, e.g. `['vitest', 'run']`. */
   command: string[];
@@ -295,4 +298,28 @@ export interface Adapter {
    * `NODE_V8_COVERAGE`, the inspector — and nothing here applies.
    */
   readonly coverageReport?: 'istanbul';
+  /**
+   * Ask the runner which test files it would collect, as repo-relative POSIX
+   * paths, under the project's own runner configuration.
+   *
+   * This exists to be *compared* with what covsel discovered, never to replace
+   * it. The two are separate configurations that must agree, and a project
+   * whose runner collects a file covsel's `testGlobs` miss has a test that no
+   * change can ever select — green, and quietly outside the suite. Nothing
+   * reports that today, which is what this is for.
+   *
+   * Diagnostic only, and deliberately so: discovery must not be driven by an
+   * answer covsel cannot check. A runner that under-reports here — a plugin that
+   * filters, a project split covsel was not told about — would silently shrink
+   * the suite if this decided what runs, which is the failure the comparison
+   * exists to catch rather than one to introduce.
+   *
+   * Optional, because not every runner can answer. `vitest list`, `jest
+   * --listTests`, `mocha --dry-run`, `cucumber --dry-run` and `playwright
+   * --list` all can; `node --test` has no listing mode, and the generic wrap
+   * cannot know what an arbitrary command would collect. An adapter that cannot
+   * answer omits this rather than guessing, and a consumer says the check is
+   * unavailable rather than reporting an agreement nobody established.
+   */
+  listTests?(init: RecorderInit): Promise<string[]>;
 }

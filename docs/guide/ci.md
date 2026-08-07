@@ -153,6 +153,23 @@ rather know asks with `--require`, which exits non-zero instead.
 one — that only happens on a developer's machine, where the local recording is
 the better map. `--force` overrides it.
 
+### Check that covsel and your runner agree on the suite
+
+Your runner's `include`/`testMatch` and covsel's `testGlobs` are two lists that
+have to say the same thing, and nothing keeps them in step. A directory added to
+one and not the other gives you tests that run on a full run and can never be
+selected — green, and quietly outside the suite. `covsel doctor` compares the two
+and exits non-zero when they disagree:
+
+```yaml
+- run: npx covsel doctor -- npx vitest run
+```
+
+It is a cheap step and it belongs on the pull request rather than beside
+recording, because the drift it catches arrives with the commit that adds the
+directory. See [the fail-open guarantee](/guide/fail-open) for what each
+direction of the disagreement costs, and which runners can answer.
+
 ## Reading covsel's answer from a script
 
 The recipes above are shell: a step runs, it either passes or it does not. A job
