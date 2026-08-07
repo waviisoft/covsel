@@ -238,6 +238,59 @@ it:
 map beside `discovered: 0 test file(s)` is the one combination worth noticing at a
 glance.
 
+### Discovering _some_ of the suite is the quieter failure
+
+Everything above catches covsel finding nothing. Finding most of it is harder,
+because there is no number on the page that looks wrong. Your runner has its own
+answer to "which files are the tests" — `include`, `testMatch`, `spec` — and
+covsel has `testGlobs`. Nothing makes the two agree, and when they drift the
+consequences are not symmetric:
+
+- A file **the runner collects and covsel does not discover** is recorded by
+  nothing and selected by nothing. It runs today, because your full-run job runs
+  it; it stops running the day selection decides what runs, on a green job, with
+  no line anywhere saying the suite got smaller.
+- A file **covsel discovers and the runner does not collect** is the reverse:
+  recording hands the runner a file it was configured not to run, and depending
+  on the runner that is a hard failure or an entry recorded as silence.
+
+`covsel doctor` asks the runner which files it collects and compares that against
+what covsel discovered:
+
+```bash
+covsel doctor -- vitest run
+```
+
+```
+covsel discovers 71 test file(s)
+vitest collects  76 test file(s)
+
+6 file(s) the runner collects that covsel does not discover.
+No change can select these, so they stop running the moment covsel decides what
+runs -- silently, on a green job. Widen `testGlobs` to cover them:
+  benchmarks/test/cli.test.ts
+  ...
+```
+
+It exits non-zero when the two disagree, so it belongs in CI beside your other
+checks. Each direction names the field that repairs it: `testGlobs` to discover
+more, [`testIgnore`](/guide/getting-started) to subtract a file your runner
+deliberately excludes.
+
+The check needs a runner that can be asked what it collects, which not all can.
+`vitest`, `jest`, `mocha`, `cucumber-js` and Playwright all have a listing mode;
+`node --test` has none, and the generic wrap cannot know what an arbitrary
+command would collect. Where covsel cannot ask, `covsel doctor` says the check
+did not run rather than reporting that nothing is wrong — a green check that
+never looked at anything is exactly the failure this page is about. Pass
+`--require` to turn that into a non-zero exit, for a pipeline that wants the
+check or nothing.
+
+What `doctor` never does is _use_ the runner's answer. Discovery stays covsel's
+own, from `testGlobs`, because a listing covsel cannot verify would be a new way
+for the suite to shrink silently — a plugin that filters, a project split covsel
+was not told about. The runner's answer is only ever compared, never trusted.
+
 ## What a config change is measured against
 
 A map is meaningful only under the configuration it was recorded with, which is

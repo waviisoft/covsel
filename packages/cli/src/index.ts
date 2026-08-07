@@ -7,13 +7,16 @@ import {
   type Adapter,
   type AffectedResult,
   archiveDirFor,
+  compareSuites,
   computeStatus,
   type CoverageMap,
   type CovselConfig,
   DEFAULT_ARCHIVE_KEEP,
+  discoverTestFiles,
   type ExplainResult,
   explainPath,
   fetchMap,
+  hasDrift,
   type InitDiagnostics,
   type Recorder,
   type RecorderInit,
@@ -61,6 +64,8 @@ Usage:
   covsel run -- <command>                          Run only the affected tests
   covsel watch -- <command>                        Rerun affected tests as you edit
   covsel status [--format <fmt>]                   Show map age, size, and next action
+  covsel doctor [--require] [--format <fmt>]       Check covsel's test discovery against
+                -- <command>                       what the runner itself collects
   covsel explain <path> [--all]                    Show what covers a file, or what
                                                    a test covers
   covsel merge <maps...> [--out <file>]            Merge CI shard maps into one
@@ -75,9 +80,9 @@ Options:
                      (default: the config's adapter, else '${DEFAULT_ADAPTER}';
                      adapters install separately)
   --since <ref>      Diff against <ref> instead of the commit the map records
-  --format <fmt>     affected/status/fetch: 'json' for one object on stdout, for
-                     a script to read (default: 'files' for affected, 'text' for
-                     the rest)
+  --format <fmt>     affected/status/fetch/doctor: 'json' for one object on stdout,
+                     for a script to read (default: 'files' for affected, 'text'
+                     for the rest)
   --auto-approve     init: carry the plan out without asking (required with no
                      terminal, since init changes the project)
   --no-install       init: plan to configure without installing, and print the
@@ -87,7 +92,8 @@ Options:
   --no-initial-run   watch: wait for the first change instead of running at startup
   --archive <dir>    publish/fetch: the archive directory (default <store>/archive)
   --keep <n>         publish: maps to keep, oldest pruned first (default ${DEFAULT_ARCHIVE_KEEP})
-  --require          fetch: exit non-zero when no archived map can be used
+  --require          fetch: exit non-zero when no archived map can be used;
+                     doctor: exit non-zero when the adapter cannot run the check
   --force            fetch: replace a local map recorded more recently
   --all              explain: list every test and source instead of the first ${EXPLAIN_LIMIT}
 
@@ -98,7 +104,10 @@ to learn which sources it executes. affected prints those test files a diff can
 affect, so \`<runner> $(covsel affected)\` runs only what is needed. watch drives
 the same selection continuously, running the affected tests on every save.
 explain reads the map in the other direction -- what covers this file, what this
-test covered, and what a change to it would select.
+test covered, and what a change to it would select. doctor compares covsel's
+testGlobs against the files the runner itself collects: a file the runner runs
+and covsel never discovers is one no change can select, which is a test that
+leaves the suite without anything saying so.
 
 covsel never skips a test whose behavior your change could alter -- and when it
 can't be sure, it runs it (fail-open). Map schema v${MAP_SCHEMA_VERSION}.
@@ -959,6 +968,118 @@ function statusJson(s: StatusResult): unknown {
   };
 }
 
+/**
+ * Compare what covsel discovers against what the runner collects.
+ *
+ * The two are separate configurations that must agree and nothing makes them.
+ * When they drift, the failure is silent in the direction that matters: a file
+ * the runner collects and covsel does not discover is recorded by nothing,
+ * selected by nothing, and simply stops running the day selection decides what
+ * runs -- on a green job, with no line anywhere saying the suite got smaller.
+ */
+async function cmdDoctor(argv: string[]): Promise<number> {
+  const { opts, command } = splitAtDoubleDash(argv);
+  const format = readFormat('doctor', opts, 'text');
+  if (format === undefined) return 1;
+  if (command.length === 0) {
+    err(
+      'covsel doctor: expected a runner command after `--`, e.g. covsel doctor -- vitest run\n',
+    );
+    return 1;
+  }
+  const cwd = process.cwd();
+  const adapter = await resolveAdapter('doctor', opts, cwd);
+  if (!adapter) return 1;
+  const config = await loadConfigFor(cwd, adapter);
+  const requireCheck = hasFlag(opts, 'require');
+
+  // Absent is not "no drift". An adapter with no way to ask its runner leaves
+  // the question unanswered, and answering it as agreement would be a green
+  // check that never looked at anything.
+  if (adapter.listTests === undefined) {
+    if (format === 'json') json({ available: false, adapter: adapter.name });
+    else {
+      out(
+        `The ${adapter.name} adapter cannot ask its runner which files it collects, ` +
+          'so covsel has nothing to compare its own discovery against.\n' +
+          'This check is unavailable here -- it did not pass, it did not run.\n',
+      );
+    }
+    if (requireCheck) {
+      err('covsel doctor: --require was given and the check is unavailable\n');
+      return 1;
+    }
+    return 0;
+  }
+
+  let collected: string[];
+  try {
+    collected = await adapter.listTests({ command, cwd, config });
+  } catch (e) {
+    err(`covsel doctor: ${e instanceof Error ? e.message : String(e)}\n`);
+    return 1;
+  }
+
+  const discovered = discoverTestFiles(cwd, config);
+  // A runner that collected nothing has not agreed with anything: against an
+  // empty suite the comparison is vacuous, and against a real one every file
+  // reads as drift in the wrong direction. Either way the answer is that the
+  // question did not get asked properly.
+  if (collected.length === 0) {
+    if (format === 'json') {
+      json({ available: true, collectedCount: 0, discoveredCount: discovered.length });
+    } else {
+      out(
+        `The ${adapter.name} adapter reported that its runner collects no test files ` +
+          `at all, while covsel discovers ${discovered.length}.\n` +
+          'Nothing can be concluded from that comparison, so it is reported as a ' +
+          'failure rather than as two configurations that match.\n',
+      );
+    }
+    return 1;
+  }
+
+  const drift = compareSuites(discovered, collected);
+  if (format === 'json') {
+    json({
+      available: true,
+      discoveredCount: discovered.length,
+      collectedCount: new Set(collected).size,
+      unselectable: drift.unselectable,
+      unrecordable: drift.unrecordable,
+    });
+    return hasDrift(drift) ? 1 : 0;
+  }
+
+  out(`covsel discovers ${discovered.length} test file(s)\n`);
+  out(`${adapter.name} collects  ${new Set(collected).size} test file(s)\n\n`);
+  if (!hasDrift(drift)) {
+    out('The two agree: every file the runner collects is one covsel discovers.\n');
+    return 0;
+  }
+  // Named separately because the repair differs, and a reader is looking at this
+  // precisely because they do not yet know which case they have.
+  if (drift.unselectable.length > 0) {
+    out(
+      `${drift.unselectable.length} file(s) the runner collects that covsel does not discover.\n` +
+        'No change can select these, so they stop running the moment covsel decides ' +
+        'what runs -- silently, on a green job. Widen `testGlobs` to cover them:\n',
+    );
+    for (const f of drift.unselectable) out(`  ${f}\n`);
+    out('\n');
+  }
+  if (drift.unrecordable.length > 0) {
+    out(
+      `${drift.unrecordable.length} file(s) covsel discovers that the runner does not collect.\n` +
+        'covsel would ask the runner to record these and the runner was configured ' +
+        'not to run them. Add them to `testIgnore`, or collect them:\n',
+    );
+    for (const f of drift.unrecordable) out(`  ${f}\n`);
+    out('\n');
+  }
+  return 1;
+}
+
 async function cmdStatus(argv: string[]): Promise<number> {
   const format = readFormat('status', argv, 'text');
   if (format === undefined) return 1;
@@ -1475,6 +1596,8 @@ export async function main(argv: string[] = process.argv.slice(2)): Promise<numb
       return cmdWatch(rest);
     case 'status':
       return cmdStatus(rest);
+    case 'doctor':
+      return cmdDoctor(rest);
     case 'explain':
       return cmdExplain(rest);
     case 'merge':
