@@ -11,6 +11,49 @@ import { type CoverageMap, isUsableMap, type TestId } from './schema.js';
 const CONFIG_FILE_NAMES: ReadonlySet<string> = new Set<string>(CONFIG_FILES);
 
 /**
+ * What a diff was measured from, so a reason can say so.
+ *
+ * Every reason naming a changed file is about two states, and naming only one of
+ * them leaves the reader to supply the other. The obvious guess -- "changed in my
+ * branch" -- is wrong exactly when the message matters most: the window is the
+ * commit the map records against the working tree, which on a pull request
+ * includes everything merged to the default branch since the recording. A branch
+ * that never touched `covsel.config.js` is told `covsel.config.js changed`, and
+ * the author's first move is to search a diff that does not contain it.
+ */
+export interface DiffWindow {
+  /** The ref the diff was measured from. */
+  since: string;
+  /**
+   * True when that ref is the commit the map records rather than a `--since`
+   * the caller supplied, which is the difference between "since the map was
+   * recorded at X" and "since X" -- and the sentence has to stay true for both.
+   */
+  recorded: boolean;
+}
+
+/**
+ * The qualifier every file-naming reason shares, or nothing when there is no
+ * window to name.
+ *
+ * One clause used three times rather than three sentences to keep in step, and
+ * *appended* rather than woven in. Weaving it splits the phrase a reader and a
+ * grep both key on -- `sentinel changed: pnpm-lock.yaml` becomes
+ * `sentinel changed since ...: pnpm-lock.yaml` -- so the answer moves to make
+ * room for the qualifier. Trailing, the answer stays where it was and the
+ * window is what it is: a note about how the question was asked.
+ *
+ * The commit is abbreviated because it is a landmark here, not something to
+ * copy.
+ */
+function measuredSince(window: DiffWindow | undefined): string {
+  if (window === undefined) return '';
+  return window.recorded
+    ? ` (measured since the map was recorded at ${window.since.slice(0, 12)})`
+    : ` (measured since ${window.since})`;
+}
+
+/**
  * covsel's own configuration, changed since the map was recorded.
  *
  * A map is only meaningful under the configuration it was recorded with.
@@ -40,13 +83,18 @@ function changedCovselConfig(
   config: CovselConfig,
   map: CoverageMap,
   changes: Change[],
+  window?: DiffWindow,
 ): string | undefined {
   if (map.config === undefined) {
     const file = changes.find((c) => CONFIG_FILE_NAMES.has(c.file))?.file;
     return file === undefined
       ? undefined
-      : `${file} changed, so the map was recorded under a different configuration`;
+      : `${file} changed, so the map was recorded under a different configuration${measuredSince(window)}`;
   }
+  // No window on this one, and not an oversight: it compares the values the map
+  // recorded against the values in force, which is not a diff at all. It already
+  // names its own two states, and appending a second "since" would describe a
+  // question it never asked.
   const fields = changedConfigFields(map.config, recordedConfig(config));
   return fields.length === 0
     ? undefined
@@ -145,18 +193,23 @@ export function fullRunReason(
   config: CovselConfig,
   map: unknown,
   changes: Change[],
+  window?: DiffWindow,
 ): string {
+  // Of the answers that follow, the three naming a changed file carry the
+  // window. The three describing the map itself do not: none of them is about a
+  // file having moved, and "no usable map recorded since origin/main" would be a
+  // sentence about nothing.
   if (map === undefined) return 'no usable map recorded';
   if (!isUsableMap(map)) return 'recorded map is stale or has an incompatible schema';
   if (map.entries.length === 0) return 'map has no entries, so it measured nothing';
-  const configChange = changedCovselConfig(config, map, changes);
+  const configChange = changedCovselConfig(config, map, changes, window);
   if (configChange !== undefined) return configChange;
   const isSentinel = makeMatcher(config.sentinels);
   const hit = changes.find((c) => isSentinel(c.file));
-  if (hit) return `sentinel changed: ${hit.file}`;
+  if (hit) return `sentinel changed: ${hit.file}${measuredSince(window)}`;
   const unobserved = unobservedChange(map, changes);
   if (unobserved !== undefined) {
-    return `${unobserved} changed, which the recording could not observe`;
+    return `${unobserved} changed, which the recording could not observe${measuredSince(window)}`;
   }
   return 'full run';
 }

@@ -21,7 +21,7 @@ than being read as code no test covers:
 
 ```console
 $ covsel affected
-covsel: full run -- server/api.ts changed, which the recording could not observe
+covsel: full run -- server/api.ts changed, which the recording could not observe (measured since the map was recorded at a1b2c3d4e5f6)
 ```
 
 So you get real selection on client changes, and no opinion at all about the

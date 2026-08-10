@@ -972,6 +972,20 @@ describe('covsel status on a map it cannot use', () => {
     expect(out).toMatch(/exists: +no/);
   });
 
+  it('separates the full-run reason with `--`, so a reason of its own can nest', async () => {
+    // The reason is composed elsewhere and may end in a parenthesised clause --
+    // the window a change was measured over, for one. Wrapping it in a second
+    // pair here produced `full run (sentinel changed: package.json (measured
+    // since ...))`, which is why the separator is the one `covsel affected` has
+    // always used rather than brackets that can meet themselves.
+    const { out } = await inProject({ 'package.json': pkg({}) }, () =>
+      captureStdout(() => main(['status'])),
+    );
+
+    expect(out).toMatch(/next: +full run -- /);
+    expect(out).not.toContain('full run (');
+  });
+
   it('does not describe a map it could not read', async () => {
     // The recorded-at, granularity, and entry counts below the header all come
     // from a map that parsed; printing them for one that did not would be the

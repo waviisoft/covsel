@@ -32,7 +32,7 @@ import { makeMatcher, makeStrictMatcher, matchesAny } from './match.js';
 import { type MapperConfig, V8FileMapper } from './mapper.js';
 import { ProcessObserver } from './observer.js';
 import { hashFileContents, isExcludedRel, toRepoRelative, walkFiles } from './paths.js';
-import { FailOpenPolicy, fullRunReason } from './policy.js';
+import { type DiffWindow, FailOpenPolicy, fullRunReason } from './policy.js';
 import {
   type CoverageMap,
   type Granularity,
@@ -715,6 +715,25 @@ type DiffBase =
   | { kind: 'untrusted'; reason: string };
 
 /**
+ * The diff base as a reason can name it, or nothing when there is none to name.
+ *
+ * `exact` is what tells the two apart: it is set only when the base is the
+ * commit the map records, so an explicit `--since` reads as "since origin/main"
+ * rather than claiming a recording that never happened there.
+ *
+ * Returning nothing costs a reason its window, and the reasons that name a file
+ * never take that path — not by a check, but because every route to one has a
+ * base: with no `--since` and no map the reason is "no usable map recorded",
+ * with no map commit it is either untrusted or not a git tree at all, and the
+ * latter throws out of `diffChanges` before any reason is chosen. Worth knowing
+ * if a fourth kind of base is ever added.
+ */
+function windowOf(base: DiffBase): DiffWindow | undefined {
+  if (base.kind !== 'base' || base.since === undefined) return undefined;
+  return { since: base.since, recorded: base.exact === true };
+}
+
+/**
  * Decide what to diff against. A map describes the repository as it was at the
  * commit it was recorded on, so that commit — not the merge-base with the
  * default branch — is the honest starting point: anything changed since then is
@@ -819,7 +838,7 @@ export async function selectAffected(init: SelectInit): Promise<AffectedResult> 
 
   const policy = new FailOpenPolicy(config);
   if (policy.evaluate(map, fileChanges) === 'full-run') {
-    return fullRun(fullRunReason(config, map, fileChanges));
+    return fullRun(fullRunReason(config, map, fileChanges, windowOf(base)));
   }
 
   if (map!.granularity === 'block' && config.granularity !== 'file') {
@@ -1204,7 +1223,7 @@ function nextSelection(
     const fileChanges =
       accounted.size === 0 ? changes : changes.filter((c) => !accounted.has(c.file));
     return new FailOpenPolicy(config).evaluate(map, fileChanges) === 'full-run'
-      ? { fullRun: true, reason: fullRunReason(config, map, fileChanges) }
+      ? { fullRun: true, reason: fullRunReason(config, map, fileChanges, windowOf(base)) }
       : { fullRun: false };
   } catch {
     return { fullRun: true, reason: 'could not compute a git diff' };
