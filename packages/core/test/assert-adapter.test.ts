@@ -57,6 +57,11 @@ describe('assertAdapter', () => {
       /runSelection is string/,
     ],
     [
+      'a listTests that is not callable',
+      { ...conforming, listTests: 'yes' },
+      /listTests is string/,
+    ],
+    [
       'globs that are not strings',
       { ...conforming, defaultTestGlobs: [1] },
       /not an array of strings/,

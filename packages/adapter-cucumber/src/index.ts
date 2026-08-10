@@ -17,6 +17,12 @@ import { fileURLToPath } from 'node:url';
 import {
   type Adapter,
   type CoveredFile,
+  listedPaths,
+  listingJson,
+  listingOutput,
+  notAListing,
+  refuseNarrowing,
+  runnerTokenIndex,
   type MapperConfig,
   OBSERVES_EVERYTHING,
   type Recorder,
@@ -45,7 +51,41 @@ export const cucumberAdapter: Adapter = {
   runSelection(init: SelectionRunInit): number {
     return runCucumberSelection(init);
   },
+  listTests(init: RecorderInit): Promise<string[]> {
+    return Promise.resolve(listCucumberFeatures(init));
+  },
 };
+
+/**
+ * The feature files cucumber itself would collect, repo-relative.
+ *
+ * A dry run resolves the feature paths and matches every step against the step
+ * definitions without invoking any, and answers with the feature files -- the
+ * unit this adapter records. `uri` is already relative to where cucumber ran.
+ *
+ * An undefined step fails the dry run rather than yielding a partial listing,
+ * which is the right way round: covsel gets no answer and says the check could
+ * not be made, instead of a subset that reads as drift against features nothing
+ * is wrong with.
+ */
+export function listCucumberFeatures(init: RecorderInit): string[] {
+  refuseNarrowing('cucumber', init.command, runnerTokenIndex(init.command, 'cucumber'));
+  const stdout = listingOutput({
+    runner: 'cucumber',
+    argv: [...init.command, '--dry-run', '--format', 'json'],
+    cwd: init.cwd,
+  });
+  const parsed = listingJson('cucumber', stdout);
+  if (!Array.isArray(parsed)) throw notAListing('cucumber');
+  const uris = parsed.flatMap((feature: unknown) => {
+    const uri = (feature as { uri?: unknown }).uri;
+    return typeof uri === 'string' ? [uri] : [];
+  });
+  // Parsed as an array but with no `uri` anywhere is some other JSON, not an
+  // empty suite -- and an empty answer certifies agreement with nothing.
+  if (parsed.length > 0 && uris.length === 0) throw notAListing('cucumber');
+  return listedPaths(init.cwd, uris);
+}
 
 /**
  * The export the dynamic resolver reads, so this package is selectable by its

@@ -15,7 +15,10 @@ const REQUIRED = [
 ] as const;
 
 /** The capabilities an adapter may omit, and the type they take when present. */
-const OPTIONAL = [['runSelection', 'function']] as const;
+const OPTIONAL = [
+  ['runSelection', 'function'],
+  ['listTests', 'function'],
+] as const;
 
 /**
  * Narrow an arbitrary value to an `Adapter`, or throw explaining what is wrong

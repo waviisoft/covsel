@@ -20,6 +20,12 @@ import { fileURLToPath } from 'node:url';
 import {
   type Adapter,
   type CoveredFile,
+  listedPaths,
+  listingJson,
+  listingOutput,
+  notAListing,
+  refuseNarrowing,
+  runnerTokenIndex,
   type MapperConfig,
   OBSERVES_EVERYTHING,
   type Recorder,
@@ -63,7 +69,48 @@ export const mochaAdapter: Adapter = {
   runSelection(init: SelectionRunInit): number {
     return runMochaSelection(init);
   },
+  listTests(init: RecorderInit): Promise<string[]> {
+    return Promise.resolve(listMochaTests(init));
+  },
 };
+
+/**
+ * The spec files Mocha itself would collect, repo-relative.
+ *
+ * Mocha has no list mode, so this is a dry run: it loads every spec and
+ * registers the tests without executing any. Loading is not free of consequence
+ * -- a spec with a top-level throw fails the listing -- but it is the only way
+ * to get mocha's own answer, and its own answer is the whole point. Re-deriving
+ * `spec` and `.mocharc` here would rebuild the second opinion this exists to
+ * catch.
+ *
+ * Reported per *test*, so a file is named once per test it holds and the set is
+ * what matters. A spec file holding no tests is invisible here, which makes this
+ * able to miss a file rather than to invent one -- the right way round, since a
+ * missed file leaves drift unreported while a phantom one would send someone
+ * editing a config that was correct.
+ */
+export function listMochaTests(init: RecorderInit): string[] {
+  refuseNarrowing('mocha', init.command, runnerTokenIndex(init.command, 'mocha'));
+  const stdout = listingOutput({
+    runner: 'mocha',
+    argv: [...init.command, '--dry-run', '--reporter', 'json'],
+    cwd: init.cwd,
+  });
+  const parsed = listingJson('mocha', stdout);
+  if (typeof parsed !== 'object' || parsed === null) throw notAListing('mocha');
+  const report = parsed as { tests?: unknown; pending?: unknown };
+  const rows = [report.tests, report.pending].flatMap((v) => (Array.isArray(v) ? v : []));
+  // An object with neither list is some other JSON that happened to parse.
+  if (!Array.isArray(report.tests) && !Array.isArray(report.pending)) {
+    throw notAListing('mocha');
+  }
+  const files = rows.flatMap((row: unknown) => {
+    const file = (row as { file?: unknown }).file;
+    return typeof file === 'string' ? [file] : [];
+  });
+  return listedPaths(init.cwd, files);
+}
 
 /**
  * The export the dynamic resolver reads, so this package is selectable by its
