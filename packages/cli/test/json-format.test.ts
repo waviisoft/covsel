@@ -465,6 +465,7 @@ describe('--format', () => {
     ['affected', 'files'],
     ['status', 'text'],
     ['fetch', 'text'],
+    ['doctor', 'text'],
   ])('%s rejects a format it cannot print', async (cmd, human) => {
     const { code, err } = await inProject({ 'package.json': pkg }, () =>
       capture(() => main([cmd, '--format', 'yaml'])),
@@ -480,6 +481,7 @@ describe('--format', () => {
     ['affected', 'files'],
     ['status', 'text'],
     ['fetch', 'text'],
+    ['doctor', 'text'],
   ])('%s rejects --format with nothing after it', async (cmd, human) => {
     // `covsel affected --format "$FMT"` with `FMT` unset is this argv, and
     // defaulting to prose there answers a pipeline that asked for data with

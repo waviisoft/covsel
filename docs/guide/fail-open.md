@@ -238,6 +238,67 @@ it:
 map beside `discovered: 0 test file(s)` is the one combination worth noticing at a
 glance.
 
+### Discovering _some_ of the suite is the quieter failure
+
+Everything above catches covsel finding nothing. Finding most of it is harder,
+because there is no number on the page that looks wrong. Your runner has its own
+answer to "which files are the tests" — `include`, `testMatch`, `spec` — and
+covsel has `testGlobs`. Nothing makes the two agree, and when they drift the
+consequences are not symmetric:
+
+- A file **the runner collects and covsel does not discover** is recorded by
+  nothing and selected by nothing. It runs today, because your full-run job runs
+  it; it stops running the day selection decides what runs, on a green job, with
+  no line anywhere saying the suite got smaller.
+- A file **covsel discovers and the runner does not collect** is the reverse:
+  recording hands the runner a file it was configured not to run, and depending
+  on the runner that is a hard failure or an entry recorded as silence.
+
+`covsel doctor` asks the runner which files it collects and compares that against
+what covsel discovered:
+
+```bash
+covsel doctor --require -- vitest run
+```
+
+```
+covsel discovers 71 test file(s)
+vitest collects  76 test file(s)
+
+6 file(s) the runner collects that covsel does not discover.
+No change can select these, so they stop running the moment covsel decides what
+runs -- silently, on a green job. Widen `testGlobs` to cover them:
+  benchmarks/test/cli.test.ts
+  benchmarks/test/metrics.test.ts
+  ...
+
+1 file(s) covsel discovers that the runner does not collect.
+covsel would ask the runner to record these and the runner was configured not to
+run them. Add them to `testIgnore`, or collect them.
+First check that the command above is your whole suite: a filter, `--project`,
+or a narrowed run makes every file it left out appear here, and none of those is
+a config problem.
+  packages/adapter-playwright/test/conformance.test.ts
+```
+
+It exits non-zero when the two disagree, so it belongs in CI beside your other
+checks. Each direction names the field that repairs it: `testGlobs` to discover
+more, [`testIgnore`](/guide/getting-started) to subtract a file your runner
+deliberately excludes.
+
+The check needs an adapter that can ask its runner what it collects, and today
+that is the Vitest adapter. Every other adapter, the generic wrap included, omits
+the capability, so `covsel doctor` says the check did not run rather than
+reporting that nothing is wrong — a green check that
+never looked at anything is exactly the failure this page is about. Pass
+`--require` to turn that into a non-zero exit, for a pipeline that wants the
+check or nothing.
+
+What `doctor` never does is _use_ the runner's answer. Discovery stays covsel's
+own, from `testGlobs`, because a listing covsel cannot verify would be a new way
+for the suite to shrink silently — a plugin that filters, a project split covsel
+was not told about. The runner's answer is only ever compared, never trusted.
+
 ## Since when a file changed
 
 A reason that names a file is about two states, and the guess a reader reaches

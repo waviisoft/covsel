@@ -17,7 +17,10 @@ import {
   type CoverageMap,
   type CovselConfig,
   type CovselConfigInput,
+  compareSuites,
+  discoverTestFiles,
   extractBlocks,
+  hasDrift,
   makeMatcher,
   makeStrictMatcher,
   MAP_SCHEMA_VERSION,
@@ -845,6 +848,53 @@ const CHECKS: { name: string; run: Check }[] = [
           );
         }
         return `honours file granularity, so covsel's reading of its ${spec.adapter.coverageReport} report is what counts`;
+      } finally {
+        project.dispose();
+      }
+    },
+  },
+  {
+    name: 'an adapter that can list its runner’s tests lists them the way covsel discovers them',
+    run: async (spec) => {
+      // Only for adapters that declare `listTests`. A runner with no listing
+      // mode has nothing to be held to here.
+      if (spec.adapter.listTests === undefined) {
+        return 'not applicable: this adapter cannot ask its runner what it collects';
+      }
+
+      // The answer exists to be compared against `discoverTestFiles`, and a
+      // comparison is only worth anything if both sides speak the same paths.
+      // An adapter reporting absolute paths, or Windows separators, or a leading
+      // `./`, disagrees with covsel about every file at once -- which reads as a
+      // project whose entire suite drifted, on a project where nothing is wrong.
+      const project = createProject(spec);
+      try {
+        const listed = await spec.adapter.listTests({
+          command: spec.fixture.command,
+          cwd: project.cwd,
+          config: project.config,
+        });
+        const discovered = discoverTestFiles(project.cwd, project.config);
+        const drift = compareSuites(discovered, listed);
+        if (hasDrift(drift)) {
+          throw new Error(
+            `this adapter's listing and covsel's discovery disagree about a fixture ` +
+              `neither is misconfigured for. Files listed but not discovered: ` +
+              `${drift.unselectable.join(', ') || '(none)'}; discovered but not listed: ` +
+              `${drift.unrecordable.join(', ') || '(none)'}. Both sides must be ` +
+              `repo-relative POSIX paths`,
+          );
+        }
+        // A listing that agrees with discovery by being empty agrees with
+        // nothing: the fixture has test files, and an adapter returning none
+        // would certify here while telling every real project its whole suite
+        // had drifted.
+        if (listed.length === 0) {
+          throw new Error(
+            'this adapter listed no test files at all for a fixture that has them',
+          );
+        }
+        return `lists ${listed.length} test file(s), matching what covsel discovers`;
       } finally {
         project.dispose();
       }
