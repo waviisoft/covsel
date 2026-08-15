@@ -27,6 +27,12 @@ import {
   type Adapter,
   combineObservations,
   type CovselConfig,
+  listedPaths,
+  listingJson,
+  listingOutput,
+  notAListing,
+  refuseNarrowing,
+  runnerTokenIndex,
   type MapperConfig,
   type ObservationWindow,
   type Recorder,
@@ -75,7 +81,55 @@ export const playwrightAdapter: Adapter = {
   runSelection(init: SelectionRunInit): number {
     return runPlaywrightSelection(init);
   },
+  listTests(init: RecorderInit): Promise<string[]> {
+    return Promise.resolve(listPlaywrightSpecs(init));
+  },
 };
+
+/**
+ * The spec files Playwright itself would collect, repo-relative.
+ *
+ * `test` is a subcommand rather than a flag, so the narrowing guard starts after
+ * it -- otherwise `npx playwright test` reads as three filters and every project
+ * is refused.
+ *
+ * Suites nest: a project layer wraps a file layer wraps describes, and `file` is
+ * relative to the report's own `rootDir`, which is `testDir` and so usually not
+ * the repository root. Both are why this walks rather than reading
+ * `suites[].file` -- a config with `projects` names every file once per project,
+ * and the top layer would give project names.
+ */
+export function listPlaywrightSpecs(init: RecorderInit): string[] {
+  const at = runnerTokenIndex(init.command, 'playwright');
+  const test = init.command.indexOf('test', at === -1 ? 0 : at);
+  refuseNarrowing('playwright', init.command, test === -1 ? at : test);
+  const stdout = listingOutput({
+    runner: 'playwright',
+    argv: [...init.command, '--list', '--reporter=json'],
+    cwd: init.cwd,
+  });
+  const parsed = listingJson('playwright', stdout);
+  if (typeof parsed !== 'object' || parsed === null) throw notAListing('playwright');
+  const report = parsed as { config?: { rootDir?: unknown }; suites?: unknown };
+  const root = report.config?.rootDir;
+  // `--list` always reports both. Their absence means this was not a Playwright
+  // listing, and guessing a root would relativise every path against the wrong
+  // directory -- which compares as the whole suite having drifted.
+  if (typeof root !== 'string' || !Array.isArray(report.suites)) {
+    throw notAListing('playwright');
+  }
+  const files: string[] = [];
+  const walk = (suites: unknown): void => {
+    if (!Array.isArray(suites)) return;
+    for (const suite of suites) {
+      const node = suite as { file?: unknown; suites?: unknown };
+      if (typeof node.file === 'string') files.push(join(root, node.file));
+      walk(node.suites);
+    }
+  };
+  walk(report.suites);
+  return listedPaths(init.cwd, files);
+}
 
 /**
  * The export the dynamic resolver reads, so this package is selectable by its

@@ -20,6 +20,12 @@ import {
   type Adapter,
   type CovselConfig,
   istanbulCoverage,
+  listedPaths,
+  listingJson,
+  listingOutput,
+  notAListing,
+  refuseNarrowing,
+  runnerTokenIndex,
   OBSERVES_EVERYTHING,
   readIstanbulReport,
   type Recorder,
@@ -38,7 +44,33 @@ export const jestAdapter: Adapter = {
   createRecorder(init: RecorderInit): Recorder {
     return createJestRecorder(init);
   },
+  listTests(init: RecorderInit): Promise<string[]> {
+    return Promise.resolve(listJestTests(init));
+  },
 };
+
+/**
+ * The test files Jest itself would collect, repo-relative.
+ *
+ * `--listTests --json` is Jest's own answer, resolved through the same
+ * `testMatch` and `testPathIgnorePatterns` a run uses, and nothing executes.
+ */
+export function listJestTests(init: RecorderInit): string[] {
+  refuseNarrowing('jest', init.command, runnerTokenIndex(init.command, 'jest'));
+  const stdout = listingOutput({
+    runner: 'jest',
+    argv: [...init.command, '--listTests', '--json'],
+    cwd: init.cwd,
+  });
+  const parsed = listingJson('jest', stdout);
+  // A flat array of path strings, and nothing else. Jest's other `--json`
+  // outputs are objects, so a command that was not this one fails here rather
+  // than comparing as drift.
+  if (!Array.isArray(parsed) || !parsed.every((e) => typeof e === 'string')) {
+    throw notAListing('jest');
+  }
+  return listedPaths(init.cwd, parsed as string[]);
+}
 
 /**
  * The export the dynamic resolver reads, so this package is selectable by its
