@@ -62,7 +62,7 @@ export type {
   PageLike,
   TestInfoLike,
 } from './fixture.js';
-export { RemoteCoverageSession } from './server-session.js';
+export { RemoteCoverageSession } from '@covsel/core';
 export { covselFixtures } from './fixture.js';
 export type { ObservedTest, ObservedWindow, FailedWindow } from './protocol.js';
 

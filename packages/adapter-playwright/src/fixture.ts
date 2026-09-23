@@ -29,9 +29,12 @@
 import { appendFileSync } from 'node:fs';
 import { join, relative } from 'node:path';
 
-import { type MapperConfig, UnmappableScriptError, V8FileMapper } from '@covsel/core';
-
-import { RemoteCoverageSession } from './server-session.js';
+import {
+  type MapperConfig,
+  RemoteCoverageSession,
+  UnmappableScriptError,
+  V8FileMapper,
+} from '@covsel/core';
 
 import {
   BLOCKS_ENV,

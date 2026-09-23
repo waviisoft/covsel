@@ -39,6 +39,8 @@ jobs:
         run: pnpm --filter @covsel/example-cucumber-basic e2e
       - name: Golden example — Mocha through the generic wrap end-to-end
         run: pnpm --filter @covsel/example-mocha-basic e2e
+      - name: Golden example — an external Python harness, recorded from the server's inspector
+        run: pnpm --filter @covsel/example-harness-basic e2e
       - run: pnpm format:check
 
   browser:

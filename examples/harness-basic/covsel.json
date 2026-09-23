@@ -1,0 +1,11 @@
+{
+  "adapter": "harness",
+  "testGlobs": ["harness/tests/**/*.harness"],
+  "harness": {
+    "run": "--only {id}",
+    "server": {
+      "inspectUrl": "http://127.0.0.1:9339",
+      "observes": ["src/**", "server.mjs"]
+    }
+  }
+}

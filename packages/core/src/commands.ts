@@ -1015,7 +1015,7 @@ export interface SelectionOutcome {
  * so what the suite certifies is what the product runs.
  */
 export function runSelected(init: RunSelectedInit): SelectionOutcome {
-  const { adapter, selected, command, cwd } = init;
+  const { adapter, selected, command, cwd, config } = init;
   const stdio = init.stdio ?? 'inherit';
   const [bin, ...rest] = command;
   if (bin === undefined) throw new Error('empty command');
@@ -1025,7 +1025,15 @@ export function runSelected(init: RunSelectedInit): SelectionOutcome {
   // selection, so deciding it here is what keeps the two paths agreeing.
   if (selected.length === 0) return { status: 0 };
   if (adapter.runSelection) {
-    return { status: adapter.runSelection({ selected, command, cwd, stdio }) };
+    return {
+      status: adapter.runSelection({
+        selected,
+        command,
+        cwd,
+        stdio,
+        ...(config !== undefined ? { config } : {}),
+      }),
+    };
   }
   const args = [...rest, ...adapter.formatSelection(selected)];
   // Silencing the runner still has to leave a failure diagnosable, so its output
@@ -1077,6 +1085,7 @@ export function runAffectedSelection(init: RunAffectedSelectionInit): SelectionO
     command,
     cwd,
     ...(init.stdio !== undefined ? { stdio: init.stdio } : {}),
+    ...(init.config !== undefined ? { config: init.config } : {}),
   });
 }
 
@@ -1096,6 +1105,7 @@ export async function runAffected(
     selection,
     command: init.command,
     cwd: init.cwd,
+    config: init.config,
   }).status;
 }
 

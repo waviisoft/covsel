@@ -3,7 +3,7 @@ import { createServer, type Server } from 'node:http';
 import type { AddressInfo } from 'node:net';
 import { afterEach, describe, expect, it } from 'vitest';
 
-import { RemoteCoverageSession } from '../src/server-session.js';
+import { RemoteCoverageSession } from '../src/remote-coverage-session.js';
 
 /**
  * The application server's profiler, over the wire.

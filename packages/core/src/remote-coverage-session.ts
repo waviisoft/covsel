@@ -1,24 +1,23 @@
 /**
- * The V8 profiler of the application server, over the wire.
+ * The V8 profiler of a server process covsel did not spawn, over the wire.
  *
- * A UI test executes code in three places, and the second one covsel can reach
- * is the server the page talks to. Playwright starts it (`webServer`), so covsel
- * cannot spawn it under `NODE_V8_COVERAGE` — and that dump would only arrive at
- * exit, attributing a whole run's server execution to nothing in particular.
- * Node's own inspector answers both: it speaks while the process is alive, and it
- * speaks the protocol V8 coverage already comes in.
+ * Some of what a test executes runs in a server the recorder never started under
+ * `NODE_V8_COVERAGE` -- a Playwright `webServer`, or an application an external
+ * harness drives over HTTP. A dump at exit would attribute a whole run's server
+ * execution to nothing in particular. Node's own inspector answers both: it
+ * speaks while the process is alive, and it speaks the protocol V8 coverage
+ * already comes in.
  *
  * A session per test, started inside it and stopped at the end, so what comes
  * back is what that test made the server do — no baseline to subtract, and
  * nothing of the previous test left in it. The cost is a connection per test; the
- * benefit is that no socket outlives the test that opened it, which in a
- * Playwright worker is the difference between a run that exits and one that
- * hangs.
+ * benefit is that no socket outlives the test that opened it, which is the
+ * difference between a run that exits and one that hangs.
  *
  * The project opts in by starting its server with `--inspect`. Nothing of covsel
  * runs inside it.
  */
-import type { ScriptCoverage } from '@covsel/core';
+import type { ScriptCoverage } from './observer.js';
 
 /** What Node's inspector publishes about the target it will accept. */
 interface InspectorTarget {

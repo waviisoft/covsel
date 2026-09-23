@@ -348,6 +348,7 @@ function runSelected(
     command: spec.fixture.command,
     cwd: project.cwd,
     stdio: 'ignore',
+    config: project.config,
   });
 
   const ran = existsSync(marker)

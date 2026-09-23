@@ -239,6 +239,15 @@ export interface SelectionRunInit {
   cwd: string;
   /** Child stdio (default `'inherit'`, so the user sees the runner's output). */
   stdio?: 'inherit' | 'ignore';
+  /**
+   * The project's resolved configuration, for an adapter whose native
+   * narrowing is itself project-configurable — an external harness's selection
+   * flag, say, rather than a fixed CLI convention every project shares. Every
+   * caller in this codebase supplies it; optional only so a narrowing that
+   * never needed it, and a test double built before this existed, are not
+   * broken by its arrival.
+   */
+  config?: CovselConfig;
 }
 
 /**

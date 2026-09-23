@@ -27,6 +27,9 @@ export const workspaceAlias: Record<string, string> = {
   '@covsel/adapter-playwright': fileURLToPath(
     new URL('./packages/adapter-playwright/src/index.ts', import.meta.url),
   ),
+  '@covsel/adapter-harness': fileURLToPath(
+    new URL('./packages/adapter-harness/src/index.ts', import.meta.url),
+  ),
   '@covsel/conformance/vitest': fileURLToPath(
     new URL('./packages/conformance/src/vitest.ts', import.meta.url),
   ),

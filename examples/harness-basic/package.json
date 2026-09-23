@@ -1,0 +1,16 @@
+{
+  "name": "@covsel/example-harness-basic",
+  "version": "0.0.0",
+  "private": true,
+  "description": "End-to-end example: covsel record -> affected driving a Python harness against a Node server, from the server's inspector",
+  "license": "MIT",
+  "author": "WAVIISoft, LLC",
+  "type": "module",
+  "scripts": {
+    "e2e": "node ./e2e.mjs"
+  },
+  "devDependencies": {
+    "@covsel/adapter-harness": "workspace:*",
+    "covsel": "workspace:*"
+  }
+}

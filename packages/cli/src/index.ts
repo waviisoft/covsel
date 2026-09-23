@@ -914,7 +914,7 @@ async function cmdWatch(argv: string[]): Promise<number> {
       cwd,
       config,
       run: (selection) =>
-        runAffectedSelection({ adapter, selection, command, cwd }).status,
+        runAffectedSelection({ adapter, selection, command, cwd, config }).status,
       onEvent: reportWatchEvent,
       signal: controller.signal,
       ...(since !== undefined ? { since } : {}),
