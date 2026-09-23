@@ -18,11 +18,32 @@ export interface HarnessServerConfig {
   observes: string[];
 }
 
-/** Presence, not its (currently empty) contents, selects the boundary-protocol recording path over one invocation per test. */
+/** Presence, not its (by default empty) contents, selects the boundary-protocol recording path over one invocation per test. */
 export interface HarnessBoundaryConfig {
-  /** How long covsel waits for a begin/end round trip before failing the recording. */
+  /**
+   * How long a single inspector round trip (opening or closing a coverage
+   * window) may take before that window fails. Passed straight through to
+   * `RemoteCoverageSession`; defaults to its own default.
+   */
   timeoutMs?: number;
+  /**
+   * How long one test's window may stay open -- from `/begin`'s response to
+   * a matching `/end` -- before covsel gives up on it and fails the whole
+   * recording, killing the harness rather than waiting on it forever. This is
+   * a safety net against a genuinely stuck harness or application, not a
+   * budget for a slow test: it defaults generously (ten minutes) because a
+   * default that is too short costs nothing but an annoying failure -- a
+   * recording that never completes still falls open to a full run -- while
+   * one with no ceiling at all can hang `covsel record` indefinitely with
+   * nothing to explain why.
+   */
+  testTimeoutMs?: number;
 }
+
+/** Ten minutes: generous for a real test, and still short enough that a stuck
+ * harness fails the recording within a CI job's own timeout rather than
+ * exhausting it silently. */
+export const DEFAULT_TEST_TIMEOUT_MS = 600_000;
 
 export interface HarnessConfig {
   run: RunTemplate;
@@ -100,7 +121,14 @@ export function resolveHarnessConfig(raw: unknown): HarnessConfig {
     if (timeoutMsValue !== undefined && typeof timeoutMsValue !== 'number') {
       fail('.boundary.timeoutMs is not a number.');
     }
-    boundary = { ...(timeoutMsValue !== undefined ? { timeoutMs: timeoutMsValue } : {}) };
+    const testTimeoutMsValue = boundaryValue.testTimeoutMs;
+    if (testTimeoutMsValue !== undefined && typeof testTimeoutMsValue !== 'number') {
+      fail('.boundary.testTimeoutMs is not a number.');
+    }
+    boundary = {
+      ...(timeoutMsValue !== undefined ? { timeoutMs: timeoutMsValue } : {}),
+      ...(testTimeoutMsValue !== undefined ? { testTimeoutMs: testTimeoutMsValue } : {}),
+    };
   }
 
   return {

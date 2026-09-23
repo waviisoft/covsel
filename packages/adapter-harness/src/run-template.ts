@@ -18,6 +18,12 @@
  * Tokens split on whitespace, with double quotes protecting a token that
  * contains it (`--flag "{id}"` is one token, `{id}`) — enough for the flags a
  * CLI expects, not a full shell grammar.
+ *
+ * `{id}` always repeats the single token immediately before it, whatever that
+ * token is — normally the flag it belongs to, but a template that puts
+ * something else there (`"run {id} --verbose"`) gets that repeated instead,
+ * once per id, with `--verbose` left at the end. Put the id-taking flag
+ * directly in front of `{id}` to avoid this.
  */
 
 const PLACEHOLDER = /^\{ids?\}$/;

@@ -128,6 +128,13 @@ makes it safe to build into a harness permanently. See
 [the boundary protocol](/guide/adapters/boundary-protocol) for the wire
 format and a reference client.
 
+If a test never reports `/end` — a genuinely stuck harness or application,
+not a slow test — covsel gives up on it after `harness.boundary.testTimeoutMs`
+(ten minutes by default) and fails the recording rather than waiting
+forever. Raise it for a suite with legitimately longer individual tests;
+`harness.boundary.timeoutMs` is a separate, much shorter bound on the
+inspector round trips around each window, not on the test itself.
+
 ## Serial recording, and shared server state
 
 One application process, one test at a time, for the whole recording — the

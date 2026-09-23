@@ -52,9 +52,14 @@ every adapter, and this one's `runSelection` does too, since nothing stops a
 future caller from reaching it directly.
 
 Fail-open rules carry over unchanged: a test the run never reported, a red test,
-or an unreachable inspector all fail the recording, and the harness's own code
-(step definitions, page objects) has to be a sentinel, since a change there can
-change what a test does with no application change at all.
+an unreachable inspector, or a boundary-protocol violation (two tests
+overlapping, an `end` naming a test that was not open) all fail the whole
+recording, and the harness's own code (step definitions, page objects) has to
+be a sentinel, since a change there can change what a test does with no
+application change at all. A test that never reports `/end` -- a stuck harness
+or application, not a slow test -- fails the recording after
+`harness.boundary.testTimeoutMs` (ten minutes by default) rather than hanging
+`covsel record` forever.
 
 Two small additions elsewhere make this possible without coupling adapters to
 each other or hardcoding a fixed CLI convention:
