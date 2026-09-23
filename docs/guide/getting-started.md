@@ -235,6 +235,7 @@ Selection needs no configuration once an adapter is installed. To refine, add a 
   "adapter": "vitest", // the installed adapter to record with; --adapter overrides
   "testGlobs": ["**/*.{test,spec}.?(c|m)[jt]s?(x)"],
   "testIgnore": [], // test files the runner you wrap will not run (see below)
+  "inventory": { "command": "..." }, // an external test inventory (see below); unset by default
   "sourceGlobs": ["**/*"], // repo minus node_modules/dist/coverage/.covsel and tests
   "alwaysRun": ["**/fixtures/**"], // test files that must always run
   "sentinels": ["package.json", "pnpm-lock.yaml", "tsconfig*.json"], // replaces the defaults below
@@ -285,6 +286,47 @@ except this one" is not something a glob set can say. It is also a claim that
 skips tests when it is wrong — a file named here is never discovered, recorded,
 or selected — so `covsel status` reports how many files it removed, and changing
 the list forces a full run like any other configuration change.
+
+### Tests that aren't files in this repository
+
+`testGlobs` and a git diff are how covsel notices a test changed, and that
+depends on the test's definition living in this repository's own history. Some
+suites don't work that way: a spec-driven project pins a scenario suite from
+another repository, a contract test is pulled from a broker, a suite is kept in
+a test-management system. A one-line pin move can rewrite what dozens of tests
+do, and nothing in this repository's diff says so.
+
+`inventory.command` names a shell command whose output is covsel's own
+inventory JSON — every test's id, and, where its owner tracks one, an opaque
+version that changes exactly when the test's definition did:
+
+```jsonc
+{
+  "inventory": {
+    "command": "vellum suite extract $VELLUM_INTENT_REPO -o - | jq '{source: env.HARNESS_SHA, entries: [.scenarios[] | {id: {file: .file, name: .id}, version: .version}]}'",
+  },
+}
+```
+
+`id.file` need not be a path in this repository — an inventory can name a
+virtual one, the way `spec:features/agenda.md` names a scenario file that lives
+in another repository entirely. Recording reads the command once and stores
+what it produced; selection reads it again and compares:
+
+- an id the map never recorded is new, and runs;
+- an id whose version differs from the recorded one has changed, and runs;
+- an id with no version at all always runs — it is never read as unchanged;
+- an id the map recorded that the inventory no longer names is dropped, and
+  selects nothing on its own;
+- a different `source` — the identity of whatever defines and executes these
+  tests — is read the way a sentinel is: the whole suite runs, because a
+  different harness can change what every test in it does without moving a
+  single id or version.
+
+A command that fails, or whose output does not parse as this shape, is a full
+run, the same as an unusable map — never an empty selection. `covsel status`
+and `covsel explain` report how many of the inventory's tests are new or
+changed since the map was recorded.
 
 Any change matching `sentinels` forces a full run. A change to this file itself
 forces one when it moves a value covsel reads — a reworded comment or a

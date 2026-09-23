@@ -41,9 +41,11 @@ import {
   type MapEntry,
   OBSERVES_EVERYTHING,
   type TestId,
+  type TestInventory,
 } from './schema.js';
 import { FileSelector } from './selector.js';
 import { LocalStore, type StoredMap } from './store.js';
+import { readTestInventory, testInventoryChange } from './test-inventory.js';
 
 export interface GenericRecorderInit {
   command: string[];
@@ -191,6 +193,7 @@ function assembleMap(
   observed: readonly string[],
   dirty: boolean,
   observesPackages: boolean,
+  testInventory: TestInventory | undefined,
 ): CoverageMap {
   // A commit is a claim that this map describes that commit's tree, and selection
   // treats it as exact. Recording from an edited tree describes a state no commit
@@ -224,6 +227,7 @@ function assembleMap(
     config: recordedConfig(config),
     observed: [...observed],
     ...(dependencies ? { dependencies } : {}),
+    ...(testInventory ? { testInventory } : {}),
     entries,
   };
 }
@@ -607,6 +611,28 @@ export async function recordMap(init: RecordInit): Promise<RecordResult> {
     };
   }
 
+  // Read before the map is assembled, and failure refuses the map the same
+  // way an empty discovery does: the project asked covsel to track an
+  // external inventory, and a map recorded with no baseline for it would be
+  // indistinguishable from one recorded before the feature existed -- except
+  // that here, unlike there, nothing about the sources this recording just
+  // measured says so. Silence is what this whole mechanism exists to replace.
+  let testInventory: TestInventory | undefined;
+  if (config.inventory !== undefined) {
+    const result = readTestInventory({ cwd, command: config.inventory.command });
+    if (!result.ok) {
+      return {
+        ok: false,
+        recorded: entries.length,
+        failures: [],
+        mapPath: store.path(),
+        testFiles,
+        error: `the test inventory could not be produced: ${result.reason}`,
+      };
+    }
+    testInventory = result.inventory;
+  }
+
   const recordedAt = init.recordedAt ?? new Date().toISOString();
   // The map claims one scope for every entry in it, so it may claim no more than
   // the units agreed on: an entry watched by a narrower set of windows than
@@ -623,6 +649,7 @@ export async function recordMap(init: RecordInit): Promise<RecordResult> {
     observed,
     dirty,
     observesPackages,
+    testInventory,
   );
   await store.write(map);
   return {
@@ -836,6 +863,14 @@ export async function selectAffected(init: SelectInit): Promise<AffectedResult> 
   const fileChanges =
     accounted.size === 0 ? changes : changes.filter((c) => !accounted.has(c.file));
 
+  // The inventory axis, asked independently of the diff: an external test's
+  // definition can change without moving any file this repository tracks, so
+  // nothing above would ever notice.
+  const testInv = isUsableMap(map)
+    ? testInventoryChange({ cwd, config, map })
+    : undefined;
+  if (testInv?.fallOpen !== undefined) return fullRun(testInv.fallOpen);
+
   const policy = new FailOpenPolicy(config);
   if (policy.evaluate(map, fileChanges) === 'full-run') {
     return fullRun(fullRunReason(config, map, fileChanges, windowOf(base)));
@@ -858,7 +893,13 @@ export async function selectAffected(init: SelectInit): Promise<AffectedResult> 
   // runner refuses -- handing the runner a file it excludes, which fails the run
   // rather than protecting it. Dropping it skips nothing: a full run does not
   // include it either.
-  const inSuite = new Set(testFiles);
+  // A test the inventory names is part of the suite even though
+  // `discoverTestFiles` never walks into it -- its `file` is whatever the
+  // inventory's owner chose, not a path on disk -- so every set below that
+  // decides suite membership has to know about it too, or the mandatory and
+  // selected units this axis produces are silently filtered back out.
+  const inventoryKnown = testInv?.known ?? [];
+  const inSuite = new Set([...testFiles, ...inventoryKnown.map((t) => t.file)]);
   const mandatory = (await policy.mandatory(changes)).filter((t) => inSuite.has(t.file));
   const alwaysRun = testFiles.filter((f) => matchesAny(f, config.alwaysRun));
 
@@ -914,8 +955,13 @@ export async function selectAffected(init: SelectInit): Promise<AffectedResult> 
   // without any diff saying so -- renamed, moved out of `testGlobs`, or excluded
   // by a config change. Discovery is what `affected` selects from, so it is what
   // a selection has to be expressible in.
-  const discovered = new Set(testFiles);
-  for (const u of [...units, ...byPackage]) {
+  const discovered = inSuite;
+  // The inventory's mandatory ids ride the same loop as the file- and
+  // package-driven hits, rather than joining `wholeFile`, because they carry
+  // their own granularity: a per-scenario id names one test, and forcing the
+  // whole (virtual) file it sits in would over-select every sibling scenario
+  // an inventory-aware recorder never claimed changed.
+  for (const u of [...units, ...byPackage, ...(testInv?.mandatory ?? [])]) {
     if (!discovered.has(u.file)) continue;
     if (wholeFile.has(u.file)) continue;
     const key = `${u.file} ${u.name ?? ''}`;
@@ -928,7 +974,7 @@ export async function selectAffected(init: SelectInit): Promise<AffectedResult> 
   sortUnits(selected);
 
   const tests = new Set<string>(selected.map((t) => t.file));
-  return { fullRun: false, tests: [...tests], selected, discovered: testFiles.length };
+  return { fullRun: false, tests: [...tests], selected, discovered: discovered.size };
 }
 
 /**
@@ -1176,6 +1222,24 @@ export interface StatusResult {
    */
   coveredSourcesByDir?: Record<string, number>;
   coveredBlockCount?: number;
+  /**
+   * Drift between the map's recorded test inventory and a freshly read one,
+   * when the project configures `inventory` and both could be read and agree
+   * on `source`. Absent for a project with no inventory, or when reading it
+   * failed or its `source` moved -- both of those already answer `nextIsFullRun`
+   * with their own reason, so this would only repeat it in a different shape.
+   */
+  testInventory?: {
+    source: string;
+    /**
+     * How many of the current inventory's ids the next selection will run
+     * regardless of the diff: new since the recording, changed, or carrying
+     * no version at all.
+     */
+    changedCount: number;
+    /** How many ids the current inventory names in total. */
+    totalCount: number;
+  };
   changedSentinels: string[];
   nextIsFullRun: boolean;
   nextFullRunReason?: string;
@@ -1222,6 +1286,12 @@ function nextSelection(
     const accounted = new Set<string>(deps?.accounted ?? []);
     const fileChanges =
       accounted.size === 0 ? changes : changes.filter((c) => !accounted.has(c.file));
+    const testInv = isUsableMap(map)
+      ? testInventoryChange({ cwd, config, map })
+      : undefined;
+    if (testInv?.fallOpen !== undefined) {
+      return { fullRun: true, reason: testInv.fallOpen };
+    }
     return new FailOpenPolicy(config).evaluate(map, fileChanges) === 'full-run'
       ? { fullRun: true, reason: fullRunReason(config, map, fileChanges, windowOf(base)) }
       : { fullRun: false };
@@ -1337,6 +1407,25 @@ export async function computeStatus(init: StatusInit): Promise<StatusResult> {
   const nextIsFullRun = next.fullRun;
   const nextFullRunReason = next.reason;
 
+  // A separate read from the one `nextSelection` takes, for the same reason
+  // `status` is a diagnostic command rather than part of the hot selection
+  // path: it answers a different question (how much of the inventory drifted)
+  // and the failure and source-mismatch cases are already covered by
+  // `nextFullRunReason`, so nothing here needs to repeat them.
+  const testInventory =
+    config.inventory !== undefined
+      ? (() => {
+          const result = testInventoryChange({ cwd, config, map });
+          return result === undefined || result.fallOpen !== undefined
+            ? undefined
+            : {
+                source: result.source,
+                changedCount: result.mandatory.length,
+                totalCount: result.known.length,
+              };
+        })()
+      : undefined;
+
   return {
     mapPath: store.path(),
     mapState: 'usable',
@@ -1353,6 +1442,7 @@ export async function computeStatus(init: StatusInit): Promise<StatusResult> {
     coveredFileCount: coveredFiles.size,
     coveredSourcesByDir,
     ...(coveredBlocks.size > 0 ? { coveredBlockCount: coveredBlocks.size } : {}),
+    ...(testInventory !== undefined ? { testInventory } : {}),
     changedSentinels,
     nextIsFullRun,
     ...(nextFullRunReason ? { nextFullRunReason } : {}),
@@ -1438,6 +1528,23 @@ export interface TestExplanation {
    * one they have.
    */
   unmeasured: boolean;
+  /**
+   * Drift between the map's recorded test inventory and a freshly read one,
+   * restricted to ids naming this file, when the project configures
+   * `inventory` and both could be read and agree on `source`. Absent for the
+   * same reasons {@link StatusResult.testInventory} is: no inventory
+   * configured, or a fall-open case already explained by the map-wide
+   * `nextFullRunReason` this result carries.
+   */
+  inventoryDrift?: {
+    /**
+     * Ids the current inventory names for this file that will run regardless
+     * of the diff: new, changed, or carrying no version at all.
+     */
+    changedCount: number;
+    /** Ids the current inventory names for this file in total. */
+    totalCount: number;
+  };
 }
 
 /**
@@ -1800,6 +1907,26 @@ export async function explainPath(init: ExplainInit): Promise<ExplainResult> {
   }
 
   const next = nextSelection(cwd, config, map);
+  // Restricted to this path's own ids, for the same reason `status`'s report
+  // is map-wide: a fall-open case here (unreadable inventory, a moved
+  // `source`) is already the reason on `next` above, so it is answered once
+  // rather than recomputed per path in a different shape.
+  const inventoryDrift =
+    wantTest && config.inventory !== undefined
+      ? (() => {
+          const result = testInventoryChange({ cwd, config, map });
+          if (result === undefined || result.fallOpen !== undefined) return undefined;
+          const here = result.known.filter((t) => t.file === rel);
+          if (here.length === 0) return undefined;
+          const mandatoryHere = new Set(
+            result.mandatory.filter((t) => t.file === rel).map((t) => t.name ?? ''),
+          );
+          return {
+            changedCount: here.filter((t) => mandatoryHere.has(t.name ?? '')).length,
+            totalCount: here.length,
+          };
+        })()
+      : undefined;
   return {
     ok: true,
     file: rel,
@@ -1828,6 +1955,7 @@ export async function explainPath(init: ExplainInit): Promise<ExplainResult> {
             unmeasured: map.entries.some(
               (e) => e.test.file === rel && measuredNothing(e),
             ),
+            ...(inventoryDrift !== undefined ? { inventoryDrift } : {}),
           },
         }
       : {}),

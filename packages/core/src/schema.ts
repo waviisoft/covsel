@@ -14,18 +14,66 @@ import type { RecordedConfig } from './config.js';
  * blocks that no longer exist. Rejecting such a map is what turns that into a
  * full run instead of a selection made against hashes nothing can match.
  */
-export const MAP_SCHEMA_VERSION = 5;
+export const MAP_SCHEMA_VERSION = 6;
 
 /**
  * Identifies a test at the finest granularity we know about.
  * Whole-file (process) mode: `file` only.
  * Per-test (inspector) mode: `file` + `name` (test title / scenario + line).
+ *
+ * `file` need not be a path this repository has: a test inventory (see
+ * {@link TestInventory}) names tests an adapter or another tool defines
+ * elsewhere, and gives them a virtual `file` of its own choosing — vellum's
+ * `spec:features/agenda.md`, say. Nothing here distinguishes the two shapes,
+ * because nothing needs to: nothing but discovery ever reads `file` as a
+ * filesystem path, and discovery never sees these ids at all.
  */
 export interface TestId {
   /** Test file path, repo-relative with forward slashes. */
   file: string;
   /** Full test name / cucumber scenario id, when per-test granularity is available. */
   name?: string;
+}
+
+/**
+ * One test's identity in an inventory an adapter or another tool supplies,
+ * plus the opaque version of its definition, when the source of the inventory
+ * tracks one.
+ *
+ * `version` is never interpreted, only compared: it changes exactly when the
+ * test's definition changed, by whatever the inventory's own owner counts as a
+ * change — vellum's fingerprint ignores a scenario being renamed or moved, and
+ * covsel has no opinion of its own on whether that is right. Two recordings
+ * agreeing on a version is the only claim selection reads out of it.
+ */
+export interface InventoryEntry {
+  id: TestId;
+  /**
+   * Absent means the inventory's owner does not know whether this test's
+   * definition changed — a scenario that exists only in the working tree, for
+   * instance. Never read as "unchanged": an entry with no version always runs,
+   * the same way an unrecorded test does.
+   */
+  version?: string;
+}
+
+/**
+ * A test inventory: every test's id and, where known, its version — supplied
+ * by an adapter or a config-run command instead of covsel discovering tests as
+ * files in this repository's own diff. See
+ * [`docs/guide/fail-open.md`](../../../docs/guide/fail-open.md) for how
+ * selection reads it.
+ */
+export interface TestInventory {
+  entries: InventoryEntry[];
+  /**
+   * Identity of whatever defines and executes these tests — a commit, a
+   * digest, anything opaque the inventory's owner chooses. Compared as a
+   * whole: any change is read the way a sentinel is, because a different
+   * harness can change what every test in it does without moving a single id
+   * or version.
+   */
+  source: string;
 }
 
 /** A covered region of an *original* (post-source-map) source file. */
@@ -177,6 +225,15 @@ export interface CoverageMap {
    * proof. Absent means every dependency change falls open.
    */
   dependencies?: MapDependencies;
+  /**
+   * The test inventory this was recorded against, when the project configures
+   * one. Absent means covsel has no baseline to compare a freshly read
+   * inventory to — every project not using an inventory is in exactly this
+   * position, and so is one that just turned it on: the next selection reads
+   * every current entry as new rather than falling open on the whole suite,
+   * the same way an unrecorded test file does.
+   */
+  testInventory?: TestInventory;
   entries: MapEntry[];
 }
 

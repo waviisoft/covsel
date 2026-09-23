@@ -362,6 +362,54 @@ open on any change to a config file — the behavior every map had before this
 existed. So does a map merged from shards that disagreed about the configuration
 they were recorded under.
 
+`inventory` is left out too, but for a different reason: it is read fresh on
+every selection and compared directly against what the map recorded, the same
+way `dependencies` already is — see the next section. Comparing the command
+string on top of that would only add a full run to a case the comparison
+itself already handles.
+
+## A test that isn't a file in this repository
+
+`testGlobs` and a git diff are how covsel notices a test's definition changed,
+and both assume the test lives in this repository's own history. That breaks
+for a spec-driven project pinning a scenario suite from elsewhere, a contract
+test pulled from a broker, or any suite whose definitions live outside what
+covsel can diff — a pin move can rewrite what dozens of tests do without a
+single byte of it appearing in this repository's diff.
+
+`inventory.command` lets a project supply the missing half: every test's id,
+and, where its owner tracks one, an opaque version that changes exactly when
+the test's definition did. Recording reads it once and stores what it saw;
+selection reads it again and compares, failing open at every step:
+
+- an id the map never recorded is new, and runs — the same reading a brand new
+  test file already gets;
+- an id whose version differs from the one recorded has changed, and runs;
+- an id with **no version at all is never read as unchanged** — it always
+  runs, whatever the map says;
+- a command that fails, or whose output does not parse as covsel's inventory
+  shape, is a full run, never an empty selection — the same reading an
+  unusable map already gets;
+- a different `source` is read the way a sentinel is: the whole suite runs,
+  because a different harness — a rewritten step-definition layer, a new
+  pinned commit of a shared spec — can change what every test in it does
+  without moving a single id or version, and nothing else would notice.
+
+An id the map recorded that the current inventory no longer names is dropped
+rather than treated as a change: nothing is skipped by a test leaving the
+inventory, so there is nothing here that has to run because of it.
+
+Turning `inventory` on for a project whose map predates it costs one narrow
+correction rather than a full run: with no recorded inventory to compare
+against, every id the command currently names reads as new, the same way an
+unrecorded test file does, and the map catches up at the next recording.
+
+`covsel status` and `covsel explain <path>` report the drift between what the
+map recorded and what the command produces now — how many ids are new, changed,
+or without a version — whenever both could be read and agree on `source`. When
+they do not, `nextFullRunReason` already says why, so the drift report would
+only repeat it.
+
 ## How the map enforces it
 
 The persisted map is a **versioned contract**. Bumping the schema version
