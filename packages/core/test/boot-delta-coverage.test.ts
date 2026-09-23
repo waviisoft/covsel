@@ -224,7 +224,7 @@ describe('BootDeltaCoverage', () => {
     expect(byName.get('calledLater')).toBe(1);
   });
 
-  it('treats a window with nothing new as empty, not an error', async () => {
+  it('treats a window whose dump has an empty result as empty, not an error', async () => {
     dir = mkdtempSync(join(tmpdir(), 'covsel-bdc-'));
     const pid = 4242;
     let calls = 0;
@@ -234,7 +234,9 @@ describe('BootDeltaCoverage', () => {
       trigger: async () => {
         calls++;
         if (calls === 1) writeDump(pid, 0, [{ url: 'file:///boot.js', functions: [] }]);
-        // Every later call writes nothing: nothing ran in that window.
+        // A window with genuinely nothing new still gets a dump -- Node
+        // writes one with an empty result rather than skipping the write.
+        else writeDump(pid, 0, []);
       },
     });
     await bdc.start();
@@ -242,6 +244,29 @@ describe('BootDeltaCoverage', () => {
     const empty = await bdc.endTest();
     // Boot is still unioned in, even though this window's own delta was empty.
     expect(empty.map((s: { url: string }) => s.url)).toEqual(['file:///boot.js']);
+  });
+
+  it('fails a window whose trigger produced no dump at all, rather than reading it as empty', async () => {
+    // Distinguishes a genuinely empty window (still gets a dump, covered
+    // above) from a dropped one: a trigger that yields no new dump for the
+    // tracked process at all -- the documented, if rare, failure mode of
+    // calling takeCoverage() with no yield at all after a previous call.
+    // Reading it as "ran nothing" would silently under-report.
+    dir = mkdtempSync(join(tmpdir(), 'covsel-bdc-'));
+    const pid = 4242;
+    let calls = 0;
+    const bdc = new BootDeltaCoverage({
+      dir,
+      pid,
+      trigger: async () => {
+        calls++;
+        if (calls === 1) writeDump(pid, 0, [{ url: 'file:///boot.js', functions: [] }]);
+        // Every later call's dump is dropped before it reaches disk.
+      },
+    });
+    await bdc.start();
+
+    await expect(bdc.endTest()).rejects.toThrow(AmbiguousCoverageError);
   });
 
   it('fails a window that sees a dump from a pid it was not told to track', async () => {

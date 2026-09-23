@@ -119,7 +119,26 @@ function ownDump(added: string[], pid: number): string {
         'merging them into a guess.',
     );
   }
-  return mine[0] ?? '';
+  const [dump] = mine;
+  if (dump === undefined) {
+    // A window with genuinely nothing new still gets a dump -- Node writes one
+    // with an empty `result` rather than skipping the write. No dump at all
+    // means the trigger's call was dropped before it reached disk, which is a
+    // known but rare failure mode of calling `takeCoverage()` with no yield at
+    // all after a previous call -- indistinguishable from here whether the
+    // counters were reset without being written, or will show up folded into
+    // the next call instead. Reading it as "this window ran nothing" would
+    // silently under-report; failing is the only reading that does not guess.
+    throw new AmbiguousCoverageError(
+      `a coverage window produced no dump for the tracked process at all, where a ` +
+        'window with nothing new is still expected to write one (with an empty ' +
+        'result). The trigger’s call may have been dropped before it reached disk ' +
+        '— see `CoverageDumpTrigger` — so there is no telling whether this window ' +
+        'really ran nothing or its dump went missing, and recording it as empty ' +
+        'either way would guess.',
+    );
+  }
+  return dump;
 }
 
 function readScripts(path: string): ScriptCoverage[] {
@@ -254,7 +273,7 @@ export class BootDeltaCoverage {
       const added = [...now].filter((f) => !this.seen.has(f));
       this.seen = now;
       const dump = ownDump(added, this.pid);
-      return dump === '' ? [] : readScripts(join(this.dir, dump));
+      return readScripts(join(this.dir, dump));
     } finally {
       this.inFlight = false;
     }
