@@ -6,7 +6,7 @@
 Block-level server coverage, for a server started with `NODE_V8_COVERAGE`.
 
 The Playwright adapter's server window and `InspectorObserver` could only ever
-see block granularity for code a server loaded *during* a test's own window.
+see block granularity for code a server loaded _during_ a test's own window.
 Anything imported at boot — which for a typical server is nearly every route
 and page module — kept only file granularity, because coverage collection
 started fresh with each test and had no way to tell an un-run function from

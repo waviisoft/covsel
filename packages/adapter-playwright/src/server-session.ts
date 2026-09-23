@@ -327,8 +327,8 @@ export class RemoteBootDeltaSession {
   /**
    * `process.getBuiltinModule` rather than `require`/`import`: the server may be
    * ESM or CJS, and this has to work in either without depending on what the
-   * evaluated expression's scope happens to have in it — the same reason the
-   * issue that asked for this chose it. Requires the server on Node >=22.3.
+   * evaluated expression's scope happens to have in it. Requires the server on
+   * Node >=22.3.
    */
   private async trigger(): Promise<void> {
     await this.link.post('Runtime.evaluate', {
