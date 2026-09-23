@@ -142,3 +142,30 @@ describe('watching the browser and the server it drives', () => {
     { timeout: 240_000 },
   );
 });
+
+describe('watching the browser and the server, in boot-delta mode', () => {
+  // Same application, same scope, same blind spot — the only difference from
+  // "watching the browser and the server it drives" is that the server starts
+  // with NODE_V8_COVERAGE as well as --inspect, so the window reads boot plus a
+  // delta per test instead of a session opened fresh inside each one. Run
+  // through the same conformance suite as every other capability, because a
+  // recording mode that skips this is one whose fixture wiring nothing here
+  // certifies — which is exactly the class of bug (a fixture function
+  // Playwright's own resolution rejects before any test runs) that recording
+  // through the real `test.extend()` catches and a hand-driven unit test does not.
+  describeAdapterConformance(
+    {
+      adapter: playwrightAdapter,
+      fixture: {
+        ...common,
+        config: { observes: [...BROWSER_OBSERVES, ...SERVER_OBSERVES] },
+        files: files({ markerFile: RAN_MARKER_FILE, server: true, bootDelta: true }),
+        blindSpot: {
+          source: 'jobs/compute.mjs',
+          breakingEdit: { find: 'qty * 3 + 1', replace: 'qty * 9 + 1' },
+        },
+      },
+    },
+    { timeout: 240_000 },
+  );
+});

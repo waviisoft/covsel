@@ -1,9 +1,12 @@
 import { spawn } from 'node:child_process';
+import { mkdtempSync, rmSync } from 'node:fs';
 import { createServer, type Server } from 'node:http';
 import type { AddressInfo } from 'node:net';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 
-import { RemoteCoverageSession } from '../src/server-session.js';
+import { RemoteBootDeltaSession, RemoteCoverageSession } from '../src/server-session.js';
 
 /**
  * The application server's profiler, over the wire.
@@ -18,12 +21,14 @@ import { RemoteCoverageSession } from '../src/server-session.js';
 
 const servers: Server[] = [];
 const children: ReturnType<typeof spawn>[] = [];
+const dirs: string[] = [];
 
 afterEach(async () => {
   for (const child of children.splice(0)) child.kill();
   for (const server of servers.splice(0)) {
     await new Promise<void>((done) => server.close(() => done()));
   }
+  for (const dir of dirs.splice(0)) rmSync(dir, { recursive: true, force: true });
 });
 
 /** A stand-in for Node's inspector HTTP endpoint, answering `/json/list`. */
@@ -184,4 +189,80 @@ describe('taking what the server ran', () => {
 
     await expect(session.take()).rejects.toThrow(/not started/);
   }, 30_000);
+});
+
+describe('the boot-delta server window', () => {
+  /**
+   * A real Node process, started the way the boot-delta window needs: its
+   * inspector open and `NODE_V8_COVERAGE` pointed at a directory this test can
+   * read back. Ticks a timer so there is always something for a window after
+   * the first to have picked up.
+   */
+  async function bootDeltaProcess(): Promise<{
+    inspectUrl: string;
+    coverageDir: string;
+  }> {
+    const coverageDir = mkdtempSync(join(tmpdir(), 'covsel-pw-ss-bootdelta-'));
+    dirs.push(coverageDir);
+    const child = spawn(
+      process.execPath,
+      ['--inspect=0', '-e', 'setInterval(() => JSON.parse(\'{"a":1}\'), 5);'],
+      {
+        env: { ...process.env, NODE_V8_COVERAGE: coverageDir },
+        stdio: ['ignore', 'ignore', 'pipe'],
+      },
+    );
+    children.push(child);
+    const port = await new Promise<string>((resolve, reject) => {
+      let seen = '';
+      const timer = setTimeout(
+        () => reject(new Error(`no inspector announced itself: ${seen}`)),
+        20_000,
+      );
+      child.stderr?.on('data', (chunk: Buffer) => {
+        seen += chunk.toString();
+        const found = /ws:\/\/127\.0\.0\.1:(\d+)\//.exec(seen);
+        if (found?.[1] !== undefined) {
+          clearTimeout(timer);
+          resolve(found[1]);
+        }
+      });
+    });
+    return { inspectUrl: `http://127.0.0.1:${port}`, coverageDir };
+  }
+
+  it('returns boot plus a delta for the process it was pointed at', async () => {
+    const { inspectUrl, coverageDir } = await bootDeltaProcess();
+    const session = new RemoteBootDeltaSession(inspectUrl, coverageDir);
+    await session.start();
+
+    // Polled rather than taken once: the delta is whatever ran since start(),
+    // and the child's timer has not necessarily ticked yet.
+    let scripts = await session.endTest();
+    for (let attempt = 0; attempt < 100 && scripts.length === 0; attempt++) {
+      await new Promise((done) => setTimeout(done, 50));
+      scripts = await session.endTest();
+    }
+    await session.close();
+
+    expect(scripts.length).toBeGreaterThan(0);
+    const [script] = scripts;
+    expect(typeof script?.url).toBe('string');
+    expect(Array.isArray(script?.functions)).toBe(true);
+  }, 30_000);
+
+  it('throws rather than returning nothing once the session is closed', async () => {
+    const { inspectUrl, coverageDir } = await bootDeltaProcess();
+    const session = new RemoteBootDeltaSession(inspectUrl, coverageDir);
+    await session.start();
+    await session.close();
+
+    await expect(session.endTest()).rejects.toThrow(/not started/);
+  }, 30_000);
+
+  it('throws when nothing is listening, naming the flag that fixes it', async () => {
+    const session = new RemoteBootDeltaSession('http://127.0.0.1:1', '/tmp');
+    await expect(session.start()).rejects.toThrow(/--inspect/);
+    await session.close();
+  });
 });

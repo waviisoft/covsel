@@ -159,8 +159,94 @@ server, which is how a server change comes to skip the tests it breaks. The
 config's `observes` stays the union, and recording refuses any window claiming
 more than it.
 
-Nothing of covsel runs inside your server. It opens an inspector session per
-test, takes what the server ran, and closes it.
+Nothing of covsel runs inside your server either way. What differs below is
+_how_ it reaches in from the outside — over the same inspector connection, but
+with or without the server's help getting block-level detail for the code it
+loads once at boot.
+
+### Block granularity for boot-loaded code too
+
+Add `coverageDir` and start the server with `NODE_V8_COVERAGE` as well as
+`--inspect`. Use an absolute path for both: `webServer.command` and the
+fixture run in different processes, and a relative `NODE_V8_COVERAGE` is
+resolved by the shell that launches the server while a relative `coverageDir`
+is resolved by whatever the Playwright worker's own cwd happens to be —
+nothing guarantees the two agree.
+
+```js
+// playwright.config.js
+import { fileURLToPath } from 'node:url';
+
+const coverageDir = fileURLToPath(new URL('.covsel/server-cov', import.meta.url));
+
+export default {
+  webServer: {
+    command: `NODE_V8_COVERAGE=${coverageDir} node --inspect=9229 server/index.js`,
+    url: '...',
+  },
+  workers: 1,
+  // ...
+};
+```
+
+```ts
+// tests/fixtures.ts
+import { fileURLToPath } from 'node:url';
+
+const coverageDir = fileURLToPath(new URL('../.covsel/server-cov', import.meta.url));
+
+export const test = base.extend(
+  covselFixtures({
+    browser: { observes: ['src/**'] },
+    server: {
+      observes: ['server/**'],
+      inspectUrl: 'http://127.0.0.1:9229',
+      coverageDir,
+    },
+  }),
+);
+```
+
+With `NODE_V8_COVERAGE` set, V8 collects precise, block-level coverage from the
+moment the process starts — every function in every module, including the ones
+that never run. The fixture reads a "boot" dump before the first test (whatever
+ran while the server was starting up, credited to every test, because every test
+depends on it) and one delta per test after that (read straight off disk, since
+the recording and the server share a host). A module the server loads at boot
+keeps real block granularity: an unrelated function in the same file that no
+test ever calls stays out of every test's coverage, the same as a module loaded
+on demand.
+
+Requires the server on Node ≥22.3 (`process.getBuiltinModule`) and a filesystem
+this process can read `coverageDir` from — true whenever the server and the
+recording run on the same host, which a local `webServer` always does.
+
+**Concurrent or ambiguous attribution fails the recording.** A worker thread or
+a child Node process inherits `NODE_V8_COVERAGE` and writes its own dump into
+the same directory; there is no reliable way to say which test its execution
+belongs to, so a window that sees one fails rather than guessing.
+
+If the server shells out to another Node process (spawning a worker, running a
+build step, whatever), keep that child off the recording's directory before
+spawning it:
+
+```js
+delete process.env.NODE_V8_COVERAGE;
+execFileSync(process.execPath, ['./worker.mjs']);
+```
+
+Passing a narrower `env` to `spawn`/`execFileSync` is **not** enough on its
+own — an active `NODE_V8_COVERAGE` still reaches the child from the running
+process's own environment regardless of what the call site passes, so it has
+to be removed from `process.env` itself, not merely left out of the object
+handed to `spawn`. Deleting it does not touch the server's own coverage, which
+was already switched on at bootstrap.
+
+### Without `coverageDir`: file granularity for whatever boot already did
+
+Leave `coverageDir` unset and the server window falls back to a session opened
+fresh inside each test and closed at its end — what comes back is exactly what
+that test made the server do, with no baseline to subtract.
 
 **Record with `--workers=1`.** The window is collected from the one server
 process, so a second worker's test executing there at the same time would be
@@ -169,18 +255,17 @@ records a test as covering less of the server than it does. The fixture refuses
 rather than guess which happened. Only the _recording_ is serial; the selected
 runs afterwards are not.
 
-**Expect file granularity from the server window**, where the browser window is
-block-granular throughout. covsel does record server blocks, but how much they
-tell it depends on when the module was loaded. Coverage starts when the test
-does, and V8 reports only functions that ran since — so for a module the server
-loaded at boot an un-run function is absent rather than zero-counted, covsel
-reads it as executed, and a change anywhere in that file selects every test that
-executed it. A module first imported _during_ the test is compiled inside the
-window, so its un-run functions are reported and it keeps real block granularity.
+**Expect file granularity for whatever the server loaded at boot.** Coverage
+starts when the test does, and V8 reports only functions that ran since — so for
+a module the server loaded at boot an un-run function is absent rather than
+zero-counted, covsel reads it as executed, and a change anywhere in that file
+selects every test that executed it. A module first imported _during_ the test
+is compiled inside the window, so its un-run functions are reported and it keeps
+real block granularity.
 
 Splitting handlers across modules, and loading them on demand, is what buys
-precision here. Block granularity for everything else would need covsel's code
-running inside your server process, which it does not.
+precision here without `coverageDir`. With it, block granularity holds for
+boot-loaded code too.
 
 A file both windows see falls back to file granularity, because a window that
 recorded no blocks for it cannot vouch for the other's.
@@ -228,6 +313,9 @@ one afterwards. It fails, and writes nothing, when:
 - **the server's inspector could not be reached**, when a server window is
   configured — an unobserved server behind a scope that claims it is exactly the
   map that skips tests;
+- **a coverage dump could not be attributed**, with `coverageDir` set — more than
+  one dump in a window, or one from a pid the recording was not told to track (a
+  worker thread or a child process that inherited `NODE_V8_COVERAGE`); see above;
 - **a test opened a further page** (a popup, or `context.newPage()`) — coverage
   cannot be attached to a page before its first scripts run, so what executed
   there is unknown rather than partly known. covsel observes the primary `page`
