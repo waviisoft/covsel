@@ -89,6 +89,18 @@ export function parseTestInventory(text: string): TestInventoryResult {
 }
 
 /**
+ * How long to wait for the inventory command before giving up.
+ *
+ * This runs on every `record`, `affected`, `status`, and `explain` -- not just
+ * a diagnostic a user asks for on their own schedule -- so a command that never
+ * exits must not be allowed to hang covsel, and by extension CI, indefinitely.
+ * Generous rather than tight: unlike `listingOutput`'s listing flag, an
+ * inventory command can legitimately do real work (checking out a pinned
+ * intent repo, say), so this bounds a hang, not a slow answer.
+ */
+export const INVENTORY_TIMEOUT_MS = 120_000;
+
+/**
  * Run `command` through a shell and parse its stdout as covsel's own
  * inventory JSON.
  *
@@ -106,9 +118,16 @@ export function readTestInventory(init: {
     shell: true,
     encoding: 'utf8',
     maxBuffer: 64 * 1024 * 1024,
+    timeout: INVENTORY_TIMEOUT_MS,
   });
   if (res.error) {
-    return { ok: false, reason: `could not run: ${res.error.message}` };
+    const timedOut = (res.error as NodeJS.ErrnoException).code === 'ETIMEDOUT';
+    return {
+      ok: false,
+      reason: timedOut
+        ? `did not finish within ${INVENTORY_TIMEOUT_MS / 1000}s`
+        : `could not run: ${res.error.message}`,
+    };
   }
   if (res.status !== 0) {
     const stderr = (res.stderr ?? '').trim();

@@ -324,3 +324,70 @@ describe('selecting on an inventory change', () => {
     );
   });
 });
+
+/**
+ * The map's own recorded inventory has to keep an inventory-sourced entry
+ * eligible for the ordinary coverage-based selector even when *this run*
+ * configures no `inventory` at all -- a config drifting out of step between
+ * the job that recorded the map and the one selecting against it (a missing
+ * env var, a reverted config field) must not silently drop a real,
+ * coverage-based hit for a test this map genuinely has an entry and covered
+ * sources for. That drop is not something `testInventoryChange` can catch on
+ * its own, because with no `inventory` configured this run it is never asked
+ * at all -- it is `commands.ts`'s own suite-membership sets (`inSuite`,
+ * `discovered`, and the `unmeasured` fold into `wholeFile`) that have to know
+ * about a map's recorded inventory independently of the current config.
+ */
+describe('an inventory-sourced entry survives ordinary selection on its own', () => {
+  /** A repository with one product test, plus a hand-added virtual entry. */
+  async function fixtureWithVirtualEntry(
+    virtualEntry: CoverageMap['entries'][number],
+  ): Promise<{ cwd: string; config: CovselConfig }> {
+    const { cwd, config } = await fixture();
+    const map = readMap(cwd, config);
+    writeMap(cwd, config, {
+      ...map,
+      testInventory: {
+        source: HARNESS_V1,
+        entries: [{ id: virtualEntry.test, version: 'v1' }],
+      },
+      entries: [...map.entries, virtualEntry],
+    });
+    return { cwd, config };
+  }
+
+  it('is selected on a real source-file change, though config sets no inventory', async () => {
+    const { cwd, config } = await fixtureWithVirtualEntry({
+      test: { file: 'spec:features/agenda.md', name: 's1' },
+      files: [{ file: 'src/a.mjs', fileHash: 'sha256:whatever' }],
+    });
+    write(cwd, 'src/a.mjs', 'export const a = 2;\n'); // the source it covers changed
+    // `config` here sets no `inventory` at all -- this run neither reads nor
+    // needs to read the current inventory for this to work.
+
+    const result = await selectAffected({ cwd, config });
+
+    expect(result.fullRun).toBe(false);
+    expect(result.selected).toEqual(
+      expect.arrayContaining([{ file: 'spec:features/agenda.md', name: 's1' }]),
+    );
+  });
+
+  it('always runs when it credits no source, though config sets no inventory', async () => {
+    const { cwd, config } = await fixtureWithVirtualEntry({
+      test: { file: 'spec:features/agenda.md', name: 's1' },
+      files: [], // the recorder could not see what this test executed
+    });
+
+    const result = await selectAffected({ cwd, config });
+
+    expect(result.fullRun).toBe(false);
+    // Whole-file, the same as an unmeasured *real* entry gets: a recorder that
+    // could not see this scenario has not earned trust for whatever else
+    // shares its (virtual) file, so the name is dropped and the file runs in
+    // full, not just the one scenario recorded blind.
+    expect(result.selected).toEqual(
+      expect.arrayContaining([{ file: 'spec:features/agenda.md' }]),
+    );
+  });
+});

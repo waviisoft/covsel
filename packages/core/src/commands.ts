@@ -898,8 +898,24 @@ export async function selectAffected(init: SelectInit): Promise<AffectedResult> 
   // inventory's owner chose, not a path on disk -- so every set below that
   // decides suite membership has to know about it too, or the mandatory and
   // selected units this axis produces are silently filtered back out.
-  const inventoryKnown = testInv?.known ?? [];
-  const inSuite = new Set([...testFiles, ...inventoryKnown.map((t) => t.file)]);
+  //
+  // Drawn from two places, and both are needed. `testInv.known` is this run's
+  // freshly read inventory, which is the only place a brand new id -- one
+  // with no map entry yet -- can be found at all. But `testInv` is `undefined`
+  // whenever this run does not configure `inventory` even though the map was
+  // recorded with one, and a project's `inventory` config drifting out of
+  // step between the job that records the map and the one that selects
+  // against it (a missing env var, a config field reverted) must not silently
+  // drop coverage-based hits for a test this map already has real entries and
+  // real source files for -- so `map.testInventory` is read too, since it
+  // answers "which of this map's `test.file` values were never meant to be
+  // found by `discoverTestFiles`" without needing this run's inventory to be
+  // configured or readable at all.
+  const inventoryKnownFiles = new Set<string>([
+    ...(testInv?.known?.map((t) => t.file) ?? []),
+    ...(map!.testInventory?.entries.map((e) => e.id.file) ?? []),
+  ]);
+  const inSuite = new Set([...testFiles, ...inventoryKnownFiles]);
   const mandatory = (await policy.mandatory(changes)).filter((t) => inSuite.has(t.file));
   const alwaysRun = testFiles.filter((f) => matchesAny(f, config.alwaysRun));
 
@@ -932,9 +948,12 @@ export async function selectAffected(init: SelectInit): Promise<AffectedResult> 
     ...mandatory.map((t) => t.file),
     ...alwaysRun,
     ...unmapped,
-    // Drawn from discovery, like `unmapped`: an entry may outlive the test file
-    // it names, and there is nothing to run for a file that is no longer there.
-    ...testFiles.filter((f) => unmeasured.has(f)),
+    // Drawn from `inSuite` rather than `testFiles` alone: an inventory-sourced
+    // entry that credits nothing needs the same guarantee an ordinary test
+    // file gets, and `testFiles` -- a pure filesystem walk -- never contains
+    // its (virtual) `test.file` at all, which would otherwise let a blind
+    // recorder's gap on such an entry go unselected forever.
+    ...[...inSuite].filter((f) => unmeasured.has(f)),
   ]);
   const selected: TestId[] = [...wholeFile].map((file) => ({ file }));
   const seen = new Set<string>();
@@ -1386,8 +1405,15 @@ export async function computeStatus(init: StatusInit): Promise<StatusResult> {
 
   // Counted against discovery rather than the filesystem: a file that still
   // exists but no longer matches `testGlobs` has left the suite just as surely
-  // as a deleted one, and selection treats them the same.
-  const inSuite = new Set(discovered);
+  // as a deleted one, and selection treats them the same. An inventory-sourced
+  // entry is never stale on this account alone, though -- its `test.file` is
+  // never going to be a path `discoverTestFiles` walks into, recorded
+  // correctly or not, so it is read against what the map itself recorded the
+  // inventory to be rather than against the filesystem walk.
+  const inSuite = new Set([
+    ...discovered,
+    ...(map.testInventory?.entries.map((e) => e.id.file) ?? []),
+  ]);
   const staleEntries = new Set(
     map.entries.filter((e) => !inSuite.has(e.test.file)).map((e) => e.test.file),
   ).size;
