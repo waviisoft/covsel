@@ -24,6 +24,9 @@ const coreDist = fileURLToPath(new URL('../dist/index.js', import.meta.url));
 const driver = fileURLToPath(
   new URL('./fixtures/boot-delta-driver.mjs', import.meta.url),
 );
+const reuseDriver = fileURLToPath(
+  new URL('./fixtures/boot-delta-driver-reuse.mjs', import.meta.url),
+);
 
 beforeAll(() => {
   if (!existsSync(coreDist)) {
@@ -71,6 +74,40 @@ describe('InspectorObserver in boot-delta mode', () => {
       // shared blocks plus each test's own one, never the module's full set.
       expect(t1.blockHashes.length).toBe(common.length + 1);
       expect(t2.blockHashes.length).toBe(common.length + 1);
+    } finally {
+      rmSync(covDir, { recursive: true, force: true });
+    }
+  }, 30_000);
+
+  it('credits boot to a second observer instance in the same process, reading the first one’s marker rather than re-booting', () => {
+    const covDir = mkdtempSync(join(tmpdir(), 'covsel-boot-delta-reuse-'));
+    try {
+      const res = spawnSync(process.execPath, [reuseDriver], {
+        encoding: 'utf8',
+        cwd: repoRoot,
+        env: { ...process.env, NODE_V8_COVERAGE: covDir },
+      });
+      if (res.status !== 0) {
+        throw new Error(`boot-delta reuse driver failed:\n${res.stdout}${res.stderr}`);
+      }
+      const { session1, session2 } = JSON.parse(res.stdout.trim()) as {
+        session1: Record<string, number | undefined>;
+        session2: Record<string, number | undefined>;
+      };
+
+      // bootWork ran once, at the process's real startup, before either
+      // observer existed; neverCalled never ran at all. Both have to carry a
+      // real count in session2 for the second observer to have read the
+      // first one's marker correctly -- if it triggered its own "boot"
+      // instead, that dump would be a plain delta since the first observer's
+      // last one, which has no entry at all for either function, not even a
+      // zero one, since neither was touched again in between.
+      expect(session1.bootWork).toBe(1);
+      expect(session1.neverCalled).toBe(0);
+      expect(session2.bootWork).toBe(1);
+      expect(session2.neverCalled).toBe(0);
+      expect(session2.calledInTest1).toBe(0);
+      expect(session2.calledInTest2).toBe(1);
     } finally {
       rmSync(covDir, { recursive: true, force: true });
     }
@@ -237,6 +274,41 @@ describe('BootDeltaCoverage', () => {
     expect(byName.get('neverCalled')).toBe(0);
   });
 
+  it('waits past the latest of the pid’s existing dumps after reading a marker-named boot, not just past boot’s own timestamp', async () => {
+    // A directory can hold more than one dump for the tracked pid by the time
+    // a second session attaches: the marker names the boot dump specifically,
+    // but the first session may also have taken test windows after it before
+    // this session ever showed up. lastDumpTs has to guard against colliding
+    // with the *latest* of those, not just with boot's own -- otherwise a
+    // trigger right after start() could still land in the same millisecond as
+    // one of them and silently overwrite it.
+    dir = mkdtempSync(join(tmpdir(), 'covsel-bdc-'));
+    const pid = 504;
+    const bootName = `coverage-${pid}-${Date.now()}-0.json`;
+    writeFileSync(join(dir, bootName), JSON.stringify({ result: [] }));
+    // Implausibly far in the future: if lastDumpTs used only boot's own, real
+    // timestamp, the next trigger would fire immediately, since real time
+    // already exceeds that. Only reading the max forces it to actually wait.
+    const future = Date.now() + 1_200;
+    writeFileSync(
+      join(dir, `coverage-${pid}-${future}-0.json`),
+      JSON.stringify({ result: [] }),
+    );
+
+    const bdc = new BootDeltaCoverage({
+      dir,
+      pid,
+      readBootMarker: async () => bootName,
+      writeBootMarker: async () => {},
+      trigger: async () => writeDump(pid, 0, [{ url: 'file:///t.js', functions: [] }]),
+    });
+    await bdc.start();
+
+    const started = Date.now();
+    await bdc.endTest();
+    expect(Date.now() - started).toBeGreaterThanOrEqual(1_000);
+  }, 10_000);
+
   it('fails rather than silently re-booting, when the marker points at a boot dump the directory no longer has', async () => {
     // The coverage directory can be cleared between recordings while the
     // server itself stays up and keeps its marker -- e.g. a project resets
@@ -253,6 +325,46 @@ describe('BootDeltaCoverage', () => {
       writeBootMarker: async () => {},
     });
     await expect(bdc.start()).rejects.toThrow(AmbiguousCoverageError);
+  });
+
+  it('fails a second session, rather than silently re-booting, when the first session’s boot trigger reset counters but then failed', async () => {
+    // takeCoverage() resets the target's counters as its very first act, so a
+    // trigger that then fails to produce a dump this session can read -- a
+    // foreign pid's dump landing in the same window, here -- still leaves the
+    // process's counters reset. A session that attaches afterward and finds
+    // no marker at all would trigger its own dump and read it as boot, but
+    // that dump is only a delta off the counters the failed attempt already
+    // reset -- exactly the bug the marker exists to prevent, just reached a
+    // different way. The marker is claimed before the trigger runs, so this
+    // has to fail closed instead.
+    dir = mkdtempSync(join(tmpdir(), 'covsel-bdc-'));
+    const pid = 503;
+    // Stands in for the process's own memory: shared between two separate
+    // BootDeltaCoverage instances the way globalThis is shared between two
+    // sessions attaching to the same real process.
+    let marker: string | undefined;
+    const target = {
+      readBootMarker: async () => marker,
+      writeBootMarker: async (name: string) => {
+        marker = name;
+      },
+    };
+
+    const first = new BootDeltaCoverage({
+      dir,
+      pid,
+      ...target,
+      trigger: async () => writeDump(999, 0, []), // an untracked pid's dump
+    });
+    await expect(first.start()).rejects.toThrow(AmbiguousCoverageError);
+
+    const second = new BootDeltaCoverage({
+      dir,
+      pid,
+      ...target,
+      trigger: async () => writeDump(pid, 0, [{ url: 'file:///boot.js', functions: [] }]),
+    });
+    await expect(second.start()).rejects.toThrow(AmbiguousCoverageError);
   });
 
   it('ignores a leftover dump from a dead process that reused this pid, when nothing marks it as boot', async () => {

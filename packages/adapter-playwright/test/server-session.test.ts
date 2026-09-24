@@ -329,6 +329,58 @@ describe('the boot-delta server window', () => {
     expect(scripts.some((s) => s.url.includes('config.mjs'))).toBe(true);
   }, 30_000);
 
+  it('shares boot across sessions even when the server’s own uptime() lies and real time passes between them', async () => {
+    // The marker mechanism reads nothing from the clock, but this guards
+    // against that regressing silently: a server whose own process.uptime()
+    // is wrong (or simply asleep for a while, which has the same effect on
+    // the elapsed-time math a clock-based check would have done) must not
+    // affect whether a second session correctly reuses the first's boot.
+    const coverageDir = mkdtempSync(join(tmpdir(), 'covsel-pw-ss-reuse-cov-'));
+    const appDir = mkdtempSync(join(tmpdir(), 'covsel-pw-ss-reuse-app-'));
+    dirs.push(coverageDir, appDir);
+    writeFileSync(join(appDir, 'config.mjs'), 'globalThis.__configLoaded = true;\n');
+    writeFileSync(
+      join(appDir, 'main.mjs'),
+      "import './config.mjs';\n" +
+        'process.uptime = () => 0;\n' +
+        'setInterval(() => JSON.parse(\'{"a":1}\'), 5);\n',
+    );
+    const child = spawn(process.execPath, ['--inspect=0', join(appDir, 'main.mjs')], {
+      env: { ...process.env, NODE_V8_COVERAGE: coverageDir },
+      stdio: ['ignore', 'ignore', 'pipe'],
+    });
+    children.push(child);
+    const port = await new Promise<string>((resolve, reject) => {
+      let seen = '';
+      const timer = setTimeout(
+        () => reject(new Error(`no inspector announced itself: ${seen}`)),
+        20_000,
+      );
+      child.stderr?.on('data', (chunk: Buffer) => {
+        seen += chunk.toString();
+        const found = /ws:\/\/127\.0\.0\.1:(\d+)\//.exec(seen);
+        if (found?.[1] !== undefined) {
+          clearTimeout(timer);
+          resolve(found[1]);
+        }
+      });
+    });
+    const inspectUrl = `http://127.0.0.1:${port}`;
+
+    const session1 = new RemoteBootDeltaSession(inspectUrl, coverageDir);
+    await session1.start();
+    await session1.endTest();
+    await session1.close();
+
+    await new Promise((resolve) => setTimeout(resolve, 2_600));
+
+    const session2 = new RemoteBootDeltaSession(inspectUrl, coverageDir);
+    await session2.start();
+    const scripts = await session2.endTest();
+
+    expect(scripts.some((s) => s.url.includes('config.mjs'))).toBe(true);
+  }, 30_000);
+
   it('fails a second session, rather than silently re-booting, when the coverage directory is cleared while the server stays up', async () => {
     // The server's own marker still says it already booted; a directory a
     // project resets before every `covsel record` invocation must not be
@@ -345,6 +397,62 @@ describe('the boot-delta server window', () => {
 
     const session2 = new RemoteBootDeltaSession(inspectUrl, coverageDir);
     await expect(session2.start()).rejects.toThrow(AmbiguousCoverageError);
+  }, 30_000);
+
+  /**
+   * Sets the target's boot marker directly, over a throwaway CDP connection
+   * of its own -- standing in for what a session's own `start()` leaves
+   * behind when its boot trigger has already reset the target's counters but
+   * then fails before it can record a real dump's filename: the marker is
+   * claimed, but nothing in the directory matches it.
+   */
+  async function setBootMarkerDirectly(inspectUrl: string, value: string): Promise<void> {
+    const res = await fetch(`${inspectUrl}/json/list`);
+    const targets = (await res.json()) as { webSocketDebuggerUrl?: string }[];
+    const wsUrl = targets.find((t) => t.webSocketDebuggerUrl)?.webSocketDebuggerUrl;
+    if (wsUrl === undefined) throw new Error('no debugger target published');
+    const socket = new WebSocket(wsUrl);
+    await new Promise<void>((resolve, reject) => {
+      socket.addEventListener('open', () => resolve());
+      socket.addEventListener('error', () => reject(new Error('could not connect')));
+    });
+    await new Promise<void>((resolve, reject) => {
+      socket.addEventListener('message', function handle(event: MessageEvent) {
+        const message = JSON.parse(event.data as string) as {
+          id?: number;
+          error?: { message?: string };
+        };
+        if (message.id !== 1) return;
+        socket.removeEventListener('message', handle);
+        if (message.error) reject(new Error(message.error.message));
+        else resolve();
+      });
+      socket.send(
+        JSON.stringify({
+          id: 1,
+          method: 'Runtime.evaluate',
+          params: {
+            expression: `globalThis[Symbol.for('covsel.bootDump')] = ${JSON.stringify(value)}`,
+          },
+        }),
+      );
+    });
+    socket.close();
+  }
+
+  it('fails a session, rather than silently booting, when the target already claims a boot marker with no matching dump', async () => {
+    // Exactly what start() itself leaves the target holding when an earlier
+    // session's boot trigger reset the process's counters but then failed
+    // before it could record a real dump's filename -- the marker is
+    // claimed, and reading it back has to fail the same way a marker naming
+    // a genuinely deleted dump does, not fall back to a fresh trigger that
+    // would only be a delta off the counters that reset already reset.
+    const { inspectUrl, coverageDir } = await reusableServerProcess();
+
+    await setBootMarkerDirectly(inspectUrl, 'pending');
+
+    const session = new RemoteBootDeltaSession(inspectUrl, coverageDir);
+    await expect(session.start()).rejects.toThrow(AmbiguousCoverageError);
   }, 30_000);
 
   it('fails at once on a call made after the server already died, not only one in flight', async () => {

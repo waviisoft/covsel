@@ -62,6 +62,14 @@ export type CoverageDumpTrigger = () => Promise<void>;
  */
 export const BOOT_MARKER_KEY = 'covsel.bootDump';
 
+/**
+ * A placeholder `writeBootMarker` value, claimed before the boot trigger runs
+ * rather than after it succeeds — see `start()`. Never a real dump's
+ * filename, so a marker still set to it reads as "boot never finished",
+ * failing the same way a marker pointing at a genuinely missing file does.
+ */
+const PENDING_BOOT_MARKER = 'pending';
+
 export interface BootDeltaCoverageInit {
   /** Directory the target was started with `NODE_V8_COVERAGE` pointed at. */
   dir: string;
@@ -378,18 +386,28 @@ export class BootDeltaCoverage {
     this.seen = dumpFiles(this.dir, true);
     const marker = await this.readBootMarker();
     if (marker === undefined) {
+      // Claimed before the trigger runs, not after it succeeds: `takeCoverage()`
+      // resets the target's counters as its very first act, so once this
+      // session triggers one there is no way back to a genuine boot shape for
+      // this process even if this call then fails itself (a foreign dump
+      // landing in the same window, a parse failure, the process dying). A
+      // session that attaches afterward has to see that a boot was claimed and
+      // never finished, not find no marker at all and trigger its own --
+      // which would only be a delta off the one this call already reset.
+      await this.writeBootMarker(PENDING_BOOT_MARKER);
       const first = await this.nextDump();
       this.boot = first.scripts;
       await this.writeBootMarker(first.name);
     } else {
       if (!this.seen.has(marker)) {
         throw new AmbiguousCoverageError(
-          `this process already recorded a boot dump (${marker}) during an earlier ` +
-            "session, but the coverage directory no longer has it. The directory can't " +
-            'be cleared while a server is reused across recordings — the process ' +
-            'remembers it already booted, and without that file there is nothing to ' +
-            're-derive its boot shape from, so this fails rather than triggering a ' +
-            'fresh dump and reading a partial capture as if it were the whole thing.',
+          `this process already claimed a boot dump (${marker}) during an earlier ` +
+            "session, but the coverage directory doesn't have it -- either that " +
+            'session’s own boot attempt never finished (its trigger failed, or the ' +
+            'process died, after counters were already reset), or the directory was ' +
+            'cleared while the process stayed up. Either way there is nothing to ' +
+            're-derive a boot shape from, so this fails rather than triggering a fresh ' +
+            'dump and reading a partial capture as if it were the whole thing.',
         );
       }
       this.boot = readScripts(join(this.dir, marker));
