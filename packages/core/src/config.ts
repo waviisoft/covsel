@@ -68,6 +68,26 @@ export interface CovselConfig {
   /** Globs identifying test files. */
   testGlobs: string[];
   /**
+   * How to read the test inventory an adapter or another tool supplies,
+   * instead of covsel discovering tests as files in this repository's own
+   * diff. Every test's id, and — where the inventory's owner tracks it — the
+   * opaque version of its definition.
+   *
+   * Unset, the default, means no external inventory: added or changed test
+   * files are still detected the ordinary way, from a git diff of
+   * `testGlobs`. Set it only for tests whose definitions live somewhere a
+   * diff of this repository cannot see — a spec pinned from another repo, a
+   * suite pulled from a broker or a test-management system.
+   *
+   * `command` is run through a shell, so it may pipe through `jq` or anything
+   * else that shapes another tool's output into covsel's own inventory JSON:
+   * `{ "source": "<opaque>", "entries": [{ "id": { "file": "...", "name"?: "..." }, "version"?: "..." }] }`.
+   * A command that fails, or whose output does not parse as that shape, is
+   * read the same way an unusable map is: a full run, never an empty
+   * selection.
+   */
+  inventory?: { command: string };
+  /**
    * Test files the runner covsel wraps will never run, so covsel must not try.
    *
    * Runners have their own exclusions -- a browser suite kept out of the default
@@ -202,6 +222,31 @@ function resolveTestIgnore(value: unknown): string[] {
   );
 }
 
+/**
+ * `inventory` as the project wrote it, refused if it is not `{ command:
+ * string }`.
+ *
+ * Refused where it is read, before anything has been selected on it, for the
+ * same reason `observes` and `testIgnore` are: a config file is not
+ * type-checked, and a value that does not survive to a real command would
+ * otherwise fail silently at the point covsel tries to run it, on every
+ * selection, rather than once at load.
+ */
+function resolveInventory(value: unknown): { command: string } {
+  if (
+    typeof value === 'object' &&
+    value !== null &&
+    typeof (value as Record<string, unknown>)['command'] === 'string' &&
+    (value as Record<string, unknown>)['command'] !== ''
+  ) {
+    return { command: (value as Record<string, unknown>)['command'] as string };
+  }
+  throw new Error(
+    `covsel config: inventory ${JSON.stringify(value)} is not { command: string } -- ` +
+      'write it as {"command": "<shell command that prints a covsel test inventory>"}.',
+  );
+}
+
 function resolveObserves(value: unknown): string[] {
   if (Array.isArray(value) && value.every((glob) => typeof glob === 'string')) {
     return [...(value as string[])];
@@ -230,6 +275,9 @@ export function resolveConfig(partial?: CovselConfigInput): CovselConfig {
       ? { observes: resolveObserves(partial.observes) }
       : {}),
     testGlobs: partial?.testGlobs ?? DEFAULT_CONFIG.testGlobs,
+    ...(partial?.inventory !== undefined
+      ? { inventory: resolveInventory(partial.inventory) }
+      : {}),
     testIgnore: resolveTestIgnore(partial?.testIgnore),
     sourceGlobs: partial?.sourceGlobs ?? DEFAULT_CONFIG.sourceGlobs,
     alwaysRun: partial?.alwaysRun ?? DEFAULT_CONFIG.alwaysRun,
@@ -262,8 +310,29 @@ export function resolveConfig(partial?: CovselConfigInput): CovselConfig {
  *    nothing selection reads. It is also the one field a CLI flag overrides,
  *    and comparing it would make `--adapter` on one invocation and not the next
  *    look like a configuration change.
+ *  - `inventory` names how to read a test inventory, and is read fresh on
+ *    every selection and compared directly against what the map recorded --
+ *    the same shape `dependencies` already takes, and inert for the same
+ *    reason. Every way the comparison can go wrong is already a fall-open case
+ *    of its own: a map recorded before `inventory` was set has nothing to
+ *    compare against, so every current entry reads as new rather than nothing
+ *    changing; the reverse -- unset now, but the map was recorded with one --
+ *    cannot even ask the question, so it is a full run outright rather than a
+ *    silent "nothing changed"; a command that starts naming different tests
+ *    falls open through the ordinary new/changed rules; and a harness that
+ *    stopped being the one the map was recorded against is caught by comparing
+ *    `source`, which no value in this config carries. Comparing the command
+ *    string on top would only add a full run to the one case that is already
+ *    handled safely and more narrowly -- turning the feature on for the first
+ *    time.
  */
-const INERT_CONFIG_FIELDS = ['adapter', 'alwaysRun', 'sentinels', 'store'] as const;
+const INERT_CONFIG_FIELDS = [
+  'adapter',
+  'alwaysRun',
+  'sentinels',
+  'store',
+  'inventory',
+] as const;
 
 /**
  * The configuration a map is recorded under, as the map stores it: every

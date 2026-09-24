@@ -158,4 +158,67 @@ describe('mergeMaps', () => {
     expect(() => mergeMaps([stale])).toThrow(/no usable maps/);
     expect(() => mergeMaps([])).toThrow(/no usable maps/);
   });
+
+  describe('testInventory', () => {
+    const inventory = (source: string) => ({
+      source,
+      entries: [{ id: { file: 'spec:a.md', name: 'x' }, version: 'v1' }],
+    });
+
+    it('keeps the inventory every shard agrees on', () => {
+      const merged = mergeMaps([
+        shard({ testInventory: inventory('sha:aaa') }),
+        shard({ testInventory: inventory('sha:aaa') }),
+      ]);
+      expect(merged.testInventory).toEqual(inventory('sha:aaa'));
+    });
+
+    it('is unaffected by the order entries were recorded in', () => {
+      const reordered = {
+        source: 'sha:aaa',
+        entries: [
+          { id: { file: 'spec:b.md', name: 'y' }, version: 'v2' },
+          { id: { file: 'spec:a.md', name: 'x' }, version: 'v1' },
+        ],
+      };
+      const inOrder = {
+        source: 'sha:aaa',
+        entries: [
+          { id: { file: 'spec:a.md', name: 'x' }, version: 'v1' },
+          { id: { file: 'spec:b.md', name: 'y' }, version: 'v2' },
+        ],
+      };
+      const merged = mergeMaps([
+        shard({ testInventory: inOrder }),
+        shard({ testInventory: reordered }),
+      ]);
+      expect(merged.testInventory).toEqual(inOrder);
+    });
+
+    it('drops it when shards disagree on the source', () => {
+      const merged = mergeMaps([
+        shard({ testInventory: inventory('sha:aaa') }),
+        shard({ testInventory: inventory('sha:bbb') }),
+      ]);
+      expect(merged.testInventory).toBeUndefined();
+    });
+
+    it('drops it when shards disagree on which tests are in it', () => {
+      const merged = mergeMaps([
+        shard({ testInventory: inventory('sha:aaa') }),
+        shard({
+          testInventory: {
+            source: 'sha:aaa',
+            entries: [{ id: { file: 'spec:a.md', name: 'x' }, version: 'v2' }],
+          },
+        }),
+      ]);
+      expect(merged.testInventory).toBeUndefined();
+    });
+
+    it('drops it when any shard recorded none', () => {
+      const merged = mergeMaps([shard({ testInventory: inventory('sha:aaa') }), shard()]);
+      expect(merged.testInventory).toBeUndefined();
+    });
+  });
 });
