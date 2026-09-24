@@ -93,6 +93,44 @@ describe('isUsableMap', () => {
     expect(isUsableMap(withoutGranularity)).toBe(false);
   });
 
+  it('accepts a map with no test inventory, and one with a well-formed one', () => {
+    expect(isUsableMap(validMap)).toBe(true);
+    expect(
+      isUsableMap({
+        ...validMap,
+        testInventory: { source: 'sha:aaa', entries: [{ id: { file: 'spec:a.md' } }] },
+      }),
+    ).toBe(true);
+  });
+
+  it('rejects a malformed test inventory rather than let a reader crash on it (fail open)', () => {
+    // Every reader that indexes into `testInventory.entries` -- selection,
+    // `status`, `explain` -- would throw a TypeError on a shape like this one
+    // rather than fall open, which is worse than under-selecting: it can take
+    // the whole run down instead of just widening it.
+    expect(isUsableMap({ ...validMap, testInventory: { source: 'sha:aaa' } })).toBe(
+      false,
+    );
+    expect(isUsableMap({ ...validMap, testInventory: { entries: [] } })).toBe(false);
+    expect(isUsableMap({ ...validMap, testInventory: 'sha:aaa' })).toBe(false);
+  });
+
+  it('rejects a malformed entry inside an otherwise well-formed test inventory', () => {
+    // The shape check on `testInventory` itself is not enough on its own if
+    // what it lets through still throws one level in -- every reader walks
+    // straight to `entry.id.file` with no guard of its own.
+    const withEntries = (entries: unknown[]) => ({
+      ...validMap,
+      testInventory: { source: 'sha:aaa', entries },
+    });
+    expect(isUsableMap(withEntries([null]))).toBe(false);
+    expect(isUsableMap(withEntries(['not an object']))).toBe(false);
+    expect(isUsableMap(withEntries([{}]))).toBe(false); // no `id` at all
+    expect(isUsableMap(withEntries([{ id: null }]))).toBe(false);
+    expect(isUsableMap(withEntries([{ id: {} }]))).toBe(false); // no `id.file`
+    expect(isUsableMap(withEntries([{ id: { file: 7 } }]))).toBe(false);
+  });
+
   it('rejects non-object garbage', () => {
     expect(isUsableMap(null)).toBe(false);
     expect(isUsableMap(undefined)).toBe(false);

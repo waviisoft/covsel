@@ -8,6 +8,7 @@ import {
   MAP_SCHEMA_VERSION,
   type MapDependencies,
   type MapEntry,
+  type TestInventory,
 } from './schema.js';
 
 function testKey(entry: MapEntry): string {
@@ -94,6 +95,33 @@ function agreedDependencies(maps: CoverageMap[]): MapDependencies | undefined {
         markerHash: first.markerHash,
         inventory,
       };
+}
+
+/**
+ * The test inventory every shard agrees it recorded against, if there is one.
+ *
+ * An inventory is global metadata about the suite, not per-shard coverage, so
+ * every recorder in a sharded run reads the same one -- shards recording
+ * different inventories describe different states of the suite, and a merged
+ * map has no single answer to compare a later run against. Compared by content
+ * rather than reference, and order-independently, since nothing promises two
+ * recorders list the same ids in the same order.
+ */
+function agreedTestInventory(maps: CoverageMap[]): TestInventory | undefined {
+  const first = maps[0]?.testInventory;
+  if (first === undefined) return undefined;
+  const key = (inv: TestInventory): string =>
+    JSON.stringify({
+      source: inv.source,
+      entries: [...inv.entries]
+        .map((e) => `${e.id.file}\0${e.id.name ?? ''}\0${e.version ?? ''}`)
+        .sort(byKey),
+    });
+  const firstKey = key(first);
+  const identical = maps.every(
+    (m) => m.testInventory !== undefined && key(m.testInventory) === firstKey,
+  );
+  return identical ? first : undefined;
 }
 
 /**
@@ -209,6 +237,7 @@ export function mergeMaps(maps: CoverageMap[]): CoverageMap {
   const everyEntryHasPackages =
     entries.length > 0 && entries.every((e) => e.packages !== undefined);
   const dependencies = everyEntryHasPackages ? agreedDependencies(usable) : undefined;
+  const testInventory = agreedTestInventory(usable);
 
   return {
     schemaVersion: MAP_SCHEMA_VERSION,
@@ -219,6 +248,7 @@ export function mergeMaps(maps: CoverageMap[]): CoverageMap {
     ...(config ? { config } : {}),
     observed,
     ...(dependencies ? { dependencies } : {}),
+    ...(testInventory ? { testInventory } : {}),
     entries,
   };
 }

@@ -963,6 +963,7 @@ function statusJson(s: StatusResult): unknown {
     ...(s.coveredBlockCount !== undefined
       ? { coveredBlockCount: s.coveredBlockCount }
       : {}),
+    ...(s.testInventory !== undefined ? { testInventory: s.testInventory } : {}),
     changedSentinels: s.changedSentinels,
     nextIsFullRun: s.nextIsFullRun,
     ...(s.nextFullRunReason !== undefined
@@ -1236,6 +1237,13 @@ async function cmdStatus(argv: string[]): Promise<number> {
       for (const [dir, count] of byDir) out(`  ${dir.padEnd(10)}${String(count)}\n`);
     }
     if (s.coveredBlockCount !== undefined) out(`blocks:     ${s.coveredBlockCount}\n`);
+    if (s.testInventory !== undefined) {
+      out(
+        `inventory:  ${s.testInventory.source} -- ${s.testInventory.changedCount} of ` +
+          `${s.testInventory.totalCount} test(s) new or changed since the recording, ` +
+          'and always run\n',
+      );
+    }
     out(
       `sentinels:  ${
         s.changedSentinels.length === 0
@@ -1388,6 +1396,12 @@ function printCovers(r: ExplainResult, all: boolean): void {
     return;
   }
   out(`covers:     ${test.units.length} recorded unit(s)\n`);
+  if (test.inventoryDrift !== undefined) {
+    out(
+      `inventory:  ${test.inventoryDrift.changedCount} of ${test.inventoryDrift.totalCount} ` +
+        'id(s) new or changed since the recording, and always run\n',
+    );
+  }
   if (test.unmeasured) {
     // The recorded-but-blind case. Without this the unit list below reads as a
     // measurement -- "0 source(s)" beside a healthy map -- and the reader has
