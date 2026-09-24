@@ -211,6 +211,21 @@ describe('readTestInventory', () => {
     expect(result.reason.length).toBeLessThan(600);
   });
 
+  it('redacts a credential embedded in a URL, on the last line where it usually is', () => {
+    // The line-and-length cap above keeps the *last* lines, which is exactly
+    // where a failed authenticated checkout's own fatal error -- with the
+    // credential still in the URL -- tends to land. Truncating around it is
+    // not enough; the credential itself has to go.
+    const command = failingScript(
+      "fatal: unable to access 'https://x-access-token:ghp_secrettoken123@github.com/o/r/': The requested URL returned error: 403",
+    );
+    const result = readTestInventory({ cwd: process.cwd(), command });
+    expect(result.ok).toBe(false);
+    if (result.ok) throw new Error('expected a failure');
+    expect(result.reason).not.toContain('ghp_secrettoken123');
+    expect(result.reason).toContain('https://***@github.com');
+  });
+
   it('is a full-run failure when the command cannot be run at all', () => {
     const result = readTestInventory({
       cwd: process.cwd(),
@@ -223,6 +238,25 @@ describe('readTestInventory', () => {
     const command = inventoryScript('not json at all');
     const result = readTestInventory({ cwd: process.cwd(), command });
     expect(result.ok).toBe(false);
+  });
+
+  it('reports a pipeline failure when the documented bash -o pipefail form is used', () => {
+    // The command runs through `/bin/sh` (Node's `shell: true`), which is
+    // `dash` on Debian/Ubuntu and does not implement `pipefail` at all --
+    // `set -o pipefail` there does not silently no-op, it is a syntax error
+    // that fails every recording. `bash -o pipefail -c '...'`, the form the
+    // docs recommend, is what actually has to work: a failure in the first
+    // stage of the pipe has to surface rather than be masked by the second
+    // stage's own exit code.
+    const command = 'bash -o pipefail -c \'false | jq "."\'';
+    const result = readTestInventory({ cwd: process.cwd(), command });
+    expect(result.ok).toBe(false);
+  });
+
+  it('does not itself reject `set -o pipefail` under plain /bin/sh -- dash refuses it, not covsel', () => {
+    const command = 'set -o pipefail';
+    const result = readTestInventory({ cwd: process.cwd(), command });
+    expect(result.ok).toBe(false); // dash's own "Illegal option" -- a real failure, not a covsel bug
   });
 });
 

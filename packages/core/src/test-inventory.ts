@@ -154,10 +154,20 @@ const STDERR_TAIL_CHARS = 500;
  * quoting it in full turns a fail-open message into a leak. A few lines is
  * enough to recognise the failure; it is not enough to be the failure.
  */
+/**
+ * A userinfo credential embedded in a URL -- `https://x-access-token:ghp_…@github.com/…` --
+ * the shape a failed authenticated checkout's own error message actually
+ * prints. Redacted before the line-and-length cap below, not after: the
+ * credential usually sits on the very last line (the command's final
+ * fatal error), which is exactly the line the cap keeps rather than drops.
+ */
+const URL_CREDENTIAL = /:\/\/[^/@\s]+@/g;
+
 function tail(stderr: string): string {
   const trimmed = stderr.trim();
   if (trimmed === '') return '';
-  const lines = trimmed.split('\n').slice(-STDERR_TAIL_LINES).join('\n');
+  const redacted = trimmed.replace(URL_CREDENTIAL, '://***@');
+  const lines = redacted.split('\n').slice(-STDERR_TAIL_LINES).join('\n');
   return lines.length > STDERR_TAIL_CHARS ? `…${lines.slice(-STDERR_TAIL_CHARS)}` : lines;
 }
 
@@ -211,6 +221,14 @@ export function testInventoryChange(init: {
   cwd: string;
   config: Pick<CovselConfig, 'inventory'>;
   map: CoverageMap;
+  /**
+   * A `readTestInventory` result already taken this run, so a caller that
+   * had to read it early -- before it even knew whether it had a usable map
+   * to compare against, because a full run's own output has to name what
+   * currently exists regardless -- does not ask the command a second time.
+   * Read fresh when omitted.
+   */
+  current?: TestInventoryResult;
 }): TestInventoryChange | undefined {
   const { cwd, config, map } = init;
   if (map.entries.length === 0) return undefined;
@@ -232,7 +250,8 @@ export function testInventoryChange(init: {
     return undefined;
   }
 
-  const result = readTestInventory({ cwd, command: config.inventory.command });
+  const result =
+    init.current ?? readTestInventory({ cwd, command: config.inventory.command });
   if (!result.ok) {
     return {
       fallOpen: `the test inventory could not be produced: ${result.reason}`,

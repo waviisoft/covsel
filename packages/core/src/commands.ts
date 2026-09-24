@@ -49,6 +49,7 @@ import {
   readTestInventory,
   testInventoryChange,
   type TestInventoryChange,
+  type TestInventoryResult,
 } from './test-inventory.js';
 
 export interface GenericRecorderInit {
@@ -830,17 +831,29 @@ export async function selectAffected(init: SelectInit): Promise<AffectedResult> 
   const store = new LocalStore({ cwd, dir: config.store.dir });
   const map = await store.read();
 
-  // A full run means "run everything", and for a project with a test
-  // inventory that includes ids `discoverTestFiles` never finds -- so its own
-  // output must name them too, or a consumer driving a harness from this
-  // selection (`run.py $(covsel affected)`) runs zero scenarios on exactly the
-  // change that needs all of them. Seeded from whatever the map itself
-  // recorded, since that costs no subprocess and is always available; replaced
-  // below with a fresher live read once one succeeds, because that is the
-  // truer answer to "what exists right now" -- the harness-changed case most
-  // of all, where the ids that should run are the new harness's, not the
-  // stale ones the map recorded against the old one.
-  let fullRunInventoryIds: TestId[] = map?.testInventory?.entries.map((e) => e.id) ?? [];
+  // Read live, once, before any full-run return below -- not gated behind a
+  // usable map, or a trusted base, or anything else that can itself be the
+  // reason this ends in a full run. A full run means "run everything", and
+  // for a project with a test inventory that includes ids `discoverTestFiles`
+  // never finds, its own output has to name them too, or a consumer driving a
+  // harness from this selection (`run.py $(covsel affected)`) runs zero
+  // scenarios on exactly the change that needs all of them -- whether that
+  // full run happened because there is no map yet, the base can't be trusted,
+  // or anything else that returns before a map's own inventory would
+  // otherwise have been consulted. Passed into `testInventoryChange` below
+  // too, so it is asked exactly once regardless of how far this gets.
+  const currentInventory: TestInventoryResult | undefined =
+    config.inventory !== undefined
+      ? readTestInventory({ cwd, command: config.inventory.command })
+      : undefined;
+  // The live read is the freshest, most honest answer to "what exists right
+  // now" and is preferred whenever it succeeded; what the map itself recorded
+  // is the fallback for when it did not (or nothing configures it at all),
+  // which still beats naming nothing.
+  const fullRunInventoryIds: TestId[] =
+    currentInventory?.ok === true
+      ? currentInventory.inventory.entries.map((e) => e.id)
+      : (map?.testInventory?.entries.map((e) => e.id) ?? []);
 
   const fullRun = (reason: string): AffectedResult => {
     const selected = [...testFiles.map((file) => ({ file })), ...fullRunInventoryIds];
@@ -882,15 +895,16 @@ export async function selectAffected(init: SelectInit): Promise<AffectedResult> 
 
   // The inventory axis, asked independently of the diff: an external test's
   // definition can change without moving any file this repository tracks, so
-  // nothing above would ever notice.
+  // nothing above would ever notice. Reuses the read taken at the top rather
+  // than asking the command again.
   const testInv = isUsableMap(map)
-    ? testInventoryChange({ cwd, config, map })
+    ? testInventoryChange({
+        cwd,
+        config,
+        map,
+        ...(currentInventory !== undefined ? { current: currentInventory } : {}),
+      })
     : undefined;
-  // Freshest wins: a live read is a truer answer than what the map recorded,
-  // and is present here whenever one was actually taken -- including the
-  // harness-changed fall-open below, whose whole point is that the recorded
-  // ids are the ones that just stopped being current.
-  if (testInv?.known !== undefined) fullRunInventoryIds = [...testInv.known];
   if (testInv?.fallOpen !== undefined) return fullRun(testInv.fallOpen);
 
   const policy = new FailOpenPolicy(config);

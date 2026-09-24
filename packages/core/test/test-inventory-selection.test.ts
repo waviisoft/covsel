@@ -6,6 +6,7 @@ import { afterEach, describe, expect, it } from 'vitest';
 import { commitAll, write } from './helpers/repo.js';
 import {
   createGenericRecorder,
+  mergeMaps,
   OBSERVES_EVERYTHING,
   type CoverageMap,
   type CovselConfig,
@@ -503,5 +504,182 @@ describe('an inventory id with no recording at all', () => {
     expect(result.selected).toEqual(
       expect.arrayContaining([{ file: 'spec:features/agenda.md' }]),
     );
+  });
+
+  it('runs after a merge that lost the shard which would have recorded it', async () => {
+    // Every shard read the same inventory (that part is unconditional
+    // metadata, not sharded coverage), so the merged map keeps the full
+    // `testInventory` even though one shard -- the one that would have
+    // produced s2's entry -- never reported back. The gap this leaves is
+    // exactly the one `unmappedInventory` (in `commands.ts`) exists to catch,
+    // and nothing about going through a merge should exempt it.
+    const { cwd, config } = await fixture();
+    const recordedMap = readMap(cwd, config);
+    const testInventory = {
+      source: HARNESS_V1,
+      entries: [
+        { id: { file: 'spec:features/agenda.md', name: 's1' }, version: 'v1' },
+        { id: { file: 'spec:features/agenda.md', name: 's2' }, version: 'v1' },
+      ],
+    };
+    const shard1: CoverageMap = {
+      ...recordedMap,
+      testInventory,
+      entries: [
+        ...recordedMap.entries,
+        {
+          test: { file: 'spec:features/agenda.md', name: 's1' },
+          files: [{ file: 'src/a.mjs', fileHash: 'sha256:whatever' }],
+        },
+      ],
+    };
+    // shard2 recorded nothing of its own for s2 (crashed, or never got to
+    // it) -- only the same inventory metadata every shard reads.
+    const shard2: CoverageMap = { ...recordedMap, testInventory, entries: [] };
+    const merged = mergeMaps([shard1, shard2]);
+    writeMap(cwd, config, merged);
+    const configNow = withInventory(
+      config,
+      inventoryCommand({
+        source: HARNESS_V1,
+        entries: [
+          { id: { file: 'spec:features/agenda.md', name: 's1' }, version: 'v1' },
+          { id: { file: 'spec:features/agenda.md', name: 's2' }, version: 'v1' },
+        ],
+      }),
+    );
+
+    const result = await selectAffected({ cwd, config: configNow });
+
+    expect(result.fullRun).toBe(false);
+    expect(result.selected).toEqual(
+      expect.arrayContaining([{ file: 'spec:features/agenda.md', name: 's2' }]),
+    );
+  });
+});
+
+/**
+ * A full run's own `selected`/`tests` output has to name what the inventory
+ * currently says exists -- not what a map (if there is a usable one at all)
+ * happened to record -- because it is the answer a harness-driving consumer
+ * actually runs. The live inventory has to be read before any of the several
+ * things that can themselves cause a full run (no map, an unusable map, an
+ * untrusted base), not only after all of them have been ruled out: otherwise
+ * exactly the runs most likely to be a full run are the ones whose own output
+ * forgets the inventory axis entirely.
+ */
+describe("a full run's own output names what the inventory says exists now", () => {
+  it('names a live scenario when there is no map at all yet', async () => {
+    const cwd = mkdtempSync(join(tmpdir(), 'covsel-testinv-nomap-'));
+    dirs.push(cwd);
+    write(cwd, 'package.json', '{\n  "name": "fixture",\n  "type": "module"\n}\n');
+    write(cwd, 'test/a.test.mjs', '// a\n');
+    write(cwd, '.gitignore', '.covsel/\n');
+    commitAll(cwd);
+    const config = resolveConfig({
+      testGlobs: ['test/**/*.test.mjs'],
+      inventory: {
+        command: inventoryCommand({
+          source: HARNESS_V1,
+          entries: [{ id: { file: 'spec:features/agenda.md', name: 's1' } }],
+        }),
+      },
+    });
+    // No `covsel record` has ever run -- `.covsel/map.json` does not exist.
+
+    const result = await selectAffected({ cwd, config });
+
+    expect(result.fullRun).toBe(true);
+    expect(result.selected).toEqual(
+      expect.arrayContaining([{ file: 'spec:features/agenda.md', name: 's1' }]),
+    );
+  });
+
+  it('names a live scenario when the stored map is an old, unusable schema', async () => {
+    const { cwd, config } = await fixture();
+    const map = readMap(cwd, config);
+    writeMap(cwd, config, { ...map, schemaVersion: 1 } as unknown as CoverageMap);
+    const configNow = withInventory(
+      config,
+      inventoryCommand({
+        source: HARNESS_V1,
+        entries: [{ id: { file: 'spec:features/agenda.md', name: 's1' } }],
+      }),
+    );
+
+    const result = await selectAffected({ cwd, config: configNow });
+
+    expect(result.fullRun).toBe(true);
+    expect(result.selected).toEqual(
+      expect.arrayContaining([{ file: 'spec:features/agenda.md', name: 's1' }]),
+    );
+  });
+
+  it('names a scenario new since the recording, even with an untrusted base', async () => {
+    const { cwd, config } = await fixture();
+    const map = readMap(cwd, config);
+    // No recorded commit, with a git work tree present, is exactly what makes
+    // the base untrusted -- the same state a shallow clone or a pruned
+    // history leaves selection in.
+    delete map.commit;
+    writeMap(cwd, config, {
+      ...map,
+      testInventory: {
+        source: HARNESS_V1,
+        entries: [{ id: { file: 'spec:features/agenda.md', name: 's1' }, version: 'v1' }],
+      },
+    });
+    const configNow = withInventory(
+      config,
+      inventoryCommand({
+        source: HARNESS_V1,
+        entries: [
+          { id: { file: 'spec:features/agenda.md', name: 's1' }, version: 'v1' },
+          { id: { file: 'spec:features/agenda.md', name: 's2' }, version: 'v1' }, // new
+        ],
+      }),
+    );
+
+    const result = await selectAffected({ cwd, config: configNow });
+
+    expect(result.fullRun).toBe(true);
+    expect(result.reason).toContain('commit');
+    expect(result.selected).toEqual(
+      expect.arrayContaining([
+        { file: 'spec:features/agenda.md', name: 's1' },
+        { file: 'spec:features/agenda.md', name: 's2' },
+      ]),
+    );
+  });
+
+  it('reads the inventory exactly once even across an early full-run return', async () => {
+    const cwd = mkdtempSync(join(tmpdir(), 'covsel-testinv-oneread-'));
+    dirs.push(cwd);
+    write(cwd, 'package.json', '{\n  "name": "fixture",\n  "type": "module"\n}\n');
+    write(cwd, 'test/a.test.mjs', '// a\n');
+    write(cwd, '.gitignore', '.covsel/\n');
+    commitAll(cwd);
+    const counterFile = join(cwd, 'invocations');
+    const scriptPath = join(cwd, 'counting-inventory.cjs');
+    writeFileSync(
+      scriptPath,
+      `const fs = require('node:fs');\n` +
+        `fs.appendFileSync(${JSON.stringify(counterFile)}, 'x');\n` +
+        `process.stdout.write(${JSON.stringify(
+          JSON.stringify({ source: HARNESS_V1, entries: [] }),
+        )});\n`,
+    );
+    const config = resolveConfig({
+      testGlobs: ['test/**/*.test.mjs'],
+      inventory: { command: `node ${JSON.stringify(scriptPath)}` },
+    });
+    // No map recorded -- this is the early "no test files matched"-adjacent
+    // full-run path (here, "no usable map"), which used to return before the
+    // inventory was ever read at all.
+
+    await selectAffected({ cwd, config });
+
+    const invocations = readFileSync(counterFile, 'utf8');
+    expect(invocations).toBe('x');
   });
 });

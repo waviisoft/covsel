@@ -115,6 +115,22 @@ describe('isUsableMap', () => {
     expect(isUsableMap({ ...validMap, testInventory: 'sha:aaa' })).toBe(false);
   });
 
+  it('rejects a malformed entry inside an otherwise well-formed test inventory', () => {
+    // The shape check on `testInventory` itself is not enough on its own if
+    // what it lets through still throws one level in -- every reader walks
+    // straight to `entry.id.file` with no guard of its own.
+    const withEntries = (entries: unknown[]) => ({
+      ...validMap,
+      testInventory: { source: 'sha:aaa', entries },
+    });
+    expect(isUsableMap(withEntries([null]))).toBe(false);
+    expect(isUsableMap(withEntries(['not an object']))).toBe(false);
+    expect(isUsableMap(withEntries([{}]))).toBe(false); // no `id` at all
+    expect(isUsableMap(withEntries([{ id: null }]))).toBe(false);
+    expect(isUsableMap(withEntries([{ id: {} }]))).toBe(false); // no `id.file`
+    expect(isUsableMap(withEntries([{ id: { file: 7 } }]))).toBe(false);
+  });
+
   it('rejects non-object garbage', () => {
     expect(isUsableMap(null)).toBe(false);
     expect(isUsableMap(undefined)).toBe(false);

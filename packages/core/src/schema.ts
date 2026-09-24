@@ -290,9 +290,37 @@ export function mapRejection(map: unknown): string | undefined {
   // every call site: the whole map is unusable, which is the same answer a
   // stale schema version gets.
   if (m.testInventory !== undefined) {
-    const inv = m.testInventory as Partial<TestInventory>;
-    if (typeof inv.source !== 'string' || !Array.isArray(inv.entries)) {
+    // Read as `unknown` throughout, never as `Partial<TestInventory>`: that
+    // cast would tell the compiler `entries` already holds `InventoryEntry`
+    // values, which is exactly the belief the loop below exists to check
+    // before anything relies on it.
+    const inv: unknown = m.testInventory;
+    const invSource =
+      typeof inv === 'object' && inv !== null
+        ? (inv as Record<string, unknown>)['source']
+        : undefined;
+    const invEntries =
+      typeof inv === 'object' && inv !== null
+        ? (inv as Record<string, unknown>)['entries']
+        : undefined;
+    if (typeof invSource !== 'string' || !Array.isArray(invEntries)) {
       return 'it records a test inventory that is not covsel’s own shape';
+    }
+    // Every reader that walks these entries reads straight through to
+    // `entry.id.file` with no guard of its own -- the shape check above is
+    // not enough on its own if what it let through still throws one level in.
+    for (const entry of invEntries as unknown[]) {
+      if (typeof entry !== 'object' || entry === null) {
+        return 'it records a test inventory entry that is not an object';
+      }
+      const id = (entry as Record<string, unknown>)['id'];
+      if (
+        typeof id !== 'object' ||
+        id === null ||
+        typeof (id as Record<string, unknown>)['file'] !== 'string'
+      ) {
+        return 'it records a test inventory entry with no id.file';
+      }
     }
   }
   return undefined;

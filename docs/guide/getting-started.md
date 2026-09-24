@@ -300,13 +300,19 @@ do, and nothing in this repository's diff says so.
 inventory JSON — every test's id, and, where its owner tracks one, an opaque
 version that changes exactly when the test's definition did:
 
+`command` runs through `/bin/sh` (what Node's `shell: true` spawns on every
+platform covsel supports), not `bash` -- so a pipeline's exit status is its
+last stage's by default, and a failure earlier in the pipe (an unreadable
+intent repo) can be masked by `jq` exiting 0 on whatever it received. `/bin/sh`
+is `dash` on Debian and Ubuntu, including GitHub's own runners, and `dash` does
+not implement `pipefail` at all -- `set -o pipefail` there is not a no-op, it
+is `sh: set: Illegal option -o pipefail`, which fails every recording. Ask for
+`bash` explicitly instead:
+
 ```jsonc
 {
   "inventory": {
-    // set -o pipefail so a failure earlier in the pipe (an unreadable intent
-    // repo) is not masked by jq exiting 0 on whatever it received -- a
-    // command that never fails can never be read as "cannot be produced".
-    "command": "set -o pipefail && vellum suite extract $VELLUM_INTENT_REPO -o - | jq '{source: env.HARNESS_SHA, entries: [.scenarios[] | {id: {file: .file, name: .id}, version: .version}]}'",
+    "command": "bash -o pipefail -c 'vellum suite extract $VELLUM_INTENT_REPO -o - | jq \"{source: env.HARNESS_SHA, entries: [.scenarios[] | {id: {file: .file, name: .id}, version: .version}]}\"'",
   },
 }
 ```

@@ -126,6 +126,48 @@ describe('covsel status', () => {
     expect(status.nextIsFullRun).toBe(true);
     expect(status.nextFullRunReason).toContain('could not be produced');
   });
+
+  it('is a full run when the map recorded an inventory but this run configures none', async () => {
+    const { cwd, config } = await fixture();
+    const map = readMap(cwd, config);
+    writeMap(cwd, config, {
+      ...map,
+      testInventory: {
+        source: HARNESS,
+        entries: [{ id: { file: 'spec:a.md', name: 'x' }, version: 'v1' }],
+      },
+    });
+
+    const status = await computeStatus({ cwd, config }); // `config` sets no inventory
+
+    expect(status.testInventory).toBeUndefined();
+    expect(status.nextIsFullRun).toBe(true);
+    expect(status.nextFullRunReason).toContain('configures none');
+  });
+
+  it('spawns the inventory command exactly once, not once per drift check and once per full-run check', async () => {
+    const { cwd, config } = await fixture();
+    const map = readMap(cwd, config);
+    writeMap(cwd, config, {
+      ...map,
+      testInventory: { source: HARNESS, entries: [] },
+    });
+    const counterFile = join(cwd, 'invocations');
+    const scriptPath = join(cwd, 'counting-inventory.cjs');
+    writeFileSync(
+      scriptPath,
+      `const fs = require('node:fs');\n` +
+        `fs.appendFileSync(${JSON.stringify(counterFile)}, 'x');\n` +
+        `process.stdout.write(${JSON.stringify(
+          JSON.stringify({ source: HARNESS, entries: [] }),
+        )});\n`,
+    );
+    const configNow = withInventory(config, `node ${JSON.stringify(scriptPath)}`);
+
+    await computeStatus({ cwd, config: configNow });
+
+    expect(readFileSync(counterFile, 'utf8')).toBe('x');
+  });
 });
 
 describe('covsel explain', () => {
@@ -159,5 +201,30 @@ describe('covsel explain', () => {
 
     expect(result.ok).toBe(true);
     expect(result.test?.inventoryDrift).toEqual({ changedCount: 1, totalCount: 2 });
+  });
+
+  it('spawns the inventory command exactly once, not once per drift check and once per full-run check', async () => {
+    const { cwd, config } = await fixture();
+    const map = readMap(cwd, config);
+    writeMap(cwd, config, {
+      ...map,
+      testInventory: { source: HARNESS, entries: [] },
+      entries: [...map.entries, { test: { file: 'spec:a.md', name: 'x' }, files: [] }],
+    });
+    const counterFile = join(cwd, 'invocations');
+    const scriptPath = join(cwd, 'counting-inventory.cjs');
+    writeFileSync(
+      scriptPath,
+      `const fs = require('node:fs');\n` +
+        `fs.appendFileSync(${JSON.stringify(counterFile)}, 'x');\n` +
+        `process.stdout.write(${JSON.stringify(
+          JSON.stringify({ source: HARNESS, entries: [] }),
+        )});\n`,
+    );
+    const configNow = withInventory(config, `node ${JSON.stringify(scriptPath)}`);
+
+    await explainPath({ cwd, config: configNow, path: 'spec:a.md' });
+
+    expect(readFileSync(counterFile, 'utf8')).toBe('x');
   });
 });
