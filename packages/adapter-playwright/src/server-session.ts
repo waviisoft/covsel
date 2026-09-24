@@ -3,22 +3,27 @@
  *
  * A UI test executes code in three places, and the second one covsel can reach
  * is the server the page talks to. Playwright starts it (`webServer`), so covsel
- * cannot spawn it under `NODE_V8_COVERAGE` — and that dump would only arrive at
- * exit, attributing a whole run's server execution to nothing in particular.
- * Node's own inspector answers both: it speaks while the process is alive, and it
- * speaks the protocol V8 coverage already comes in.
+ * cannot spawn it under `NODE_V8_COVERAGE` directly — and even started that way,
+ * something still has to trigger a dump at each test boundary and read the
+ * directory back, since nothing of covsel runs inside the server to do it from in
+ * there. Node's own inspector answers both: it speaks while the process is
+ * alive, and it can evaluate the one line that triggers a dump.
  *
- * A session per test, started inside it and stopped at the end, so what comes
- * back is what that test made the server do — no baseline to subtract, and
- * nothing of the previous test left in it. The cost is a connection per test; the
- * benefit is that no socket outlives the test that opened it, which in a
- * Playwright worker is the difference between a run that exits and one that
- * hangs.
+ * Two sessions live here, for the two ways a project can start its server.
+ * `RemoteBootDeltaSession` is the one to prefer: the server started with
+ * `NODE_V8_COVERAGE` has had V8 collecting block-level coverage since bootstrap,
+ * so this reads a boot dump plus one delta per test straight off disk — real
+ * block granularity for whatever the server loaded before its first test, not
+ * just for what a test loads on demand. `RemoteCoverageSession` is the fallback
+ * for a server that cannot be started that way: a session per test, started
+ * inside it and stopped at the end, so what comes back is what that test made
+ * the server do — but coverage was not running before the session started, so a
+ * module loaded at boot keeps only file granularity.
  *
  * The project opts in by starting its server with `--inspect`. Nothing of covsel
- * runs inside it.
+ * runs inside it either way.
  */
-import type { ScriptCoverage } from '@covsel/core';
+import { BOOT_MARKER_KEY, BootDeltaCoverage, type ScriptCoverage } from '@covsel/core';
 
 /** What Node's inspector publishes about the target it will accept. */
 interface InspectorTarget {
@@ -65,62 +70,71 @@ function sameHost(wsUrl: string, inspectUrl: string): boolean {
   }
 }
 
-export class RemoteCoverageSession {
+/**
+ * A CDP request/response socket to one inspector target, and nothing about what
+ * either session does with it — finding the target, opening the socket, and
+ * matching a reply back to the call that made it, which both sessions need
+ * identically.
+ */
+class InspectorLink {
   private readonly inspectUrl: string;
   private readonly timeoutMs: number;
   private socket: WebSocket | undefined;
   private nextId = 0;
   private readonly pending = new Map<number, Pending>();
 
-  constructor(inspectUrl: string, init: RemoteCoverageSessionInit = {}) {
+  constructor(inspectUrl: string, timeoutMs: number) {
     this.inspectUrl = inspectUrl.replace(/\/+$/, '');
-    this.timeoutMs = init.timeoutMs ?? TIMEOUT_MS;
+    this.timeoutMs = timeoutMs;
   }
 
-  async start(): Promise<void> {
+  get connected(): boolean {
+    return this.socket !== undefined;
+  }
+
+  async connect(): Promise<void> {
     if (this.socket !== undefined) return;
-    this.socket = await this.connect();
-    await this.post('Profiler.enable');
-    // The same options the in-process observer uses, because the same
-    // snapshot-diff reads the result: call counts to tell "ran once" from "ran
-    // again", and block detail so an unexecuted function is visible as a
-    // zero-count range rather than merely absent.
-    await this.post('Profiler.startPreciseCoverage', {
-      callCount: true,
-      detailed: true,
+    this.socket = await this.open();
+  }
+
+  async post(method: string, params?: Record<string, unknown>): Promise<unknown> {
+    const socket = this.socket;
+    if (socket === undefined) throw new Error('coverage session not started');
+    const id = ++this.nextId;
+    return new Promise<unknown>((resolve, reject) => {
+      const timer = setTimeout(() => {
+        this.pending.delete(id);
+        reject(new Error(`the inspector did not answer ${method}`));
+      }, this.timeoutMs);
+      this.pending.set(id, {
+        resolve: (value) => {
+          clearTimeout(timer);
+          resolve(value);
+        },
+        reject: (error) => {
+          clearTimeout(timer);
+          reject(error);
+        },
+      });
+      socket.send(JSON.stringify({ id, method, ...(params ? { params } : {}) }));
     });
   }
 
-  async take(): Promise<ScriptCoverage[]> {
-    const { result } = (await this.post('Profiler.takePreciseCoverage')) as {
-      result: ScriptCoverage[];
-    };
-    return result;
-  }
-
-  async close(): Promise<void> {
+  close(): void {
     const socket = this.socket;
     if (socket === undefined) return;
     this.socket = undefined;
-    try {
-      // Best effort: the server may already be shutting down, and a recording
-      // that has its coverage has nothing left to lose here.
-      await this.request(socket, 'Profiler.stopPreciseCoverage');
-    } catch {
-      /* the coverage is already collected */
-    }
     this.settleAll(new Error('the inspector connection closed'));
     socket.close();
   }
 
-  /** Fail every call still waiting, and forget them. */
   private settleAll(error: Error): void {
     for (const [, waiter] of this.pending) waiter.reject(error);
     this.pending.clear();
   }
 
   /** Find the target Node publishes and open a socket to it. */
-  private async connect(): Promise<WebSocket> {
+  private async open(): Promise<WebSocket> {
     let targets: InspectorTarget[];
     try {
       const res = await fetch(`${this.inspectUrl}/json/list`, {
@@ -157,8 +171,13 @@ export class RemoteCoverageSession {
     // closed one is a no-op -- so without this every call in flight, and every
     // call after it, waits out the full timeout. The window fails either way;
     // this is the difference between failing at once and a recording that looks
-    // hung for as many timeouts as there are tests left.
+    // hung for as many timeouts as there are tests left. Clearing `this.socket`
+    // here, not only in the explicit `close()`, is what makes a call *after* the
+    // crash fail at once too -- `connected` and the `undefined` check in `post`
+    // both read it, and a server restart drops the socket without either of
+    // this session's own callers ever calling `close()` themselves.
     socket.addEventListener('close', () => {
+      this.socket = undefined;
       this.settleAll(new Error('the inspector connection closed'));
     });
     await new Promise<void>((resolve, reject) => {
@@ -198,35 +217,183 @@ export class RemoteCoverageSession {
       waiter.resolve(message.result);
     }
   }
+}
 
-  private async post(method: string, params?: Record<string, unknown>): Promise<unknown> {
-    const socket = this.socket;
-    if (socket === undefined) throw new Error('coverage session not started');
-    return this.request(socket, method, params);
+export class RemoteCoverageSession {
+  private readonly link: InspectorLink;
+
+  constructor(inspectUrl: string, init: RemoteCoverageSessionInit = {}) {
+    this.link = new InspectorLink(inspectUrl, init.timeoutMs ?? TIMEOUT_MS);
   }
 
-  private async request(
-    socket: WebSocket,
-    method: string,
-    params?: Record<string, unknown>,
-  ): Promise<unknown> {
-    const id = ++this.nextId;
-    return new Promise<unknown>((resolve, reject) => {
-      const timer = setTimeout(() => {
-        this.pending.delete(id);
-        reject(new Error(`the inspector did not answer ${method}`));
-      }, this.timeoutMs);
-      this.pending.set(id, {
-        resolve: (value) => {
-          clearTimeout(timer);
-          resolve(value);
-        },
-        reject: (error) => {
-          clearTimeout(timer);
-          reject(error);
-        },
-      });
-      socket.send(JSON.stringify({ id, method, ...(params ? { params } : {}) }));
+  async start(): Promise<void> {
+    if (this.link.connected) return;
+    await this.link.connect();
+    await this.link.post('Profiler.enable');
+    // The same options the in-process observer uses, because the same
+    // snapshot-diff reads the result: call counts to tell "ran once" from "ran
+    // again", and block detail so an unexecuted function is visible as a
+    // zero-count range rather than merely absent.
+    await this.link.post('Profiler.startPreciseCoverage', {
+      callCount: true,
+      detailed: true,
     });
+  }
+
+  async take(): Promise<ScriptCoverage[]> {
+    const { result } = (await this.link.post('Profiler.takePreciseCoverage')) as {
+      result: ScriptCoverage[];
+    };
+    return result;
+  }
+
+  async close(): Promise<void> {
+    if (!this.link.connected) return;
+    try {
+      // Best effort: the server may already be shutting down, and a recording
+      // that has its coverage has nothing left to lose here.
+      await this.link.post('Profiler.stopPreciseCoverage');
+    } catch {
+      /* the coverage is already collected */
+    }
+    this.link.close();
+  }
+}
+
+/**
+ * The server window for a target started with `NODE_V8_COVERAGE`: one boot dump
+ * plus one delta per test, read from that directory over the inspector rather
+ * than from a fresh per-test session.
+ *
+ * Opened once and kept for the life of the recording rather than per test —
+ * boot has to be read before the first test, and every later window is a delta
+ * off the one running collection, not a new one. `endTest` is what a fixture
+ * calls after each test; there is no `startTest`, because coverage has already
+ * been running since `start()` and there is nothing to baseline.
+ */
+export class RemoteBootDeltaSession {
+  private readonly link: InspectorLink;
+  private readonly coverageDir: string;
+  private bootDelta: BootDeltaCoverage | undefined;
+
+  constructor(
+    inspectUrl: string,
+    coverageDir: string,
+    init: RemoteCoverageSessionInit = {},
+  ) {
+    this.link = new InspectorLink(inspectUrl, init.timeoutMs ?? TIMEOUT_MS);
+    this.coverageDir = coverageDir;
+  }
+
+  async start(): Promise<void> {
+    if (this.bootDelta) return;
+    await this.link.connect();
+    await this.link.post('Runtime.enable');
+    const pid = await this.pid();
+    const bootDelta = new BootDeltaCoverage({
+      dir: this.coverageDir,
+      pid,
+      trigger: () => this.trigger(),
+      readBootMarker: () => this.readBootMarker(),
+      writeBootMarker: (dumpName) => this.writeBootMarker(dumpName),
+    });
+    await bootDelta.start();
+    this.bootDelta = bootDelta;
+  }
+
+  /** This test's delta, unioned with boot. */
+  async endTest(): Promise<ScriptCoverage[]> {
+    if (!this.bootDelta) throw new Error('coverage session not started');
+    return this.bootDelta.endTest();
+  }
+
+  async close(): Promise<void> {
+    this.bootDelta = undefined;
+    this.link.close();
+  }
+
+  /** The target's own process id, so a worker or child's dump in the same directory is told apart from it. */
+  private async pid(): Promise<number> {
+    const result = (await this.link.post('Runtime.evaluate', {
+      expression: 'process.pid',
+      returnByValue: true,
+    })) as { result?: { value?: unknown } };
+    const value = result.result?.value;
+    if (typeof value !== 'number') {
+      throw new Error(
+        "covsel could not read the server's process id over the inspector " +
+          '(`Runtime.evaluate` of `process.pid` returned something other than a ' +
+          'number). The boot-delta server window needs it to tell the tracked ' +
+          "process's own coverage dumps apart from a worker or child process " +
+          'that inherited the same `NODE_V8_COVERAGE` directory.',
+      );
+    }
+    return value;
+  }
+
+  /**
+   * Reads the boot dump's filename back from the server's own memory — set by
+   * `writeBootMarker` the first time any session ever booted this process —
+   * rather than inferring "already booted" from the coverage directory or the
+   * clock, neither of which survive the server sleeping between recordings or
+   * the directory being cleared while it stays up.
+   */
+  private async readBootMarker(): Promise<string | undefined> {
+    const result = await this.evaluate(
+      `globalThis[Symbol.for(${JSON.stringify(BOOT_MARKER_KEY)})]`,
+    );
+    return typeof result === 'string' ? result : undefined;
+  }
+
+  private async writeBootMarker(dumpName: string): Promise<void> {
+    await this.evaluate(
+      `globalThis[Symbol.for(${JSON.stringify(BOOT_MARKER_KEY)})] = ${JSON.stringify(dumpName)}`,
+    );
+  }
+
+  /** One `Runtime.evaluate` call, surfacing the evaluated expression's own exception rather than a generic failure. */
+  private async evaluate(expression: string): Promise<unknown> {
+    const result = (await this.link.post('Runtime.evaluate', {
+      expression,
+      returnByValue: true,
+    })) as {
+      result?: { value?: unknown };
+      exceptionDetails?: { text?: string; exception?: { description?: string } };
+    };
+    const details = result.exceptionDetails;
+    if (details !== undefined) {
+      throw new Error(
+        'covsel could not evaluate an expression on the server over the inspector: ' +
+          `${details.exception?.description ?? details.text ?? 'the evaluated expression threw'}.`,
+      );
+    }
+    return result.result?.value;
+  }
+
+  /**
+   * `process.getBuiltinModule` rather than `require`/`import`: the server may be
+   * ESM or CJS, and this has to work in either without depending on what the
+   * evaluated expression's scope happens to have in it. Requires the server on
+   * Node >=22.3 -- on an older one `getBuiltinModule` is `undefined` and calling
+   * `.takeCoverage()` on it throws inside the evaluated expression itself,
+   * which CDP reports as `exceptionDetails` on an otherwise-successful reply
+   * rather than as a protocol-level error `post` would already surface, so this
+   * has to check for it explicitly rather than assume a resolved call means the
+   * dump was actually taken.
+   */
+  private async trigger(): Promise<void> {
+    const result = (await this.link.post('Runtime.evaluate', {
+      expression: "process.getBuiltinModule('node:v8').takeCoverage()",
+      returnByValue: true,
+    })) as { exceptionDetails?: { text?: string; exception?: { description?: string } } };
+    const details = result.exceptionDetails;
+    if (details !== undefined) {
+      throw new Error(
+        'covsel could not trigger a coverage dump on the server over the inspector: ' +
+          `${details.exception?.description ?? details.text ?? 'the evaluated expression threw'}. ` +
+          '`process.getBuiltinModule` needs the server on Node >=22.3 -- an older ' +
+          'version is the most likely cause of an exception here.',
+      );
+    }
   }
 }

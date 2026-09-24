@@ -188,6 +188,17 @@ import { join } from 'node:path';
 export function base(qty) {
   // Out of process on purpose. See JOB below: this is the boundary neither
   // window can cross, and the suite needs one to hold the declaration against.
+  // NODE_V8_COVERAGE is deleted from the *live* process.env, not merely left out
+  // of an env object passed to execFileSync -- Node re-injects an active
+  // NODE_V8_COVERAGE into a spawned child's environment regardless of what the
+  // call site's own env option says, reading it from the running process's
+  // environment rather than respecting a narrower override. A Node child that
+  // kept it would write its own dump into the server's coverage directory on
+  // every call, which the boot-delta window cannot attribute to any test and
+  // correctly fails the recording over -- the same way it would for a real
+  // server that shells out to another Node process without keeping that
+  // process off the directory it is recording from.
+  delete process.env.NODE_V8_COVERAGE;
   return Number(
     execFileSync(process.execPath, [join(process.cwd(), 'jobs/run.mjs'), String(qty)], {
       encoding: 'utf8',
@@ -227,22 +238,73 @@ process.stdout.write(String(compute(Number(process.argv[2] ?? 1))));
 `;
 
 /**
+ * The JS that computes a boot-delta coverage directory outside the project's
+ * own working tree, identically wherever it is inlined.
+ *
+ * Outside the working tree so it never shows up as an untracked path the
+ * recording has no scope claiming -- the same reason \`outputDir\` below is a
+ * system temp directory rather than something under the project root. And
+ * hashed from the project root rather than random, so the server (this code
+ * inlined into \`playwright.config.js\`) and the Playwright worker (inlined
+ * into \`fixtures.js\`) land on the same directory without either process
+ * telling the other what it picked -- each derives \`projectRoot\` from its
+ * own file's location, which \`projectRootExpr\` supplies as a JS expression.
+ *
+ * Callers must already import \`createHash\` from \`node:crypto\`, \`tmpdir\`
+ * from \`node:os\`, and \`join\` from \`node:path\`.
+ */
+function coverageDirCode(projectRootExpr: string): string {
+  return `const projectRoot = ${projectRootExpr};
+const coverageDir = join(
+  tmpdir(),
+  'covsel-server-cov-' + createHash('sha256').update(projectRoot).digest('hex').slice(0, 16),
+);`;
+}
+
+/**
  * `covselFixtures()` on the project's own `test`, exactly as the docs tell a
  * project to write it — so the suite certifies the setup users are given rather
  * than a private one.
  */
-export function fixtures(server?: { observes: string[]; inspectUrl: string }): string {
-  const options =
-    server === undefined
-      ? ''
-      : `{
-    browser: { observes: ${JSON.stringify(BROWSER_OBSERVES)} },
-    server: ${JSON.stringify(server)},
-  }`;
-  return `import { test as base, expect } from '@playwright/test';
+export function fixtures(server?: {
+  observes: string[];
+  inspectUrl: string;
+  /** When set, boot-delta mode: the same coverage directory the server was started with. */
+  coverageDir?: boolean;
+}): string {
+  if (server === undefined) {
+    return `import { test as base, expect } from '@playwright/test';
 import { covselFixtures } from '@covsel/adapter-playwright/fixture';
 
-export const test = base.extend(covselFixtures(${options}));
+export const test = base.extend(covselFixtures());
+export { expect };
+`;
+  }
+  const { coverageDir, ...rest } = server;
+  const coverageDirImports =
+    coverageDir === true
+      ? `import { createHash } from 'node:crypto';
+import { dirname, join } from 'node:path';
+import { tmpdir } from 'node:os';
+import { fileURLToPath } from 'node:url';
+`
+      : '';
+  const coverageDirDecl =
+    coverageDir === true
+      ? `${coverageDirCode("join(dirname(fileURLToPath(import.meta.url)), '..')")}\n\n`
+      : '';
+  return `${coverageDirImports}import { test as base, expect } from '@playwright/test';
+import { covselFixtures } from '@covsel/adapter-playwright/fixture';
+
+${coverageDirDecl}export const test = base.extend(
+  covselFixtures({
+    browser: { observes: ${JSON.stringify(BROWSER_OBSERVES)} },
+    server: {
+      observes: ${JSON.stringify(rest.observes)},
+      inspectUrl: ${JSON.stringify(rest.inspectUrl)},${coverageDir === true ? '\n      coverageDir,' : ''}
+    },
+  }),
+);
 export { expect };
 `;
 }
@@ -293,21 +355,37 @@ ${tests
  * container that ships one. Unset, which is the normal case, Playwright resolves
  * the browser it installed.
  */
-export function playwrightConfig(options: { inspectPort?: number } = {}): string {
+export function playwrightConfig(
+  options: { inspectPort?: number; coverageDir?: boolean } = {},
+): string {
+  // `\${coverageDir}` is computed at the config's own load time -- see
+  // `coverageDirCode` for why it lands outside the project and how it agrees
+  // with the same directory `fixtures.js` computes for the worker that reads
+  // it back.
+  const env = options.coverageDir === true ? 'NODE_V8_COVERAGE=${coverageDir} ' : '';
   const command =
     options.inspectPort === undefined
-      ? "'node server/serve.mjs'"
-      : `'node --inspect=${options.inspectPort} server/serve.mjs'`;
+      ? `\`${env}node server/serve.mjs\``
+      : `\`${env}node --inspect=${options.inspectPort} server/serve.mjs\``;
   // One worker whenever the server is observed: the window is collected from the
   // one server process, and a second worker's test executing there at the same
   // time would be credited to this one.
   const workers = options.inspectPort === undefined ? '' : '\n  workers: 1,';
-  return `import { mkdtempSync } from 'node:fs';
+  const coverageDirImports =
+    options.coverageDir === true
+      ? `import { createHash } from 'node:crypto';\nimport { dirname } from 'node:path';\n`
+      : '';
+  const coverageDirDecl =
+    options.coverageDir === true
+      ? `${coverageDirCode('dirname(fileURLToPath(import.meta.url))')}\n`
+      : '';
+  return `${coverageDirImports}import { mkdtempSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { fileURLToPath } from 'node:url';
 
 const executablePath = process.env.COVSEL_CHROMIUM_PATH;
-
+${coverageDirDecl}
 export default {
   testDir: './tests',
   // Out of the project entirely. Playwright's default \`test-results/\` lands in
@@ -345,17 +423,25 @@ export const INSPECT_PORT = 45818;
  *
  * The same application either way. What changes with `server` is only whether the
  * project is set up to observe it — the config, and the one line the fixture
- * extends `test` with — so the two conformance runs differ in what covsel was
- * told to watch and in nothing else.
+ * extends `test` with — so the runs differ in what covsel was told to watch and
+ * in nothing else. `bootDelta` additionally starts the server with
+ * `NODE_V8_COVERAGE`, so the server window reads boot plus a delta per test
+ * instead of a session opened fresh inside each one.
  */
 export function files(init: {
   markerFile: string;
   server?: boolean;
+  bootDelta?: boolean;
 }): Record<string, string> {
   return {
     'index.html': INDEX_HTML,
     'playwright.config.js': playwrightConfig(
-      init.server === true ? { inspectPort: INSPECT_PORT } : {},
+      init.server === true
+        ? {
+            inspectPort: INSPECT_PORT,
+            ...(init.bootDelta === true ? { coverageDir: true } : {}),
+          }
+        : {},
     ),
     'server/serve.mjs': SERVER,
     'server/pricing.mjs': SERVER_PRICING,
@@ -372,6 +458,7 @@ export function files(init: {
         ? fixtures({
             observes: SERVER_OBSERVES,
             inspectUrl: `http://127.0.0.1:${INSPECT_PORT}`,
+            ...(init.bootDelta === true ? { coverageDir: true } : {}),
           })
         : fixtures(),
     'tests/demo.spec.js': spec(init.markerFile, [

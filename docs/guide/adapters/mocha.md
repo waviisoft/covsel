@@ -39,6 +39,18 @@ reports only the functions that actually ran, so it reliably identifies which
 files a test executed. (Per-function precision within a shared file is left to
 the whole-file recorders — see the [generic adapter](/guide/adapters/generic).)
 
+If `covsel record` itself runs with `NODE_V8_COVERAGE` set, `InspectorObserver`
+picks that up automatically: instead of diffing a CDP snapshot per test, it
+reads a "boot" dump (whatever ran before the first test, credited to all of
+them) plus one delta per test straight from that directory. Since this adapter
+only ever asks for file-level results, the only visible difference is that code
+a spec file runs at its own top level — a shared fixture's setup, an import with
+side effects — is then credited to every test in that file rather than only the
+one whose diff happened to include it, which is the same safe direction as
+everything else here. A dump this cannot attribute to the process being
+recorded — a worker thread or child process that inherited the env var — fails
+the recording rather than guessing.
+
 ## Setup
 
 Install Mocha as usual — there is nothing extra to add:

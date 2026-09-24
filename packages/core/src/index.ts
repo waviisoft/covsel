@@ -16,6 +16,7 @@ export * from './drift.js';
 export * from './listing.js';
 export * from './observer.js';
 export * from './inspector-observer.js';
+export * from './boot-delta-coverage.js';
 export * from './source-map.js';
 export * from './mapper.js';
 export * from './istanbul.js';
