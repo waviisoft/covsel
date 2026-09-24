@@ -65,6 +65,19 @@ export interface CovselConfig {
    * what the resulting map claims it was in a position to see.
    */
   observes?: string[];
+  /**
+   * Settings private to `@covsel/adapter-harness`, opaque to core.
+   *
+   * Every other field here is adapter-agnostic; this one is not, because an
+   * external harness has no test file of its own to carry its own settings the
+   * way a Playwright project's fixture file does. Core neither reads nor
+   * validates its contents — the adapter owns that — but it still has to flow
+   * through {@link resolveConfig} and be compared by {@link changedConfigFields}
+   * like any other field: a project that changes its selection flag or its
+   * server's `observes` without a new recording must not go on trusting a map
+   * that was recorded against the old meaning of either.
+   */
+  harness?: Record<string, unknown>;
   /** Globs identifying test files. */
   testGlobs: string[];
   /**
@@ -274,6 +287,7 @@ export function resolveConfig(partial?: CovselConfigInput): CovselConfig {
     ...(partial?.observes !== undefined
       ? { observes: resolveObserves(partial.observes) }
       : {}),
+    ...(partial?.harness !== undefined ? { harness: partial.harness } : {}),
     testGlobs: partial?.testGlobs ?? DEFAULT_CONFIG.testGlobs,
     ...(partial?.inventory !== undefined
       ? { inventory: resolveInventory(partial.inventory) }

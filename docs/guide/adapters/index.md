@@ -78,33 +78,50 @@ and which one an adapter uses depends on the runner:
   what it alone could see, they combine onto the test, and covsel falls open on
   everything neither of them watched.
 
-All three produce the same thing: the set of source files a test executed. The
+- **An external harness's own coverage, from the server it drives** (the
+  [external harness](/guide/adapters/harness) adapter). A harness in any
+  language — not Node at all — that drives your application over HTTP, a
+  browser, or anything else has no process-level dump for covsel to read at
+  either boundary. Its adapter opens a per-test inspector session against
+  your **server** and observes only what runs there, either around one
+  harness invocation per test or, for a harness that speaks a small
+  [boundary protocol](/guide/adapters/boundary-protocol), around a single
+  invocation that doubles as the recording. For a harness that drives a
+  browser, that is not all the application code the harness exercises: code
+  that runs only in the browser is never covered by this adapter at all, and
+  a project has to keep it out of the scope it declares -- see the harness
+  adapter's own page for how.
+
+All four produce the same thing: the set of source files a test executed. The
 rest of covsel is identical regardless of which path recorded the map.
 
 ## Available adapters
 
-| Adapter (install separately) | Runner                  | How it records                        |
-| ---------------------------- | ----------------------- | ------------------------------------- |
-| `@covsel/adapter-generic`    | any direct-exec command | `NODE_V8_COVERAGE` process            |
-| `@covsel/adapter-vitest`     | Vitest                  | Vitest's own V8 coverage              |
-| `@covsel/adapter-jest`       | Jest                    | Jest's own coverage                   |
-| `@covsel/adapter-node-test`  | node:test               | inspector snapshot-diff (per-test)    |
-| `@covsel/adapter-mocha`      | Mocha                   | inspector snapshot-diff (per-test)    |
-| `@covsel/adapter-cucumber`   | cucumber-js             | inspector snapshot-diff (scenario)    |
-| `@covsel/adapter-playwright` | Playwright              | Chromium + server coverage (per test) |
+| Adapter (install separately) | Runner                  | How it records                                        |
+| ---------------------------- | ----------------------- | ----------------------------------------------------- |
+| `@covsel/adapter-generic`    | any direct-exec command | `NODE_V8_COVERAGE` process                            |
+| `@covsel/adapter-vitest`     | Vitest                  | Vitest's own V8 coverage                              |
+| `@covsel/adapter-jest`       | Jest                    | Jest's own coverage                                   |
+| `@covsel/adapter-node-test`  | node:test               | inspector snapshot-diff (per-test)                    |
+| `@covsel/adapter-mocha`      | Mocha                   | inspector snapshot-diff (per-test)                    |
+| `@covsel/adapter-cucumber`   | cucumber-js             | inspector snapshot-diff (scenario)                    |
+| `@covsel/adapter-playwright` | Playwright              | Chromium + server coverage (per test)                 |
+| `@covsel/adapter-harness`    | any external harness    | server inspector, per test or via a boundary protocol |
 
 The generic, Vitest, and Jest adapters record at whole-file granularity. The
-node:test, Mocha, cucumber-js, and Playwright adapters record each **test** or
-**scenario** individually and run only the affected ones -- which for cucumber-js
-is the only selection it has natively.
+node:test, Mocha, cucumber-js, Playwright, and external-harness adapters record
+each **test** or **scenario** individually and run only the affected ones --
+which for cucumber-js is the only selection it has natively.
 
-The Playwright adapter is the one that observes something other than the process
-covsel started: it reads what the **browser** executed and maps it back through
-the application's source maps, and optionally what the **server** behind the page
-ran, over Node's inspector. Because it sees part of a test rather than all of it,
-it declares a scope instead of claiming to see everything, and every change
-outside that scope falls open to a full run. Its conformance run is the only one
-that needs a browser and a served application, so it lives in its own CI job.
+The Playwright and external-harness adapters are the ones that observe something
+other than the process covsel started: Playwright reads what the **browser**
+executed and maps it back through the application's source maps, and optionally
+what the **server** behind the page ran; the harness adapter reads only the
+**server**, since the harness driving it is never Node at all. Both see part of a
+test rather than all of it, so both declare a scope instead of claiming to see
+everything, and every change outside that scope falls open to a full run.
+Playwright's conformance run is the only one that needs a browser and a served
+application, so it lives in its own CI job.
 
 Any other runner that executes your source directly is already covered at file
 level by the generic adapter, which does not care what it is wrapping: Mocha

@@ -8,8 +8,11 @@ import {
   computeStatus,
   createGenericRecorder,
   explainPath,
+  OBSERVES_EVERYTHING,
   type CoverageMap,
   type CovselConfig,
+  type Recorder,
+  type RecordedUnit,
   recordMap,
   resolveConfig,
 } from '../src/index.js';
@@ -226,5 +229,78 @@ describe('covsel explain', () => {
     await explainPath({ cwd, config: configNow, path: 'spec:a.md' });
 
     expect(readFileSync(counterFile, 'utf8')).toBe('x');
+  });
+});
+
+/** A recorder driven entirely by an inventory, exactly like the harness
+ * adapter's own per-test recorder resolving an id through
+ * `harness.run.expand([id])` rather than reading it as a path. */
+function scenarioRecorder(covers: Record<string, string>): Recorder {
+  return {
+    observes: OBSERVES_EVERYTHING,
+    recordsInventoryIds: true,
+    async record(testFile: string): Promise<RecordedUnit[]> {
+      const source = covers[testFile];
+      if (source === undefined) {
+        throw new Error(`no fixture coverage declared for ${testFile}`);
+      }
+      return [
+        {
+          test: { file: testFile },
+          files: [{ file: source, fileHash: `sha256:${source}` }],
+          blocks: [],
+        },
+      ];
+    },
+  };
+}
+
+describe('status for a suite with no test files matching testGlobs at all', () => {
+  it('reports "no usable map recorded", not a testGlobs message, when a real inventory is configured', async () => {
+    const cwd = mkdtempSync(join(tmpdir(), 'covsel-testinv-status-invonly-'));
+    dirs.push(cwd);
+    write(cwd, 'package.json', '{\n  "name": "fixture",\n  "type": "module"\n}\n');
+    write(cwd, 'src/a.mjs', 'export const a = 1;\n');
+    write(cwd, '.gitignore', '.covsel/\n');
+    commitAll(cwd);
+    const config = resolveConfig({
+      sourceGlobs: ['src/**'],
+      testGlobs: ['test/**/*.test.mjs'],
+      inventory: { command: inventoryCommand({ source: HARNESS, entries: [] }) },
+    });
+
+    const result = await computeStatus({ cwd, config });
+
+    expect(result.mapState).toBe('absent');
+    expect(result.nextIsFullRun).toBe(true);
+    expect(result.nextFullRunReason).not.toMatch(/no test files matched/);
+    expect(result.nextFullRunReason).toBe('no usable map recorded');
+  });
+
+  it('does not misreport a testGlobs blocker once a fileless suite is recorded and nothing changed', async () => {
+    const cwd = mkdtempSync(join(tmpdir(), 'covsel-testinv-status-invonly-'));
+    dirs.push(cwd);
+    write(cwd, 'package.json', '{\n  "name": "fixture",\n  "type": "module"\n}\n');
+    write(cwd, 'src/a.mjs', 'export const a = 1;\n');
+    write(cwd, '.gitignore', '.covsel/\n');
+    commitAll(cwd);
+    const inv = { source: HARNESS, entries: [{ id: { file: 'spec:a' }, version: 'v1' }] };
+    const config = resolveConfig({
+      sourceGlobs: ['src/**'],
+      testGlobs: ['test/**/*.test.mjs'],
+      inventory: { command: inventoryCommand(inv) },
+    });
+    const recorded = await recordMap({
+      cwd,
+      config,
+      recorder: scenarioRecorder({ 'spec:a': 'src/a.mjs' }),
+    });
+    expect(recorded.ok).toBe(true);
+
+    const result = await computeStatus({ cwd, config });
+
+    expect(result.discoveredTestCount).toBe(0);
+    expect(result.nextIsFullRun).toBe(false);
+    expect(result.nextFullRunReason).toBeUndefined();
   });
 });

@@ -336,6 +336,13 @@ what it produced; selection reads it again and compares:
   different harness can change what every test in it does without moving a
   single id or version.
 
+Recording a virtual id's own coverage — not just noticing its version moved —
+still needs a recorder able to be asked about one, since the alternative is
+handing it to a runner that expects a real file. An adapter declares this by
+setting `Recorder.recordsInventoryIds`; the [external harness
+adapter](/guide/adapters/harness) is the one shipped today that does, for a
+suite that is entirely inventory-defined.
+
 A command that fails, or whose output does not parse as this shape, is a full
 run, the same as an unusable map — never an empty selection. So is running
 with `inventory` unset against a map that was recorded with one set: the map

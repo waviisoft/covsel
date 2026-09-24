@@ -31,12 +31,12 @@ import { join, relative } from 'node:path';
 
 import {
   type MapperConfig,
+  RemoteBootDeltaSession,
+  RemoteCoverageSession,
   type ScriptCoverage,
   UnmappableScriptError,
   V8FileMapper,
 } from '@covsel/core';
-
-import { RemoteBootDeltaSession, RemoteCoverageSession } from './server-session.js';
 
 import {
   BLOCKS_ENV,

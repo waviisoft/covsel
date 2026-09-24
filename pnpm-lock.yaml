@@ -67,6 +67,15 @@ importers:
         specifier: workspace:*
         version: link:../../packages/cli
 
+  examples/harness-basic:
+    devDependencies:
+      '@covsel/adapter-harness':
+        specifier: workspace:*
+        version: link:../../packages/adapter-harness
+      covsel:
+        specifier: workspace:*
+        version: link:../../packages/cli
+
   examples/jest-basic:
     devDependencies:
       '@covsel/adapter-jest':
@@ -159,6 +168,19 @@ importers:
         version: 22.20.1
 
   packages/adapter-generic:
+    dependencies:
+      '@covsel/core':
+        specifier: workspace:*
+        version: link:../core
+    devDependencies:
+      '@covsel/conformance':
+        specifier: workspace:*
+        version: link:../conformance
+      '@types/node':
+        specifier: ^22.20.1
+        version: 22.20.1
+
+  packages/adapter-harness:
     dependencies:
       '@covsel/core':
         specifier: workspace:*

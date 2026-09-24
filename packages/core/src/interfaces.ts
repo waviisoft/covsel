@@ -185,6 +185,24 @@ export interface Recorder {
    */
   readonly observesPackages?: boolean;
   /**
+   * Whether `record`/`recordRun` can be asked about an id `discoverTestFiles`
+   * never found on disk -- one named only by a configured `inventory`, whose
+   * `file` is not a path in this repository at all. Absent means no, and no
+   * is the answer for every adapter that hands its runner a file argument it
+   * expects to exist on disk: a generic wrap, Vitest, Jest, Mocha. Asking one
+   * of those to record a virtual id would fail its underlying command, not
+   * skip it safely, so recording never asks unless this is declared.
+   *
+   * Declare it only when `record`/`recordRun` already treat every id as an
+   * opaque string handed to your own runner, never as a path this process
+   * reads or executes directly -- the harness adapter's own
+   * `harness.run.expand([id])`, say. Declaring it is what lets a suite that
+   * is *entirely* inventory-defined -- zero files matching `testGlobs`, every
+   * scenario a virtual id -- be recorded at all, rather than failing before a
+   * single test runs.
+   */
+  readonly recordsInventoryIds?: boolean;
+  /**
    * Record one test file. A recorder implements this or `recordRun`, and
    * recording refuses a recorder offering neither.
    */
@@ -239,6 +257,15 @@ export interface SelectionRunInit {
   cwd: string;
   /** Child stdio (default `'inherit'`, so the user sees the runner's output). */
   stdio?: 'inherit' | 'ignore';
+  /**
+   * The project's resolved configuration, for an adapter whose native
+   * narrowing is itself project-configurable — an external harness's selection
+   * flag, say, rather than a fixed CLI convention every project shares. Every
+   * caller in this codebase supplies it; optional only so a narrowing that
+   * never needed it, and a test double built before this existed, are not
+   * broken by its arrival.
+   */
+  config?: CovselConfig;
 }
 
 /**

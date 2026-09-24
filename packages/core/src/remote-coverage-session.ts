@@ -1,13 +1,11 @@
 /**
- * The V8 profiler of the application server, over the wire.
+ * The V8 profiler of a server process covsel did not spawn, over the wire.
  *
- * A UI test executes code in three places, and the second one covsel can reach
- * is the server the page talks to. Playwright starts it (`webServer`), so covsel
- * cannot spawn it under `NODE_V8_COVERAGE` directly — and even started that way,
- * something still has to trigger a dump at each test boundary and read the
- * directory back, since nothing of covsel runs inside the server to do it from in
- * there. Node's own inspector answers both: it speaks while the process is
- * alive, and it can evaluate the one line that triggers a dump.
+ * Some of what a test executes runs in a server the recorder never started under
+ * `NODE_V8_COVERAGE` -- a Playwright `webServer`, or an application an external
+ * harness drives over HTTP. Node's own inspector reaches it either way: it
+ * speaks while the process is alive, and it speaks the protocol V8 coverage
+ * already comes in.
  *
  * Two sessions live here, for the two ways a project can start its server.
  * `RemoteBootDeltaSession` is the one to prefer: the server started with
@@ -17,13 +15,15 @@
  * just for what a test loads on demand. `RemoteCoverageSession` is the fallback
  * for a server that cannot be started that way: a session per test, started
  * inside it and stopped at the end, so what comes back is what that test made
- * the server do — but coverage was not running before the session started, so a
- * module loaded at boot keeps only file granularity.
+ * the server do — no baseline to subtract, and nothing of the previous test left
+ * in it — but coverage was not running before the session started, so a module
+ * loaded at boot keeps only file granularity.
  *
  * The project opts in by starting its server with `--inspect`. Nothing of covsel
  * runs inside it either way.
  */
-import { BOOT_MARKER_KEY, BootDeltaCoverage, type ScriptCoverage } from '@covsel/core';
+import { BOOT_MARKER_KEY, BootDeltaCoverage } from './boot-delta-coverage.js';
+import type { ScriptCoverage } from './observer.js';
 
 /** What Node's inspector publishes about the target it will accept. */
 interface InspectorTarget {
@@ -53,11 +53,11 @@ export interface RemoteCoverageSessionInit {
 function advice(inspectUrl: string): string {
   return (
     `covsel could not reach an inspector at ${inspectUrl}. Recording the server ` +
-    'window needs the application started with Node’s inspector open — ' +
-    'put `--inspect` on the `webServer.command` in your Playwright config (for ' +
-    'example `node --inspect=9229 server.js`) and point the fixture’s ' +
-    '`server.inspectUrl` at it. Without it the server is unobserved, and a scope ' +
-    'claiming otherwise would skip the tests a server change breaks.'
+    'window needs the application started with Node’s inspector open — put ' +
+    '`--inspect` on the command that starts it (for example ' +
+    '`node --inspect=9229 server.js`) and point this adapter’s own ' +
+    '`server.inspectUrl` config at it. Without it the server is unobserved, and a ' +
+    'scope claiming otherwise would skip the tests a server change breaks.'
   );
 }
 

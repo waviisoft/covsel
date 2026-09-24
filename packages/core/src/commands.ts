@@ -472,38 +472,36 @@ export async function recordMap(init: RecordInit): Promise<RecordResult> {
   const testFiles = discoverTestFiles(cwd, config);
   const store = new LocalStore({ cwd, dir: config.store.dir });
 
-  // Nothing to record is a failure, not an empty success. A map with no entries
-  // is syntactically valid and measures nothing, and writing one turns a
-  // mismatched `testGlobs` into a green CI run that executed no tests at all.
-  // There is no repository for which an empty map is the right answer. Checked
-  // before the tree is sampled, since there is nothing to sample it for.
-  if (testFiles.length === 0) {
+  // Nothing to record from `testFiles` alone, and no recorder able to be
+  // asked about an inventory-named id either -- so no inventory content could
+  // change the answer. Refused immediately, without spending up to
+  // `INVENTORY_TIMEOUT_MS` reading a command whose result cannot matter here:
+  // a project that wired `inventory` up to an adapter that never declared
+  // `recordsInventoryIds` (the generic wrap, Vitest, Jest, Mocha) still needs
+  // the fast, honest "nothing to record" answer, with a clause naming the
+  // real reason when it is this one rather than an ordinary `testGlobs` typo.
+  if (testFiles.length === 0 && recorder.recordsInventoryIds !== true) {
     return {
       ok: false,
       recorded: 0,
       failures: [],
       mapPath: store.path(),
       testFiles,
-      error: noTestFilesFound(cwd, config, ignoredTestFiles(cwd, config).length),
+      error:
+        config.inventory !== undefined
+          ? `${noTestFilesFound(cwd, config, ignoredTestFiles(cwd, config).length)} -- ` +
+            'an inventory is configured, but this adapter’s recorder never declared ' +
+            '`recordsInventoryIds`, so covsel cannot record one of its ids either'
+          : noTestFilesFound(cwd, config, ignoredTestFiles(cwd, config).length),
     };
   }
 
-  // Sampled before a single test runs, because this asks what tree the recording
-  // was taken against — and that is the tree as it stood when the suite started.
-  // Asking afterwards would answer a different question and get it wrong in a
-  // common case: a suite that writes anything untracked inside the repository,
-  // such as a snapshot created on first run, leaves the tree dirty by the end,
-  // and the map would never be anchored for as long as that suite exists.
-  const dirty = isDirtyWorkTree(cwd);
-
   // Read before anything is recorded, not after: the tests below the read may
-  // take real time, and an unpinned upstream can move mid-run. Read afterwards,
-  // a scenario that advanced from v1 to v2 during the recording would store v2
-  // against coverage that was measured while it still behaved like v1, so a
-  // future run reporting v2 unchanged would silently trust coverage recorded
-  // under a different version. Reading first also means a command that cannot
-  // be produced fails fast, before a long recording it would otherwise be
-  // thrown away.
+  // take real time, and an unpinned upstream can move mid-run. Read
+  // afterwards, a scenario that advanced from v1 to v2 during the recording
+  // would store v2 against coverage that was measured while it still behaved
+  // like v1, so a future run reporting v2 unchanged would silently trust
+  // coverage recorded under a different version.
   let testInventory: TestInventory | undefined;
   if (config.inventory !== undefined) {
     const result = readTestInventory({ cwd, command: config.inventory.command });
@@ -519,6 +517,57 @@ export async function recordMap(init: RecordInit): Promise<RecordResult> {
     }
     testInventory = result.inventory;
   }
+
+  // Every id the inventory names is part of the suite even though
+  // `discoverTestFiles` never walks into it -- its `file` is whatever the
+  // inventory's owner chose, not a path on disk -- but only for a recorder
+  // that declared it can be asked about one: passing a virtual id to a
+  // recorder that hands it straight to a runner expecting a real file (the
+  // generic wrap, Vitest, Jest, Mocha) would fail that runner's own command,
+  // not skip it safely. This is also what lets a suite that is *entirely*
+  // inventory-defined -- every scenario a virtual id, none a file `testGlobs`
+  // matches, the ordinary shape for an acceptance suite this adapter drives
+  // -- get past the "nothing to record" check above at all. Deduped against
+  // `testFiles` by file: a recorder's `record` takes a file, not a (file,
+  // name) pair, so several scenarios sharing one inventory-named file are
+  // still one invocation, exactly like several named units in one real test
+  // file.
+  const recordFiles =
+    recorder.recordsInventoryIds === true
+      ? [
+          ...new Set([
+            ...testFiles,
+            ...(testInventory?.entries.map((e) => e.id.file) ?? []),
+          ]),
+        ]
+      : testFiles;
+
+  // Nothing to record is a failure, not an empty success. A map with no entries
+  // is syntactically valid and measures nothing, and writing one turns a
+  // mismatched `testGlobs` into a green CI run that executed no tests at all.
+  // There is no repository for which an empty map is the right answer. Checked
+  // before the tree is sampled, since there is nothing to sample it for. The
+  // only way to reach this with `recordFiles` still empty is a recorder that
+  // declared `recordsInventoryIds` against an inventory with no entries at
+  // all -- the guard above already caught every other empty case.
+  if (recordFiles.length === 0) {
+    return {
+      ok: false,
+      recorded: 0,
+      failures: [],
+      mapPath: store.path(),
+      testFiles: recordFiles,
+      error: noTestFilesFound(cwd, config, ignoredTestFiles(cwd, config).length),
+    };
+  }
+
+  // Sampled before a single test runs, because this asks what tree the recording
+  // was taken against — and that is the tree as it stood when the suite started.
+  // Asking afterwards would answer a different question and get it wrong in a
+  // common case: a suite that writes anything untracked inside the repository,
+  // such as a snapshot created on first run, leaves the tree dirty by the end,
+  // and the map would never be anchored for as long as that suite exists.
+  const dirty = isDirtyWorkTree(cwd);
 
   const entries: MapEntry[] = [];
   const failures: { file: string; reason: string }[] = [];
@@ -577,7 +626,7 @@ export async function recordMap(init: RecordInit): Promise<RecordResult> {
     const outcome = await recordWholeRun({
       recorder,
       recordRun: recorder.recordRun.bind(recorder),
-      testFiles,
+      testFiles: recordFiles,
       ingest,
       ...(init.onEvent ? { onEvent: init.onEvent } : {}),
     });
@@ -587,7 +636,7 @@ export async function recordMap(init: RecordInit): Promise<RecordResult> {
         recorded: entries.length,
         failures: outcome.failures,
         mapPath: store.path(),
-        testFiles,
+        testFiles: recordFiles,
         error: outcome.error,
       };
     }
@@ -598,14 +647,14 @@ export async function recordMap(init: RecordInit): Promise<RecordResult> {
       recorded: 0,
       failures: [],
       mapPath: store.path(),
-      testFiles,
+      testFiles: recordFiles,
       error:
         'the adapter’s recorder implements neither `record` nor `recordRun`, so ' +
         'there is no way to observe a test. This is an adapter bug; report it to ' +
         'whoever publishes it.',
     };
   } else {
-    for (const file of testFiles) {
+    for (const file of recordFiles) {
       try {
         const units = await recorder.record(file);
         const { sources, blind } = ingest(units);
@@ -637,7 +686,7 @@ export async function recordMap(init: RecordInit): Promise<RecordResult> {
       recorded: entries.length,
       failures,
       mapPath: store.path(),
-      testFiles,
+      testFiles: recordFiles,
     };
   }
 
@@ -665,7 +714,7 @@ export async function recordMap(init: RecordInit): Promise<RecordResult> {
     recorded: entries.length,
     failures: [],
     mapPath: store.path(),
-    testFiles,
+    testFiles: recordFiles,
     map,
     ...(unmeasured.length > 0 ? { unmeasured } : {}),
     // Keyed on the dirty tree specifically, not on the absence of a commit. A
@@ -864,8 +913,13 @@ export async function selectAffected(init: SelectInit): Promise<AffectedResult> 
   // Discovery found nothing to choose between, so there is no selection to make
   // and an empty one would read as "nothing to run". A full run hands the runner
   // its own command unfiltered, which means its own discovery finds the tests
-  // covsel's globs did not.
-  if (testFiles.length === 0) {
+  // covsel's globs did not. Checked against the inventory too, not `testFiles`
+  // alone: a suite that is entirely inventory-defined -- zero files matching
+  // `testGlobs`, every scenario a virtual id -- still has something to select
+  // from, and bailing out here before the rest of this function's own
+  // inventory-aware logic ever runs would force a full run on every change,
+  // exactly the failure this axis exists to avoid.
+  if (testFiles.length === 0 && fullRunInventoryIds.length === 0) {
     return fullRun(noTestFilesFound(cwd, config, ignoredTestFiles(cwd, config).length));
   }
 
@@ -1140,7 +1194,7 @@ export interface SelectionOutcome {
  * so what the suite certifies is what the product runs.
  */
 export function runSelected(init: RunSelectedInit): SelectionOutcome {
-  const { adapter, selected, command, cwd } = init;
+  const { adapter, selected, command, cwd, config } = init;
   const stdio = init.stdio ?? 'inherit';
   const [bin, ...rest] = command;
   if (bin === undefined) throw new Error('empty command');
@@ -1150,7 +1204,15 @@ export function runSelected(init: RunSelectedInit): SelectionOutcome {
   // selection, so deciding it here is what keeps the two paths agreeing.
   if (selected.length === 0) return { status: 0 };
   if (adapter.runSelection) {
-    return { status: adapter.runSelection({ selected, command, cwd, stdio }) };
+    return {
+      status: adapter.runSelection({
+        selected,
+        command,
+        cwd,
+        stdio,
+        ...(config !== undefined ? { config } : {}),
+      }),
+    };
   }
   const args = [...rest, ...adapter.formatSelection(selected)];
   // Silencing the runner still has to leave a failure diagnosable, so its output
@@ -1202,6 +1264,7 @@ export function runAffectedSelection(init: RunAffectedSelectionInit): SelectionO
     command,
     cwd,
     ...(init.stdio !== undefined ? { stdio: init.stdio } : {}),
+    ...(init.config !== undefined ? { config: init.config } : {}),
   });
 }
 
@@ -1221,6 +1284,7 @@ export async function runAffected(
     selection,
     command: init.command,
     cwd: init.cwd,
+    config: init.config,
   }).status;
 }
 
@@ -1428,9 +1492,20 @@ export async function computeStatus(init: StatusInit): Promise<StatusResult> {
   const ignoredCount =
     discoveryFailed === undefined ? ignoredTestFiles(cwd, config).length : 0;
 
+  // Never the reason on its own when `inventory` is configured: discovery
+  // finding zero files is the ordinary shape for a suite that is entirely
+  // inventory-defined, and blocking on it here (as `nextSelection`'s `blocked`
+  // below) would report "no test files matched testGlobs" forever, even once
+  // a map exists and the real inventory-drift comparison is what actually
+  // decides. Left unset, the reason a map-less project sees instead is "no
+  // usable map recorded" -- less specific, but not misleading -- and once a
+  // map exists, `nextSelection` runs its own inventory-aware logic rather
+  // than being blocked before it starts.
   const noTests =
     discoveryFailed ??
-    (discovered.length === 0 ? noTestFilesFound(cwd, config, ignoredCount) : undefined);
+    (discovered.length === 0 && config.inventory === undefined
+      ? noTestFilesFound(cwd, config, ignoredCount)
+      : undefined);
   const ignored = ignoredCount > 0 ? { ignoredTestCount: ignoredCount } : {};
 
   if (!map) {

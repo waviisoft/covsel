@@ -43,6 +43,8 @@ export default defineConfig({
             { text: 'Mocha', link: '/guide/adapters/mocha' },
             { text: 'cucumber-js', link: '/guide/adapters/cucumber' },
             { text: 'Playwright', link: '/guide/adapters/playwright' },
+            { text: 'External harness', link: '/guide/adapters/harness' },
+            { text: 'Boundary protocol', link: '/guide/adapters/boundary-protocol' },
             { text: 'Writing an adapter', link: '/guide/adapters/writing-an-adapter' },
           ],
         },

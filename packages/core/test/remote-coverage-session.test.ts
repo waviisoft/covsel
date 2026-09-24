@@ -6,9 +6,11 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 
-import { AmbiguousCoverageError } from '@covsel/core';
-
-import { RemoteBootDeltaSession, RemoteCoverageSession } from '../src/server-session.js';
+import { AmbiguousCoverageError } from '../src/boot-delta-coverage.js';
+import {
+  RemoteBootDeltaSession,
+  RemoteCoverageSession,
+} from '../src/remote-coverage-session.js';
 
 /**
  * The application server's profiler, over the wire.

@@ -28,6 +28,7 @@ export default tseslint.config(
         Buffer: 'readonly',
         setTimeout: 'readonly',
         clearTimeout: 'readonly',
+        fetch: 'readonly',
       },
     },
     rules: {
