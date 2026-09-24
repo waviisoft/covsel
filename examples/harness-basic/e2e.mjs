@@ -5,7 +5,9 @@
 // repo, starts the server the way a real project's CI would (before covsel
 // ever runs, and left running for the whole recording), then exercises both
 // recording modes: one harness invocation per test, and the boundary
-// protocol's single cooperating invocation. Run with
+// protocol's single cooperating invocation -- plus a per-scenario test
+// inventory (harness/inventory.mjs), which selects a scenario whose own
+// definition changed without a repository-wide sentinel. Run with
 // `pnpm --filter @covsel/example-harness-basic e2e` after a build.
 import { spawn, spawnSync } from 'node:child_process';
 import {
@@ -54,8 +56,8 @@ function git(cwd, args) {
 }
 
 /** Lines the CLI printed to stdout (the selected test ids). */
-function affected(cwd) {
-  const res = run('node', [covselBin, 'affected'], cwd);
+function affected(cwd, env) {
+  const res = run('node', [covselBin, 'affected'], cwd, env);
   if (res.status !== 0) throw new Error(`covsel affected failed: ${res.stderr}`);
   return res.stdout
     .split('\n')
@@ -79,6 +81,12 @@ async function waitUntilUp(url, timeoutMs) {
 }
 
 const tmp = mkdtempSync(join(tmpdir(), 'covsel-e2e-harness-'));
+// Deliberately outside `tmp` (the example's own git repo): a scenario's
+// version has to live wherever the harness's owner actually tracks it, never
+// as a file inside the repository covsel diffs, or its own presence would be
+// an unobserved change forcing the full run this mechanism exists to avoid.
+const externalDir = mkdtempSync(join(tmpdir(), 'covsel-e2e-harness-external-'));
+const externalVersionsPath = join(externalDir, 'versions.json');
 let server;
 try {
   for (const entry of ['server.mjs', 'src', 'harness', 'covsel.json', 'package.json']) {
@@ -198,6 +206,141 @@ try {
     'an empty selection exits 0 without running anything',
   );
 
+  console.log(
+    'scenario: add a per-scenario test inventory, including one scenario ' +
+      '(spec:mul) that is not a file in this repository at all',
+  );
+  writeFileSync(
+    join(tmp, 'covsel.json'),
+    JSON.stringify(
+      {
+        adapter: 'harness',
+        testGlobs: ['harness/tests/**/*.harness'],
+        harness: {
+          run: '--only {id}',
+          server: { inspectUrl: INSPECT_URL, observes: ['src/**', 'server.mjs'] },
+        },
+        inventory: { command: 'node harness/inventory.mjs' },
+      },
+      null,
+      2,
+    ) + '\n',
+  );
+  git(tmp, ['add', '.']);
+  git(tmp, ['commit', '-q', '-m', 'add a per-scenario test inventory']);
+  const recInventory = run(
+    'node',
+    [covselBin, 'record', '--', 'python3', 'harness/run.py'],
+    tmp,
+  );
+  process.stderr.write(recInventory.stderr);
+  assert(recInventory.status === 0, 'record exits 0 with an inventory configured');
+
+  const invMap = JSON.parse(readFileSync(join(tmp, '.covsel', 'map.json'), 'utf8'));
+  assert(
+    JSON.stringify(invMap.entries.map((e) => e.test.file).sort()) ===
+      JSON.stringify([
+        'harness/tests/add.harness',
+        'harness/tests/sub.harness',
+        'spec:mul',
+      ]),
+    'spec:mul is recorded with real coverage, with no anchor file under testGlobs at all',
+  );
+  assert(
+    JSON.stringify(
+      (invMap.entries.find((e) => e.test.file === 'spec:mul')?.files ?? [])
+        .map((f) => f.file)
+        .sort(),
+    ) === JSON.stringify(['server.mjs', 'src/mul.mjs', 'src/shared.mjs']),
+    'spec:mul covers server.mjs + src/mul.mjs + src/shared.mjs',
+  );
+
+  console.log(
+    'scenario: nothing changed -- an unchanged, uncovered scenario is not selected',
+  );
+  assert(
+    JSON.stringify(affected(tmp)) === JSON.stringify([]),
+    'nothing is selected when no source, no version, and no id changed',
+  );
+
+  console.log(
+    "scenario: bump add.harness's own version (no source change) -- selects only that scenario",
+  );
+  writeFileSync(externalVersionsPath, JSON.stringify({ add: 'v2' }));
+  assert(
+    JSON.stringify(affected(tmp, { HARNESS_VERSIONS_FILE: externalVersionsPath })) ===
+      JSON.stringify(['harness/tests/add.harness']),
+    'a version bump alone selects only the scenario that changed, not the whole suite',
+  );
+  rmSync(externalVersionsPath);
+
+  console.log(
+    "scenario: bump spec:mul's own version -- the same holds for a scenario with no anchor file",
+  );
+  writeFileSync(externalVersionsPath, JSON.stringify({ mul: 'v2' }));
+  assert(
+    JSON.stringify(affected(tmp, { HARNESS_VERSIONS_FILE: externalVersionsPath })) ===
+      JSON.stringify(['spec:mul']),
+    'a version bump on a scenario with no backing file still selects only that scenario',
+  );
+  rmSync(externalVersionsPath);
+
+  console.log(
+    'scenario: a new id the inventory adds, never seen at recording time, runs',
+  );
+  writeFileSync(externalVersionsPath, JSON.stringify({ div: 'v1' }));
+  assert(
+    JSON.stringify(affected(tmp, { HARNESS_VERSIONS_FILE: externalVersionsPath })) ===
+      JSON.stringify(['spec:div']),
+    'a brand new inventory id is selected, and only it',
+  );
+  rmSync(externalVersionsPath);
+
+  console.log(
+    'scenario: the harness identity moves -- a full run, listing every current id',
+  );
+  assert(
+    JSON.stringify(affected(tmp, { HARNESS_SOURCE: 'harness-basic-inventory-v2' })) ===
+      JSON.stringify([
+        'harness/tests/add.harness',
+        'harness/tests/sub.harness',
+        'spec:mul',
+      ]),
+    'a changed harness identity runs the whole suite, naming every id the inventory currently reports',
+  );
+
+  console.log('scenario: an unreadable inventory command falls open to a full run');
+  writeFileSync(
+    join(tmp, 'covsel.json'),
+    JSON.stringify(
+      {
+        adapter: 'harness',
+        testGlobs: ['harness/tests/**/*.harness'],
+        harness: {
+          run: '--only {id}',
+          server: { inspectUrl: INSPECT_URL, observes: ['src/**', 'server.mjs'] },
+        },
+        inventory: { command: 'node harness/does-not-exist.mjs' },
+      },
+      null,
+      2,
+    ) + '\n',
+  );
+  // Committed, not left dirty -- an uncommitted covsel.json is itself a
+  // change outside `observes`, which would force the same full run for an
+  // unrelated reason and leave this assertion true even if the inventory
+  // command's own fail-open path were broken.
+  git(tmp, ['commit', '-q', '-am', 'point the inventory at a nonexistent script']);
+  assert(
+    JSON.stringify(affected(tmp)) ===
+      JSON.stringify([
+        'harness/tests/add.harness',
+        'harness/tests/sub.harness',
+        'spec:mul',
+      ]),
+    'an inventory command that cannot run falls open to a full run',
+  );
+
   console.log('recording map: mode (b), one invocation through the boundary protocol...');
   writeFileSync(
     join(tmp, 'covsel.json'),
@@ -244,4 +387,5 @@ try {
 } finally {
   server?.kill();
   rmSync(tmp, { recursive: true, force: true });
+  rmSync(externalDir, { recursive: true, force: true });
 }

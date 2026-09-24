@@ -21,6 +21,9 @@ APP_URL = os.environ.get("HARNESS_APP_URL", "http://127.0.0.1:8934")
 TESTS = {
     "harness/tests/add.harness": {"path": "/add", "expect": 7},
     "harness/tests/sub.harness": {"path": "/sub", "expect": 1},
+    # Not a file in this repository at all -- named only by inventory.mjs's
+    # own output, to prove a scenario needs no anchor file under `testGlobs`.
+    "spec:mul": {"path": "/mul", "expect": 12},
 }
 
 

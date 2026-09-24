@@ -18,5 +18,10 @@ createServer(async (req, res) => {
     res.writeHead(200).end(String(sub(3, 2)));
     return;
   }
+  if (url.pathname === '/mul') {
+    const { mul } = await import('./src/mul.mjs');
+    res.writeHead(200).end(String(mul(3, 4)));
+    return;
+  }
   res.writeHead(404).end('');
 }).listen(port, '127.0.0.1');

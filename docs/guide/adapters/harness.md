@@ -64,14 +64,41 @@ covsel refuses that before it ever reaches the adapter, because a bare
 command is a full run, and a full run silently standing in for "nothing
 affected" is exactly the failure this adapter exists to avoid.
 
-A test's id, for now, is the repo-relative path `covsel` discovers it under
+A test's id is ordinarily the repo-relative path `covsel` discovers it under
 via `testGlobs` — a real file on disk your harness's own id space has to
-agree with, one per scenario. covsel does not yet have a way to take test
-ids and per-test versions from an external inventory (tracked as
-[issue #123](https://github.com/waviisoft/covsel/issues/123)); until it
-does, a harness whose tests are not files in this repository — a spec
-tracked in a separate repository, say — has to be covered by a sentinel on
-whatever defines it, which means a full run on every change to it.
+agree with, one per scenario. It does not have to be one, though: set
+top-level `inventory.command` (from `@covsel/core`, independent of this
+adapter — see [Tests that aren't files in this
+repository](/guide/getting-started#tests-that-arent-files-in-this-repository))
+to a command that prints every scenario's id and, where you track one, an
+opaque version:
+
+```json
+{
+  "adapter": "harness",
+  "harness": { "run": "--only {id}", "server": { "observes": ["src/**"] } },
+  "inventory": { "command": "node harness/inventory.mjs" }
+}
+```
+
+An id the inventory names is part of the suite even when no file matches
+`testGlobs` at all — `testGlobs` itself can be left unset for a suite that is
+_entirely_ inventory-defined, the ordinary shape for an acceptance harness
+whose scenarios are pinned from another repository or a test-management
+system, never files here. This adapter's own recorders declare
+`Recorder.recordsInventoryIds`, which is what lets `covsel record` ask about
+such an id at all — a generic runner-wrapping adapter cannot, since it would
+hand the id straight to a runner expecting a real file, so core only asks a
+recorder that opted in.
+
+Selection then narrows exactly the way it does for an ordinary test file: a
+scenario whose own version moved since the recording runs on its own,
+without forcing the rest of the suite along with it; one that is unchanged,
+with nothing in its recorded coverage affected by the diff either, is not
+selected; a scenario new to the inventory always runs; and a different
+`source` — the harness's own identity — is read the way a sentinel is,
+running the whole suite. `examples/harness-basic`'s `spec:mul` scenario has
+no anchor file at all and demonstrates every one of these end to end.
 
 ## Record → affected → run
 
@@ -161,10 +188,19 @@ Recording is all-or-nothing. It fails, and writes nothing, when:
   was interrupted cannot be trusted for either test;
 - **the server's inspector could not be reached** — an unobserved server
   behind a scope that claims otherwise is exactly the map that skips the
-  tests a server change breaks.
+  tests a server change breaks;
+- **`inventory.command` is configured and could not be produced** — a
+  suite that leans on it to know a scenario changed cannot be recorded
+  against a version it never actually read.
 
 ## A runnable example
 
 `examples/harness-basic` is a complete, CI-driven example: a small Node HTTP
 server, and a Python harness driving it, wired for both recording modes —
-including the reference boundary-protocol client, `covsel_boundary.py`.
+including the reference boundary-protocol client, `covsel_boundary.py` — and
+a per-scenario test inventory (`harness/inventory.mjs`). One of its three
+scenarios, `spec:mul`, has no anchor file under `testGlobs` at all, and the
+example demonstrates it recording and narrowing exactly like the other two:
+an unchanged scenario skipped, one whose own version moved selected on its
+own, a brand new id run, and a moved harness identity running the whole
+suite.

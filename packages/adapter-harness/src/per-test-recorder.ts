@@ -40,6 +40,11 @@ export function createPerTestRecorder(init: PerTestRecorderInit): Recorder {
 
   return {
     observes: server.observes,
+    // Every id is already an opaque string handed straight to `harness.run`,
+    // never a path this process reads -- exactly what lets covsel record a
+    // scenario that is not a file in this repository at all, when one is
+    // named only by a configured `inventory`.
+    recordsInventoryIds: true,
     async record(testFile: string): Promise<RecordedUnit[]> {
       if (bin === undefined) throw new Error('empty command');
       const session = new RemoteCoverageSession(server.inspectUrl);

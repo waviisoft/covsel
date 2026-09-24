@@ -54,15 +54,28 @@ future caller from reaching it directly.
 Fail-open rules carry over unchanged: a test the run never reported, a red test,
 an unreachable inspector, or a boundary-protocol violation (two tests
 overlapping, an `end` naming a test that was not open) all fail the whole
-recording, and the harness's own code (step definitions, page objects) has to
-be a sentinel, since a change there can change what a test does with no
-application change at all. A test that never reports `/end` -- a stuck harness
-or application, not a slow test -- fails the recording after
-`harness.boundary.testTimeoutMs` (ten minutes by default) rather than hanging
-`covsel record` forever.
+recording. A test that never reports `/end` -- a stuck harness or application,
+not a slow test -- fails the recording after `harness.boundary.testTimeoutMs`
+(ten minutes by default) rather than hanging `covsel record` forever.
 
-Two small additions elsewhere make this possible without coupling adapters to
-each other or hardcoding a fixed CLI convention:
+The harness's own code (step definitions, page objects, a spec pinned from
+another repository) is not observed either, and a change there can change
+what a test does with no application change at all. `@covsel/core`'s new
+`inventory.command` (see its own changeset) gives that a narrower answer than
+a blanket sentinel: a command that reports each scenario's id and an opaque
+version lets covsel select just the scenario whose version moved, instead of
+running the whole suite on every change to whatever defines it -- and this
+adapter's recorders declare the new `Recorder.recordsInventoryIds`, so a
+scenario that is _entirely_ inventory-defined -- not a file in this repository
+at all, the ordinary shape for an acceptance suite pinned from elsewhere --
+can be recorded and selected exactly like an ordinary test file, rather than
+needing its own anchor file the way it would with any other adapter.
+`examples/harness-basic`'s `spec:mul` scenario demonstrates it end to end: an
+unchanged scenario skipped, one whose own version moved selected on its own,
+a brand new id run, and a moved harness identity running the whole suite.
+
+Three small additions elsewhere make this possible without coupling adapters
+to each other or hardcoding a fixed CLI convention:
 
 - `CovselConfig` gains `harness`, an object opaque to core and owned entirely by
   `@covsel/adapter-harness` -- but still compared like every other field, so a
@@ -73,3 +86,12 @@ each other or hardcoding a fixed CLI convention:
   optional `config`, for an adapter whose native narrowing is itself
   project-configurable rather than a fixed convention every project shares.
   Every caller in this codebase now supplies it.
+- `Recorder` gains `recordsInventoryIds`, declared only by a recorder whose
+  `record`/`recordRun` already treat every id as an opaque string handed to
+  its own runner rather than a path it reads or executes -- never automatic,
+  since asking a generic runner-wrapping adapter (or Vitest's, Jest's,
+  Mocha's) to record a virtual id would fail its underlying command rather
+  than skip it safely. `recordMap`/`selectAffected`/`covsel status` all
+  refused a suite with nothing matching `testGlobs` outright before this,
+  even with a real inventory to record from -- the gap #126 explicitly left
+  for whichever adapter actually needed it to decide how it closes.

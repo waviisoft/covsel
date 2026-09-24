@@ -82,6 +82,11 @@ export function createBoundaryRecorder(init: BoundaryRecorderInit): Recorder {
 
   return {
     observes: server.observes,
+    // Every id is whatever the harness posted to `/begin`/`/end`, never a path
+    // this process reads -- exactly what lets covsel record a scenario that is
+    // not a file in this repository at all, when one is named only by a
+    // configured `inventory`.
+    recordsInventoryIds: true,
     async recordRun(): Promise<RecordedUnit[]> {
       if (bin === undefined) throw new Error('empty command');
 
