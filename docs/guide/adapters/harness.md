@@ -7,8 +7,8 @@ Python harness (pytest, Playwright for Python), a Go or Rust test binary, k6,
 Postman/Newman, a Gherkin runner in another language: none of them are Node,
 so neither the [generic adapter](/guide/adapters/generic)'s
 `NODE_V8_COVERAGE` wrap nor any per-runner adapter can see what they execute.
-All the application code they exercise runs in the **server**, and this
-adapter records that, over the server's own inspector — the same mechanism
+This adapter records the application code they exercise **on the server**,
+over the server's own inspector — the same mechanism
 the [Playwright adapter](/guide/adapters/playwright) uses for its server
 window.
 
@@ -53,8 +53,11 @@ in `observes` (like every other glob list covsel reads) are matched with
 each one purely additive — there is no negation pass that removes a later
 match from an earlier one. `picomatch(["src/**", "!src/public/**"])` still
 matches `src/public/app.js`; the `!src/public/**` entry does not subtract
-anything from `src/**`; it is simply another (unlikely to ever match) pattern
-in the list. The only way to keep browser-executed code out of `observes` is
+anything from `src/**`. Worse, a `!pattern` on its own matches every path
+_outside_ it, so adding one widens `observes` to almost the whole repository:
+`["src/server/**", "!src/public/**"]` matches `lib/util.js` and `README.md`
+too, and an uncovered change to either then selects nothing instead of falling
+open. Never write a `!` entry in `observes`. The only way to keep browser-executed code out of `observes` is
 to never write a pattern broad enough to reach it in the first place: list
 the server-side directories your `observes` actually needs by name, e.g. for
 a project shaped like
