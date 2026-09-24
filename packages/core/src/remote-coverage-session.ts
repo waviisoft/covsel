@@ -53,11 +53,11 @@ export interface RemoteCoverageSessionInit {
 function advice(inspectUrl: string): string {
   return (
     `covsel could not reach an inspector at ${inspectUrl}. Recording the server ` +
-    'window needs the application started with Node’s inspector open — ' +
-    'put `--inspect` on the `webServer.command` in your Playwright config (for ' +
-    'example `node --inspect=9229 server.js`) and point the fixture’s ' +
-    '`server.inspectUrl` at it. Without it the server is unobserved, and a scope ' +
-    'claiming otherwise would skip the tests a server change breaks.'
+    'window needs the application started with Node’s inspector open — put ' +
+    '`--inspect` on the command that starts it (for example ' +
+    '`node --inspect=9229 server.js`) and point this adapter’s own ' +
+    '`server.inspectUrl` config at it. Without it the server is unobserved, and a ' +
+    'scope claiming otherwise would skip the tests a server change breaks.'
   );
 }
 

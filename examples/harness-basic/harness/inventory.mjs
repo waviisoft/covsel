@@ -17,9 +17,9 @@
 // `mul` is not a file in this repository at all -- unlike `add`/`sub`, which
 // still have an anchor file under `harness/tests/` for `testGlobs` to match,
 // `spec:mul` is named only here. That is the ordinary shape for an acceptance
-// suite an external harness drives entirely (covsel/covsel#122's own
-// motivating case): recording and selection both work for it purely through
-// this inventory, with no file on disk standing in for it anywhere.
+// suite an external harness drives entirely: recording and selection both
+// work for it purely through this inventory, with no file on disk standing
+// in for it anywhere.
 //
 // `div`, present only once `versions.json` names it, stands in for a
 // scenario the inventory adds later -- new to covsel, never recorded, and

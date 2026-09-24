@@ -54,9 +54,26 @@ future caller from reaching it directly.
 Fail-open rules carry over unchanged: a test the run never reported, a red test,
 an unreachable inspector, or a boundary-protocol violation (two tests
 overlapping, an `end` naming a test that was not open) all fail the whole
-recording. A test that never reports `/end` -- a stuck harness or application,
-not a slow test -- fails the recording after `harness.boundary.testTimeoutMs`
-(ten minutes by default) rather than hanging `covsel record` forever.
+recording. A skipped test is recorded as covering nothing, never whatever the
+server happened to do during its window. A test that never reports `/end` --
+a stuck harness or application, not a slow test -- fails the recording after
+`harness.boundary.testTimeoutMs` (ten minutes by default) rather than hanging
+`covsel record` forever, and the watchdog now kills the harness's whole process
+group, not only its direct child, so a harness that is itself a shell wrapper
+or task runner cannot outlive it; per-test mode gets the same bound.
+
+Two documented limits: server work that finishes after the response it belongs
+to has already gone out is not attributed to any test unless the new, opt-in
+`harness.server.settleMs` gives it a little longer to happen inside the window
+-- a mitigation, not a guarantee, since covsel cannot detect such work from
+outside the harness. And `{ids}` mode cannot express an id containing a comma
+(it would be indistinguishable from separate ids once joined) -- `expand`
+refuses eagerly and points at `{id}` mode instead, which has no such limit.
+The boundary server also now requires a per-recording token (embedded in the
+URL it hands the harness) and a JSON content type on both endpoints, so a
+stray or forged request -- notably from a page a browser-driving harness loads,
+which needs no CORS preflight for a `text/plain` POST -- cannot corrupt a
+window's timing.
 
 The harness's own code (step definitions, page objects, a spec pinned from
 another repository) is not observed either, and a change there can change

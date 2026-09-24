@@ -11,8 +11,20 @@
  *
  * The application server, again, has to already be running with its inspector
  * open; this only ever connects to it.
+ *
+ * The server binds to loopback only, and the URL handed to the harness embeds
+ * a random per-recording token as a URL path segment — `{COVSEL_BOUNDARY}` is
+ * already `http://127.0.0.1:PORT/<token>`, so a cooperating harness's own
+ * `{COVSEL_BOUNDARY}/begin` and `{COVSEL_BOUNDARY}/end` need no change to
+ * carry it. Both endpoints also require `content-type: application/json`.
+ * Neither is a defense against a hostile local user — loopback binding alone
+ * would stop that — it is a defense against a stray or malicious `text/plain`
+ * POST needing no CORS preflight from a page the harness itself may be
+ * driving in a browser, which could otherwise corrupt a window's timing
+ * without the harness's cooperation at all.
  */
-import { spawn } from 'node:child_process';
+import { randomBytes } from 'node:crypto';
+import { spawn, type ChildProcess } from 'node:child_process';
 import { createServer, type IncomingMessage, type ServerResponse } from 'node:http';
 
 import {
@@ -38,6 +50,11 @@ export interface BoundaryRecorderInit {
 /** Small, fixed, and unrelated to test duration -- this bounds only how long a
  * tiny JSON request body may take to arrive, not how long a test runs. */
 const BODY_TIMEOUT_MS = 30_000;
+
+/** How long a killed process group is given to exit on SIGTERM before the
+ * escalation to SIGKILL -- long enough for ordinary cleanup, short enough
+ * that a stuck harness's watchdog still resolves promptly. */
+const KILL_GRACE_MS = 2_000;
 
 function readJsonBody(req: IncomingMessage): Promise<unknown> {
   return new Promise((resolve, reject) => {
@@ -71,6 +88,35 @@ function respond(res: ServerResponse, status: number, body: unknown): void {
   res.writeHead(status, { 'content-type': 'application/json' }).end(JSON.stringify(body));
 }
 
+function hasJsonContentType(req: IncomingMessage): boolean {
+  const contentType = req.headers['content-type'];
+  return (
+    typeof contentType === 'string' &&
+    contentType.toLowerCase().split(';')[0]?.trim() === 'application/json'
+  );
+}
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+/**
+ * One test's coverage window. `pending` is a synchronous reservation held
+ * from the moment `/begin` is accepted until `session.start()` resolves, so a
+ * second `/begin` arriving before that await settles sees the reservation and
+ * is rejected exactly as it would be once the window is fully `open` --
+ * without it, two concurrent `/begin` calls could both pass the "nothing is
+ * open" check before either set anything, and both would be acknowledged.
+ */
+type Window =
+  | { state: 'pending'; id: string }
+  | {
+      state: 'open';
+      id: string;
+      session: RemoteCoverageSession;
+      watchdog: NodeJS.Timeout;
+    };
+
 export function createBoundaryRecorder(init: BoundaryRecorderInit): Recorder {
   const [bin, ...rest] = init.command;
   const { server, boundary } = init.harness;
@@ -79,6 +125,7 @@ export function createBoundaryRecorder(init: BoundaryRecorderInit): Recorder {
   const sessionInit =
     boundary?.timeoutMs !== undefined ? { timeoutMs: boundary.timeoutMs } : {};
   const testTimeoutMs = boundary?.testTimeoutMs ?? DEFAULT_TEST_TIMEOUT_MS;
+  const settleMs = server.settleMs;
 
   return {
     observes: server.observes,
@@ -90,11 +137,18 @@ export function createBoundaryRecorder(init: BoundaryRecorderInit): Recorder {
     async recordRun(): Promise<RecordedUnit[]> {
       if (bin === undefined) throw new Error('empty command');
 
+      // A fresh, unguessable path segment per recording -- see this module's
+      // own doc comment for why. Embedded in the base URL the harness gets,
+      // never in a header it would have to be taught to send, so a harness
+      // that already appends `/begin`/`/end` to `COVSEL_BOUNDARY` carries it
+      // automatically.
+      const token = randomBytes(16).toString('hex');
+      const beginPath = `/${token}/begin`;
+      const endPath = `/${token}/end`;
+
       const units: RecordedUnit[] = [];
       const protocolErrors: string[] = [];
-      let open:
-        | { id: string; session: RemoteCoverageSession; watchdog: NodeJS.Timeout }
-        | undefined;
+      let slot: Window | undefined;
       let harness: ReturnType<typeof runHarness> | undefined;
 
       const httpServer = createServer((req, res) => {
@@ -107,34 +161,29 @@ export function createBoundaryRecorder(init: BoundaryRecorderInit): Recorder {
         });
       });
 
-      /** Stop the window's watchdog and give back its session, without closing it. */
-      function takeOpenWindow(): { id: string; session: RemoteCoverageSession } {
-        const current = open;
-        if (current === undefined) throw new Error('no open window');
-        clearTimeout(current.watchdog);
-        open = undefined;
-        return current;
-      }
-
       async function handleBegin(res: ServerResponse, body: unknown): Promise<void> {
         if (!isBeginMessage(body)) {
           respond(res, 400, { error: 'malformed /begin body, expected {"id": string}' });
           return;
         }
-        if (open !== undefined) {
+        if (slot !== undefined) {
           protocolErrors.push(
-            `covsel received "begin" for ${body.id} while ${open.id} was still ` +
+            `covsel received "begin" for ${body.id} while ${slot.id} was still ` +
               'open -- the boundary protocol runs one test at a time, and the ' +
               'coverage window that was just interrupted cannot be trusted for ' +
               'either test.',
           );
-          respond(res, 409, { error: `${open.id} is still open` });
+          respond(res, 409, { error: `${slot.id} is still open` });
           return;
         }
+        // Reserved synchronously, before the `await` below, so a second
+        // `/begin` racing this one sees `slot !== undefined` immediately.
+        slot = { state: 'pending', id: body.id };
         const session = new RemoteCoverageSession(server.inspectUrl, sessionInit);
         try {
           await session.start();
         } catch (err) {
+          slot = undefined;
           protocolErrors.push(
             `covsel could not open a coverage window for ${body.id}: ` +
               `${err instanceof Error ? err.message : String(err)}`,
@@ -152,11 +201,11 @@ export function createBoundaryRecorder(init: BoundaryRecorderInit): Recorder {
             `${id} did not report "end" within ${testTimeoutMs}ms of "begin" -- ` +
               'treating the harness as stuck rather than waiting on it forever.',
           );
-          open = undefined;
+          slot = undefined;
           void session.close().catch(() => undefined);
           harness?.kill();
         }, testTimeoutMs);
-        open = { id, session, watchdog };
+        slot = { state: 'open', id, session, watchdog };
         respond(res, 200, {});
       }
 
@@ -167,15 +216,39 @@ export function createBoundaryRecorder(init: BoundaryRecorderInit): Recorder {
           });
           return;
         }
-        if (open === undefined || open.id !== body.id) {
+        if (slot === undefined || slot.state !== 'open' || slot.id !== body.id) {
           protocolErrors.push(
             `covsel received "end" for ${body.id} with no matching open test ` +
-              `(${open === undefined ? 'none was open' : `${open.id} was`}).`,
+              `(${slot === undefined ? 'none was open' : `${slot.id} was`}).`,
           );
           respond(res, 409, { error: 'no matching open test' });
           return;
         }
-        const { session } = takeOpenWindow();
+        const { session, watchdog } = slot;
+        clearTimeout(watchdog);
+        slot = undefined;
+
+        // A skipped test covers nothing, by definition -- it never ran, so
+        // whatever happened on the server during its window belongs to no
+        // test at all and is not meaningfully its coverage. Recorded as
+        // `{files: [], blocks: []}` rather than run through the mapper, which
+        // is the honest reading and, on its own, always re-selects it rather
+        // than risking under-selection from coverage that was really someone
+        // else's.
+        if (body.outcome === 'skipped') {
+          await session.close().catch(() => undefined);
+          units.push({ test: { file: body.id }, files: [], blocks: [] });
+          respond(res, 200, {});
+          return;
+        }
+
+        // An explicit, opt-in mitigation for work the server keeps doing after
+        // it has already responded to the client -- see `settleMs`'s own doc
+        // comment for what this does and does not guarantee.
+        if (settleMs !== undefined && settleMs > 0) {
+          await sleep(settleMs);
+        }
+
         let scripts: Awaited<ReturnType<RemoteCoverageSession['take']>>;
         try {
           scripts = await session.take();
@@ -187,7 +260,7 @@ export function createBoundaryRecorder(init: BoundaryRecorderInit): Recorder {
           respond(res, 502, { error: 'could not read coverage' });
           return;
         } finally {
-          await session.close();
+          await session.close().catch(() => undefined);
         }
         // A failed test's coverage cannot be trusted -- it may have stopped
         // before running the part of itself its coverage is really about. It is
@@ -223,10 +296,14 @@ export function createBoundaryRecorder(init: BoundaryRecorderInit): Recorder {
           respond(res, 404, { error: 'not found' });
           return;
         }
+        if (!hasJsonContentType(req)) {
+          respond(res, 400, { error: 'expected content-type: application/json' });
+          return;
+        }
         const body = await readJsonBody(req);
-        if (req.url === '/begin') {
+        if (req.url === beginPath) {
           await handleBegin(res, body);
-        } else if (req.url === '/end') {
+        } else if (req.url === endPath) {
           await handleEnd(res, body);
         } else {
           respond(res, 404, { error: 'not found' });
@@ -241,7 +318,10 @@ export function createBoundaryRecorder(init: BoundaryRecorderInit): Recorder {
             reject(new Error('covsel could not open the boundary server'));
             return;
           }
-          resolve(`http://127.0.0.1:${address.port}`);
+          // Read back from the socket itself, not assumed from the host just
+          // requested of `listen` -- what a test asserting this really is
+          // loopback has to check.
+          resolve(`http://${address.address}:${address.port}/${token}`);
         });
       });
 
@@ -251,9 +331,9 @@ export function createBoundaryRecorder(init: BoundaryRecorderInit): Recorder {
           env: { ...process.env, [BOUNDARY_ENV]: boundaryUrl },
         });
         const { status, signal, stdout, stderr } = await harness.result;
-        if (open !== undefined) {
+        if (slot !== undefined) {
           protocolErrors.push(
-            `the harness exited while ${open.id} was still open, so its ` +
+            `the harness exited while ${slot.id} was still open, so its ` +
               'coverage window never closed and cannot be trusted.',
           );
         }
@@ -275,7 +355,19 @@ export function createBoundaryRecorder(init: BoundaryRecorderInit): Recorder {
           );
         }
       } finally {
-        if (open !== undefined) clearTimeout(open.watchdog);
+        // A harness that exits (or is killed) while a window is still open
+        // leaves that window's inspector session referenced by nothing else.
+        // Closed here, after the error above is already constructed, so a
+        // failure to close it cannot mask the real reason the recording
+        // failed -- but never left dangling, since an open session can be
+        // exactly what keeps `covsel record`'s process from exiting.
+        if (slot !== undefined) {
+          if (slot.state === 'open') {
+            clearTimeout(slot.watchdog);
+            await slot.session.close().catch(() => undefined);
+          }
+          slot = undefined;
+        }
         httpServer.close();
       }
 
@@ -302,28 +394,62 @@ interface HarnessRun {
 }
 
 /**
+ * Send a signal to a process group, treating "it is already gone" as success
+ * rather than an error -- the group can legitimately have exited between the
+ * watchdog firing and this call, and that is not a failure to report.
+ */
+function killProcessGroup(pid: number, signal: NodeJS.Signals): void {
+  try {
+    process.kill(-pid, signal);
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code !== 'ESRCH') throw err;
+  }
+}
+
+/**
  * Spawned asynchronously rather than with `spawnSync`, because the boundary
  * server has to keep answering `/begin` and `/end` on this same event loop
  * while the harness runs -- a synchronous spawn would block it for the
  * duration of the whole suite, and every request the harness sent would queue
  * behind a process that is waiting for one of them to be answered.
+ *
+ * Spawned detached, in its own process group, so `kill()` can signal the
+ * whole tree rather than only the direct child: a harness that is itself a
+ * shell wrapper, a task runner, or anything else that forks its own children
+ * would otherwise leave them running after `child.kill()`, and the watchdog
+ * that is supposed to stop a stuck harness would not actually stop it.
  */
 function runHarness(
   bin: string,
   args: string[],
   options: { cwd: string; env: NodeJS.ProcessEnv },
 ): HarnessRun {
-  const child = spawn(bin, args, { ...options, stdio: ['ignore', 'pipe', 'pipe'] });
+  const child: ChildProcess = spawn(bin, args, {
+    ...options,
+    stdio: ['ignore', 'pipe', 'pipe'],
+    detached: true,
+  });
   let stdout = '';
   let stderr = '';
-  child.stdout.on('data', (c: Buffer) => (stdout += c));
-  child.stderr.on('data', (c: Buffer) => (stderr += c));
+  child.stdout?.on('data', (c: Buffer) => (stdout += c));
+  child.stderr?.on('data', (c: Buffer) => (stderr += c));
+  let escalate: NodeJS.Timeout | undefined;
   const result = new Promise<HarnessRunResult>((resolve, reject) => {
     child.on('error', reject);
-    child.on('close', (status, signal) => resolve({ status, signal, stdout, stderr }));
+    child.on('close', (status, signal) => {
+      if (escalate !== undefined) clearTimeout(escalate);
+      resolve({ status, signal, stdout, stderr });
+    });
   });
   return {
     result,
-    kill: () => child.kill(),
+    kill: () => {
+      const pid = child.pid;
+      // `spawn` itself failed to produce a process at all -- nothing to kill,
+      // and `child.on('error', ...)` above already reports that failure.
+      if (pid === undefined) return;
+      killProcessGroup(pid, 'SIGTERM');
+      escalate = setTimeout(() => killProcessGroup(pid, 'SIGKILL'), KILL_GRACE_MS);
+    },
   };
 }

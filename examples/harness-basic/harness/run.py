@@ -2,11 +2,11 @@
 """A toy external harness: drives the Node app in server.mjs over HTTP.
 
 Mirrors what a real acceptance harness (pytest + requests, a Playwright-for-
-Python suite, vellum's seeded harness) looks like from covsel's side: a
-runner in a language covsel does not run itself, invoked either once per
-selected test id (`--only`, repeatable) or once for the whole suite, in which
-case it cooperates with covsel's boundary protocol through covsel_boundary.py
-when COVSEL_BOUNDARY is set.
+Python suite) looks like from covsel's side: a runner in a language covsel
+does not run itself, invoked either once per selected test id (`--only`,
+repeatable) or once for the whole suite, in which case it cooperates with
+covsel's boundary protocol through covsel_boundary.py when COVSEL_BOUNDARY is
+set.
 """
 
 import argparse

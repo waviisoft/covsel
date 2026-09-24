@@ -18,9 +18,18 @@ export interface InspectedApp {
 /** `app.mjs`, doing just enough that a coverage window records something. */
 const APP_SOURCE = 'setInterval(() => JSON.parse(\'{"a":1}\'), 5);\n';
 
-export async function startInspectedApp(): Promise<InspectedApp> {
+/**
+ * Start a real, inspected Node process for a test to point a recorder at. The
+ * default source just does enough that any window records something; a
+ * caller proving something more specific about *when* the server does work
+ * (e.g. a `settleMs` test, which needs work that happens after a window would
+ * ordinarily have already closed) supplies its own.
+ */
+export async function startInspectedApp(
+  source: string = APP_SOURCE,
+): Promise<InspectedApp> {
   const cwd = mkdtempSync(join(tmpdir(), 'covsel-adapter-harness-'));
-  writeFileSync(join(cwd, 'app.mjs'), APP_SOURCE);
+  writeFileSync(join(cwd, 'app.mjs'), source);
   const child = spawn(process.execPath, ['--inspect=0', 'app.mjs'], {
     cwd,
     stdio: ['ignore', 'ignore', 'pipe'],

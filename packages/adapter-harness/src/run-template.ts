@@ -15,6 +15,13 @@
  * asking for neither, or both, is refused when the recorder is built, before
  * anything has been recorded or run.
  *
+ * `{ids}` cannot express an id that itself contains a comma — joined, it
+ * would be indistinguishable from several separate ids, and a harness that
+ * splits the token back apart on `,` would silently run the wrong set (or
+ * none at all, if the corrupted id matches nothing). `expand` throws rather
+ * than produce that; an id shaped like that has to run under `{id}` instead,
+ * which repeats the flag once per id and has no such limit.
+ *
  * Tokens split on whitespace, with double quotes protecting a token that
  * contains it (`--flag "{id}"` is one token, `{id}`) — enough for the flags a
  * CLI expects, not a full shell grammar.
@@ -77,6 +84,16 @@ export function parseRunTemplate(run: string): RunTemplate {
     return {
       expand(ids: readonly string[]): string[] {
         if (ids.length === 0) return [];
+        const withComma = ids.find((id) => id.includes(','));
+        if (withComma !== undefined) {
+          throw new Error(
+            `covsel: harness.run's {ids} mode cannot express ${JSON.stringify(withComma)} ` +
+              'because it contains a comma, which would be indistinguishable ' +
+              'from separate ids once every selected id is joined with one. ' +
+              "Use `{id}` instead (it repeats your harness's selection flag " +
+              'once per id) -- it has no such limit.',
+          );
+        }
         return tokens.map((t, i) => (i === idsIndex ? ids.join(',') : t));
       },
     };

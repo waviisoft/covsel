@@ -103,9 +103,8 @@ export const OBSERVES = ['src/**', 'server/**'];
 
 /**
  * The tests, as anchor files `testGlobs` discovers on disk -- the id a real
- * project's harness ids would be, pending the test inventory `@covsel/core`
- * does not implement yet (issue #123). Their content is never read; the id is
- * the path.
+ * project's harness ids would be for a scenario backed by a file. Their
+ * content is never read; the id is the path.
  */
 export const TEST_FILES: Record<string, string> = {
   'tests/alpha.harness': '# covers /alpha\n',

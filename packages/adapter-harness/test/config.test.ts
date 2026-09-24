@@ -75,4 +75,52 @@ describe('resolveHarnessConfig', () => {
       }),
     ).toThrow(/\.boundary\.timeoutMs/);
   });
+
+  it('carries server.settleMs through, unset by default', () => {
+    const withoutSettle = resolveHarnessConfig({
+      run: '--only {id}',
+      server: { observes: ['src/**'] },
+    });
+    expect(withoutSettle.server.settleMs).toBeUndefined();
+
+    const withSettle = resolveHarnessConfig({
+      run: '--only {id}',
+      server: { observes: ['src/**'], settleMs: 250 },
+    });
+    expect(withSettle.server.settleMs).toBe(250);
+  });
+
+  it('rejects a non-numeric server.settleMs', () => {
+    expect(() =>
+      resolveHarnessConfig({
+        run: '--only {id}',
+        server: { observes: ['src/**'], settleMs: 'soon' },
+      }),
+    ).toThrow(/\.server\.settleMs/);
+  });
+
+  it('carries a top-level testTimeoutMs through, for per-test mode', () => {
+    const withoutTimeout = resolveHarnessConfig({
+      run: '--only {id}',
+      server: { observes: ['src/**'] },
+    });
+    expect(withoutTimeout.testTimeoutMs).toBeUndefined();
+
+    const withTimeout = resolveHarnessConfig({
+      run: '--only {id}',
+      server: { observes: ['src/**'] },
+      testTimeoutMs: 5000,
+    });
+    expect(withTimeout.testTimeoutMs).toBe(5000);
+  });
+
+  it('rejects a non-numeric top-level testTimeoutMs', () => {
+    expect(() =>
+      resolveHarnessConfig({
+        run: '--only {id}',
+        server: { observes: ['src/**'] },
+        testTimeoutMs: 'soon',
+      }),
+    ).toThrow(/\.testTimeoutMs/);
+  });
 });

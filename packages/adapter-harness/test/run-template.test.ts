@@ -55,4 +55,14 @@ describe('parseRunTemplate', () => {
       /more than one placeholder/,
     );
   });
+
+  it('refuses to join ids under {ids} when one contains a comma -- it would be indistinguishable from separate ids', () => {
+    const t = parseRunTemplate('--select {ids}');
+    expect(() => t.expand(['a,b', 'c'])).toThrow(/comma/);
+  });
+
+  it('has no such limit under {id}, which repeats the flag instead of joining', () => {
+    const t = parseRunTemplate('--only {id}');
+    expect(t.expand(['a,b', 'c'])).toEqual(['--only', 'a,b', '--only', 'c']);
+  });
 });

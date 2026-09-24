@@ -22,7 +22,11 @@ import {
   V8FileMapper,
 } from '@covsel/core';
 
-import type { HarnessConfig } from './config.js';
+import { DEFAULT_TEST_TIMEOUT_MS, type HarnessConfig } from './config.js';
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
 
 export interface PerTestRecorderInit {
   /** Base command, e.g. `['python3', 'harness/run.py', '--format', 'json']`. */
@@ -37,6 +41,8 @@ export function createPerTestRecorder(init: PerTestRecorderInit): Recorder {
   const { server, run } = init.harness;
   const wantBlocks = init.config.granularity !== 'file';
   const mapper = new V8FileMapper({ cwd: init.cwd, config: init.config });
+  const testTimeoutMs = init.harness.testTimeoutMs ?? DEFAULT_TEST_TIMEOUT_MS;
+  const settleMs = server.settleMs;
 
   return {
     observes: server.observes,
@@ -51,11 +57,24 @@ export function createPerTestRecorder(init: PerTestRecorderInit): Recorder {
       await session.start();
 
       const args = run.expand([testFile]);
+      // `timeout` is the only bound this mode has on a hanging harness
+      // process at all -- unlike the boundary protocol's own per-window
+      // watchdog, there is no cooperating harness here to time out a single
+      // test, only the whole invocation, so this is what stands between a
+      // stuck process and a `covsel record` that never returns.
       const res = spawnSync(bin, [...rest, ...args], {
         cwd: init.cwd,
         encoding: 'utf8',
         maxBuffer: 64 * 1024 * 1024,
+        timeout: testTimeoutMs,
       });
+
+      // An explicit, opt-in mitigation for server work that outlives this
+      // invocation's own exit -- see `settleMs`'s own doc comment on
+      // `HarnessServerConfig` for what this does and does not guarantee.
+      if (settleMs !== undefined && settleMs > 0) {
+        await sleep(settleMs);
+      }
 
       let scripts;
       try {

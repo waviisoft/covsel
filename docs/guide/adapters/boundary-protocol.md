@@ -10,13 +10,25 @@ describes covsel's side of it.
 
 ## Overview
 
-covsel starts a small HTTP server before spawning the harness, and passes its
-URL in the harness's environment as `COVSEL_BOUNDARY`. A cooperating harness
-posts two requests around each test it runs and **waits for the response
-before continuing**:
+covsel starts a small HTTP server, bound to loopback only, before spawning
+the harness, and passes its URL in the harness's environment as
+`COVSEL_BOUNDARY`. That URL already includes a random token as a path
+segment, unique to this recording — `http://127.0.0.1:PORT/<token>` — so a
+cooperating harness needs no separate configuration for it: appending
+`/begin` and `/end` to whatever `COVSEL_BOUNDARY` holds carries the token
+along automatically. A cooperating harness posts two requests around each
+test it runs and **waits for the response before continuing**:
 
 - `POST {COVSEL_BOUNDARY}/begin` — before the test runs.
 - `POST {COVSEL_BOUNDARY}/end` — after it finishes.
+
+Both requests must set `content-type: application/json`; a request missing
+it, or sent to a path that does not carry the current recording's token, is
+rejected. Loopback binding is what actually keeps another machine out; the
+token and the content-type check exist for a narrower reason — a page a
+browser-driving harness loads can issue a `text/plain` POST with no CORS
+preflight at all, and without these that page could forge a `/begin` or
+`/end` and corrupt a window's timing without the harness's own cooperation.
 
 If `COVSEL_BOUNDARY` is unset, a cooperating harness does nothing at all —
 which is what makes it safe to build into a harness permanently, on by
@@ -39,8 +51,11 @@ Request body:
 { "id": "<test id>" }
 ```
 
-`id` is the same id `covsel affected`/`covsel run` would select this test by
-— for now, the repo-relative path covsel discovered it under.
+`id` is the same id `covsel affected`/`covsel run` would select this test
+by — the repo-relative path covsel discovered it under via `testGlobs`, for
+an ordinary test file, or whatever opaque string a configured `inventory`
+names a scenario by otherwise. It is never a path this server reads or
+requires to exist on disk.
 
 A `200` response means covsel has opened a coverage window for this test;
 the harness may now run it. Any other status means covsel has already
@@ -61,11 +76,12 @@ runs one test at a time, with no interleaving. `outcome` says what covsel
 cannot otherwise know from the HTTP exchange:
 
 - **`passed`** — the coverage collected is recorded normally.
-- **`failed`** — the coverage collected is discarded. A test that failed may
-  have stopped before running the part of itself its coverage is really
-  about, so it is treated the same as a test the run never mentioned at all:
-  it stays selected on the next run rather than being recorded as covering
-  whatever it happened to reach before failing.
+- **`failed`** — the coverage collected is discarded, rather than being
+  recorded as covering whatever the test happened to reach before failing. A
+  discarded test is indistinguishable from a test the run never mentioned at
+  all, which fails the _whole_ recording, not just this one test — a suite
+  that did not pass cannot be recorded, because a failed test may have
+  stopped before running the part of itself its coverage is really about.
 - **`skipped`** — recorded as covering nothing, which keeps it selected on
   every run until it is actually exercised, rather than being read as
   "unaffected by anything."

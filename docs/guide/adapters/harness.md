@@ -35,6 +35,31 @@ recording would have seen it — including the server's own entry script, if
 it does anything beyond starting up. Everything outside `observes` falls
 open to a full run on change, exactly as every other adapter's scope does.
 
+**Never include browser-executed or statically-served code in `observes`.**
+A harness that drives a browser — Playwright for Python, Selenium, anything
+pointed at a page — exercises client-side JavaScript that runs _in the
+browser_, never inside the Node server process this adapter's inspector
+session watches. The same is true of any file the server merely hands out as
+a static asset. Declaring such a path anyway (`"observes": ["src/**"]` when
+`src/public/**` is served to the browser and executed there, not on the
+server) is not a smaller scope than the truth, it is a _wrong_ one: it claims
+the recording saw code it never ran through, so an edit there would show "no
+affected tests" instead of falling open to a full run — exactly the failure
+this adapter exists to avoid. Keep client-side code out of `observes`
+entirely, e.g.:
+
+```json
+{
+  "harness": {
+    "server": { "observes": ["src/**"] }
+  }
+}
+```
+
+with `src/public/**` (or wherever your project serves browser-executed code
+from) left out on purpose, so a change there always falls open to a full run
+rather than being silently — and wrongly — claimed as covered.
+
 The harness's own code — step definitions, page objects, whatever drives the
 protocol — is not observed either. A change there can change what a test
 does with no application change at all, so put it under `sentinels`:
@@ -102,6 +127,17 @@ no anchor file at all and demonstrates every one of these end to end.
 
 ## Record → affected → run
 
+**A full run's completeness depends on your harness's own bare invocation.**
+When nothing is affected — or when a change forces a full run — covsel invokes
+the command you gave it with no `--only`/`--select` args at all, exactly as
+you would run it by hand; the adapter's own selection narrowing never enters
+into that path. That means a full run is only actually complete when your
+harness's _default_, no-arguments invocation runs every scenario your
+inventory names, including any virtual (non-file) ones — if your harness's
+bare command runs some narrower default suite, a "full run" covsel triggers
+would silently be narrower than the suite covsel believes it recorded.
+Confirm this about your own harness before relying on selection here.
+
 The application server has to already be running, with its inspector open,
 before you record — this adapter only ever connects to it, exactly as the
 Playwright adapter's server window does, and never starts or stops it
@@ -160,7 +196,38 @@ not a slow test — covsel gives up on it after `harness.boundary.testTimeoutMs`
 (ten minutes by default) and fails the recording rather than waiting
 forever. Raise it for a suite with legitimately longer individual tests;
 `harness.boundary.timeoutMs` is a separate, much shorter bound on the
-inspector round trips around each window, not on the test itself.
+inspector round trips around each window, not on the test itself. When it
+fires, covsel kills the entire harness process tree, not just the process it
+spawned directly, so a harness that is itself a wrapper script or forks its
+own children is actually stopped. The same watchdog exists in **one
+invocation per test** mode too, bounded by `harness.testTimeoutMs` (the same
+ten-minute default): a harness invocation that hangs there is killed the
+same way, since there is no cooperating harness in that mode to time out a
+single test against.
+
+### Coverage that outlives the response: `settleMs`
+
+Both recording modes close a test's coverage window the moment the harness
+says the test is done — `/end`, or the process exiting. A real server
+sometimes keeps working _after_ it has already responded to the client (a
+fire-and-forget `.then()`, a scheduled callback fired from the response
+handler); that work happens outside the window and is invisible to covsel,
+so an edit to the file it exercises can wrongly show as unaffected.
+
+Set `harness.server.settleMs` to delay the close by that many milliseconds:
+
+```json
+{ "harness": { "server": { "observes": ["src/**"], "settleMs": 200 } } }
+```
+
+**This is a mitigation, not a guarantee.** Work that finishes within
+`settleMs` of the window's ordinary close is attributed to the test that was
+open; anything that finishes after that is attributed to no test at all, and
+covsel has no way to detect this from outside the harness — nothing here
+observes whether the server is still busy. Unset or `0`, the default, changes
+nothing: don't set it unless you know your server does this, and size it to
+the slowest such callback you actually have, not as a general-purpose safety
+margin.
 
 ## Serial recording, and shared server state
 

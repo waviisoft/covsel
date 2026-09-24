@@ -16,6 +16,23 @@ export interface HarnessServerConfig {
    * actually executes.
    */
   observes: string[];
+  /**
+   * How long, in milliseconds, to wait after a test's window would otherwise
+   * close before actually reading and closing it. Unset or `0` (the default)
+   * changes nothing: the window closes exactly when the harness's `/end` (or,
+   * in per-test mode, the harness process's own exit) says the test is done.
+   *
+   * A real server sometimes keeps working after it has already responded to
+   * the client — a fire-and-forget `.then()`, a scheduled callback — and that
+   * work is invisible to covsel unless something delays the close past it.
+   * Setting this is a mitigation, not a guarantee: work that finishes within
+   * `settleMs` of the window's ordinary close is attributed to the test that
+   * was open; anything after that still runs unattributed to any test, and
+   * there is no way to detect this from outside the harness. Set it only when
+   * you know your server does this, and only as long as the slowest such
+   * callback you know about.
+   */
+  settleMs?: number;
 }
 
 /** Presence, not its (by default empty) contents, selects the boundary-protocol recording path over one invocation per test. */
@@ -49,6 +66,17 @@ export interface HarnessConfig {
   run: RunTemplate;
   server: HarnessServerConfig;
   boundary?: HarnessBoundaryConfig;
+  /**
+   * How long, in milliseconds, one harness invocation may run in **per-test**
+   * recording mode (`harness.boundary` unset) before covsel kills it and fails
+   * that test's recording, rather than blocking `covsel record` forever on a
+   * hung process. Defaults to the same generous bound the boundary protocol's
+   * own per-test watchdog uses, for the same reason: short enough to fail
+   * within a CI job's own timeout, long enough that a real test never trips
+   * it. Unused by the boundary protocol, which has its own
+   * `boundary.testTimeoutMs`.
+   */
+  testTimeoutMs?: number;
 }
 
 const DEFAULT_INSPECT_URL = 'http://127.0.0.1:9229';
@@ -112,6 +140,18 @@ export function resolveHarnessConfig(raw: unknown): HarnessConfig {
   if (inspectUrlValue !== undefined && typeof inspectUrlValue !== 'string') {
     fail('.server.inspectUrl is not a string.');
   }
+  const settleMsValue = serverValue.settleMs;
+  if (settleMsValue !== undefined && typeof settleMsValue !== 'number') {
+    fail('.server.settleMs is not a number.');
+  }
+
+  const topLevelTestTimeoutMsValue = raw.testTimeoutMs;
+  if (
+    topLevelTestTimeoutMsValue !== undefined &&
+    typeof topLevelTestTimeoutMsValue !== 'number'
+  ) {
+    fail('.testTimeoutMs is not a number.');
+  }
 
   let boundary: HarnessBoundaryConfig | undefined;
   const boundaryValue = raw.boundary;
@@ -121,13 +161,18 @@ export function resolveHarnessConfig(raw: unknown): HarnessConfig {
     if (timeoutMsValue !== undefined && typeof timeoutMsValue !== 'number') {
       fail('.boundary.timeoutMs is not a number.');
     }
-    const testTimeoutMsValue = boundaryValue.testTimeoutMs;
-    if (testTimeoutMsValue !== undefined && typeof testTimeoutMsValue !== 'number') {
+    const boundaryTestTimeoutMsValue = boundaryValue.testTimeoutMs;
+    if (
+      boundaryTestTimeoutMsValue !== undefined &&
+      typeof boundaryTestTimeoutMsValue !== 'number'
+    ) {
       fail('.boundary.testTimeoutMs is not a number.');
     }
     boundary = {
       ...(timeoutMsValue !== undefined ? { timeoutMs: timeoutMsValue } : {}),
-      ...(testTimeoutMsValue !== undefined ? { testTimeoutMs: testTimeoutMsValue } : {}),
+      ...(boundaryTestTimeoutMsValue !== undefined
+        ? { testTimeoutMs: boundaryTestTimeoutMsValue }
+        : {}),
     };
   }
 
@@ -136,7 +181,11 @@ export function resolveHarnessConfig(raw: unknown): HarnessConfig {
     server: {
       inspectUrl: inspectUrlValue ?? DEFAULT_INSPECT_URL,
       observes: [...observesValue],
+      ...(settleMsValue !== undefined ? { settleMs: settleMsValue } : {}),
     },
     ...(boundary !== undefined ? { boundary } : {}),
+    ...(topLevelTestTimeoutMsValue !== undefined
+      ? { testTimeoutMs: topLevelTestTimeoutMsValue }
+      : {}),
   };
 }

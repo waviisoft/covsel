@@ -6,12 +6,23 @@
  * A cooperating runner reads `COVSEL_BOUNDARY` from its environment. Unset, it
  * does nothing — the protocol costs nothing to build into a harness
  * permanently. Set, it is the base URL of a server covsel starts before
- * spawning the harness, and the runner sends two requests around each test:
+ * spawning the harness — including a random, per-recording token as a URL
+ * path segment, e.g. `http://127.0.0.1:PORT/<token>` — and the runner sends
+ * two requests around each test, appending to that base exactly as before:
  *
  * - `POST {COVSEL_BOUNDARY}/begin` with `{"id": "<test id>"}`, before the test
  *   runs.
  * - `POST {COVSEL_BOUNDARY}/end` with `{"id": "<test id>", "outcome": "passed"
  *   | "failed" | "skipped"}`, after it finishes.
+ *
+ * Both requests must carry `content-type: application/json`; either endpoint
+ * rejects a request without it, and a request to a path that does not carry
+ * the current recording's token, with a 400/404. Neither check defends
+ * against a hostile local user — the server binds to loopback only, which
+ * already does that — they exist because a `text/plain` POST needs no CORS
+ * preflight, so a page a browser-driving harness happens to load could
+ * otherwise forge a `/begin` or `/end` and corrupt a window's timing without
+ * the harness's own cooperation at all.
  *
  * Both are blocking: the runner waits for the response before continuing.
  * covsel needs the wait to open its coverage window exactly at the boundary and

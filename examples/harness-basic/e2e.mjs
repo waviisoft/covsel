@@ -195,7 +195,13 @@ try {
   console.log('scenario: an empty selection never runs the bare harness command');
   // Nothing changed since the last commit, so nothing is affected -- and the
   // one thing this must never do is run the harness with no `--only` at all,
-  // which is a full run silently standing in for "nothing to do".
+  // which is a full run silently standing in for "nothing to do". The exit
+  // code alone cannot tell these apart: a bare `run.py` with no `--only`
+  // also exits 0 (it runs every test in TESTS and none of them fail), so
+  // this asserts on what actually ran instead -- run.py prints `PASS <id>`
+  // or `FAIL <id>` for every test it executes, so any such line means the
+  // guard that is supposed to keep an empty selection from reaching the
+  // harness at all was not doing its job.
   const nothingSelected = run(
     'node',
     [covselBin, 'run', '--', 'python3', 'harness/run.py', '--format', 'json'],
@@ -204,6 +210,10 @@ try {
   assert(
     nothingSelected.status === 0,
     'an empty selection exits 0 without running anything',
+  );
+  assert(
+    !/^(PASS|FAIL) /m.test(nothingSelected.stdout + nothingSelected.stderr),
+    'an empty selection never actually invokes the harness (no test ran)',
   );
 
   console.log(
