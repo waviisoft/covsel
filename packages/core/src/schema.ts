@@ -283,6 +283,18 @@ export function mapRejection(map: unknown): string | undefined {
   if (!Array.isArray(m.observed) || !m.observed.every((g) => typeof g === 'string')) {
     return 'it does not say what the recording could observe';
   }
+  // Present or absent both mean something -- absent is "no baseline", read
+  // fresh elsewhere -- but present and malformed is neither, and every reader
+  // that indexes into `.entries` (selection, `status`, `explain`) would throw
+  // on it rather than fall open. Rejected here, once, rather than guarded at
+  // every call site: the whole map is unusable, which is the same answer a
+  // stale schema version gets.
+  if (m.testInventory !== undefined) {
+    const inv = m.testInventory as Partial<TestInventory>;
+    if (typeof inv.source !== 'string' || !Array.isArray(inv.entries)) {
+      return 'it records a test inventory that is not covsel’s own shape';
+    }
+  }
   return undefined;
 }
 

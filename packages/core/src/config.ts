@@ -316,12 +316,15 @@ export function resolveConfig(partial?: CovselConfigInput): CovselConfig {
  *    reason. Every way the comparison can go wrong is already a fall-open case
  *    of its own: a map recorded before `inventory` was set has nothing to
  *    compare against, so every current entry reads as new rather than nothing
- *    changing; a command that starts naming different tests falls open through
- *    the ordinary new/changed rules; and a harness that stopped being the one
- *    the map was recorded against is caught by comparing `source`, which no
- *    value in this config carries. Comparing the command string on top would
- *    only add a full run to the one case that is already handled safely and
- *    more narrowly -- turning the feature on for the first time.
+ *    changing; the reverse -- unset now, but the map was recorded with one --
+ *    cannot even ask the question, so it is a full run outright rather than a
+ *    silent "nothing changed"; a command that starts naming different tests
+ *    falls open through the ordinary new/changed rules; and a harness that
+ *    stopped being the one the map was recorded against is caught by comparing
+ *    `source`, which no value in this config carries. Comparing the command
+ *    string on top would only add a full run to the one case that is already
+ *    handled safely and more narrowly -- turning the feature on for the first
+ *    time.
  */
 const INERT_CONFIG_FIELDS = [
   'adapter',

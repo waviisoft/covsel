@@ -130,7 +130,7 @@ export function readTestInventory(init: {
     };
   }
   if (res.status !== 0) {
-    const stderr = (res.stderr ?? '').trim();
+    const stderr = tail(res.stderr ?? '');
     return {
       ok: false,
       reason:
@@ -138,6 +138,27 @@ export function readTestInventory(init: {
     };
   }
   return parseTestInventory(res.stdout ?? '');
+}
+
+/** How much of a failed command's own output a full-run reason may quote. */
+const STDERR_TAIL_LINES = 4;
+const STDERR_TAIL_CHARS = 500;
+
+/**
+ * The last few lines of a command's stderr, capped in length -- never the
+ * whole thing.
+ *
+ * This text lands in a full-run reason, which is printed to CI logs and
+ * `covsel status`/`explain` output alike. A command that shells out to an
+ * authenticated checkout can echo a token or a credential on failure, and
+ * quoting it in full turns a fail-open message into a leak. A few lines is
+ * enough to recognise the failure; it is not enough to be the failure.
+ */
+function tail(stderr: string): string {
+  const trimmed = stderr.trim();
+  if (trimmed === '') return '';
+  const lines = trimmed.split('\n').slice(-STDERR_TAIL_LINES).join('\n');
+  return lines.length > STDERR_TAIL_CHARS ? `…${lines.slice(-STDERR_TAIL_CHARS)}` : lines;
 }
 
 /**
@@ -164,7 +185,13 @@ export type TestInventoryChange =
     }
   | {
       readonly mandatory?: undefined;
-      readonly known?: undefined;
+      /**
+       * Present only when a current inventory was actually read before this
+       * fell open -- the `source` mismatch case, where the ids this run just
+       * read are the honest answer to "what should a full run's own output
+       * name", not the (now superseded) ones the map recorded.
+       */
+      readonly known?: readonly TestId[];
       readonly source?: undefined;
       /** Why the next selection has to be a full run. */
       readonly fallOpen: string;
@@ -175,9 +202,10 @@ export type TestInventoryChange =
  * the comparison forces a full run.
  *
  * `undefined` means there is nothing to compare: the project configures no
- * inventory, or the map measured nothing at all -- the same "not a downgrade
- * that failed" reading {@link dependencyChange} gives an entry-less map, since
- * there is no selection here to narrow either way.
+ * inventory and the map recorded none either, or the map measured nothing at
+ * all -- the same "not a downgrade that failed" reading {@link dependencyChange}
+ * gives an entry-less map, since there is no selection here to narrow either
+ * way.
  */
 export function testInventoryChange(init: {
   cwd: string;
@@ -185,8 +213,24 @@ export function testInventoryChange(init: {
   map: CoverageMap;
 }): TestInventoryChange | undefined {
   const { cwd, config, map } = init;
-  if (config.inventory === undefined) return undefined;
   if (map.entries.length === 0) return undefined;
+
+  if (config.inventory === undefined) {
+    // The map claims a baseline to compare tests against, but this run has no
+    // way to ask the question at all -- a config drifting out of step between
+    // the job that recorded the map and this one (a missing env var, a
+    // reverted field). Read the same way `dependencyChange` reads a lockfile
+    // it cannot establish the installed tree for: the claim stands and this
+    // run cannot verify it, so it falls open rather than silently answering
+    // "nothing changed" for an axis it never checked.
+    if (map.testInventory !== undefined) {
+      return {
+        fallOpen:
+          'the map was recorded against a test inventory, but this run configures none',
+      };
+    }
+    return undefined;
+  }
 
   const result = readTestInventory({ cwd, command: config.inventory.command });
   if (!result.ok) {
@@ -195,13 +239,19 @@ export function testInventoryChange(init: {
     };
   }
   const current = result.inventory;
+  const known = current.entries.map((e) => e.id);
   const recorded = map.testInventory;
 
   // A different harness can change what every test in it does without moving
   // a single id or version, so this is read the way a sentinel is: whatever
-  // else the diff says, the whole suite runs.
+  // else the diff says, the whole suite runs. `known` still names this run's
+  // own ids -- the ones a full run's own output should list -- since the
+  // recorded inventory is what just got invalidated.
   if (recorded !== undefined && current.source !== recorded.source) {
-    return { fallOpen: `the harness changed (${recorded.source} -> ${current.source})` };
+    return {
+      fallOpen: `the harness changed (${recorded.source} -> ${current.source})`,
+      known,
+    };
   }
 
   const recordedVersions = new Map<string, string | undefined>();
@@ -210,9 +260,7 @@ export function testInventoryChange(init: {
   }
 
   const mandatory: TestId[] = [];
-  const known: TestId[] = [];
   for (const entry of current.entries) {
-    known.push(entry.id);
     const key = testKey(entry.id);
     // Never assume unchanged: an id the recording never saw, one whose
     // version moved, and one that carries no version at all are all read the

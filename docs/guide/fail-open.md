@@ -387,17 +387,29 @@ selection reads it again and compares, failing open at every step:
 - an id whose version differs from the one recorded has changed, and runs;
 - an id with **no version at all is never read as unchanged** — it always
   runs, whatever the map says;
+- an id the inventory names with **no entry recorded for it at all** runs —
+  never observed, a recorder crash, a shard this map never saw — the same
+  reading a discovered test file with no map entry already gets;
 - a command that fails, or whose output does not parse as covsel's inventory
   shape, is a full run, never an empty selection — the same reading an
   unusable map already gets;
+- **running with `inventory` unset against a map recorded with one set is
+  also a full run.** The map claims a baseline this run cannot check, and a
+  config drifting out of step between the recording job and the selecting one
+  — a missing env var, a reverted field — must not silently answer "nothing
+  changed" for an axis it never asked about;
 - a different `source` is read the way a sentinel is: the whole suite runs,
   because a different harness — a rewritten step-definition layer, a new
   pinned commit of a shared spec — can change what every test in it does
   without moving a single id or version, and nothing else would notice.
 
 An id the map recorded that the current inventory no longer names is dropped
-rather than treated as a change: nothing is skipped by a test leaving the
-inventory, so there is nothing here that has to run because of it.
+rather than treated as a change: leaving the inventory is not itself read as a
+version change, so nothing here forces it to run on that account alone. It can
+still be selected the ordinary way, through the sources its own entry credits
+— dropping it from the inventory does not withdraw that entry, and covsel would
+rather over-select a test that is on its way out than lose the guarantee for
+one that is not.
 
 Turning `inventory` on for a project whose map predates it costs one narrow
 correction rather than a full run: with no recorded inventory to compare

@@ -93,6 +93,28 @@ describe('isUsableMap', () => {
     expect(isUsableMap(withoutGranularity)).toBe(false);
   });
 
+  it('accepts a map with no test inventory, and one with a well-formed one', () => {
+    expect(isUsableMap(validMap)).toBe(true);
+    expect(
+      isUsableMap({
+        ...validMap,
+        testInventory: { source: 'sha:aaa', entries: [{ id: { file: 'spec:a.md' } }] },
+      }),
+    ).toBe(true);
+  });
+
+  it('rejects a malformed test inventory rather than let a reader crash on it (fail open)', () => {
+    // Every reader that indexes into `testInventory.entries` -- selection,
+    // `status`, `explain` -- would throw a TypeError on a shape like this one
+    // rather than fall open, which is worse than under-selecting: it can take
+    // the whole run down instead of just widening it.
+    expect(isUsableMap({ ...validMap, testInventory: { source: 'sha:aaa' } })).toBe(
+      false,
+    );
+    expect(isUsableMap({ ...validMap, testInventory: { entries: [] } })).toBe(false);
+    expect(isUsableMap({ ...validMap, testInventory: 'sha:aaa' })).toBe(false);
+  });
+
   it('rejects non-object garbage', () => {
     expect(isUsableMap(null)).toBe(false);
     expect(isUsableMap(undefined)).toBe(false);

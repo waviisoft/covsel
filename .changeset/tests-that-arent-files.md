@@ -18,17 +18,21 @@ pin file a sentinel, forcing a full run on every pin move however small.
   repository, plus an optional `name`) and, where its owner tracks one, an
   opaque `version`.
 - An id new to the inventory, one whose version differs from the recorded one,
-  and one with no version at all all run regardless of the diff -- an id with
-  no version is never read as unchanged.
-- An id the map recorded that the inventory no longer names is dropped, and
-  selects nothing on its own.
+  one with no version at all, and one with no entry recorded for it at all
+  (never observed, a recorder crash, a shard the map never saw) all run
+  regardless of the diff -- an id with no version is never read as unchanged.
+- An id the map recorded that the inventory no longer names is dropped: that
+  alone forces nothing, though it can still be selected the ordinary way if
+  its recorded entry's own sources changed.
 - The inventory's `source` -- the identity of whatever defines and executes
   these tests -- is read the way a sentinel is: a change to it runs the whole
   suite, because a different harness can change every test in it without moving
   a single id or version.
 - A command that fails, or whose output does not parse as covsel's inventory
   shape, is a full run -- never an empty selection, the same reading an
-  unusable map already gets.
+  unusable map already gets. So is running with `inventory` unset against a
+  map that was recorded with one set: the map claims a baseline this run
+  cannot check.
 - The map records the inventory it was recorded against (schema v6 --
   `MAP_SCHEMA_VERSION` bump, so every map recorded before this is re-recorded
   once). `covsel status` and `covsel explain <path>` report how many of the

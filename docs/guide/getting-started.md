@@ -303,7 +303,10 @@ version that changes exactly when the test's definition did:
 ```jsonc
 {
   "inventory": {
-    "command": "vellum suite extract $VELLUM_INTENT_REPO -o - | jq '{source: env.HARNESS_SHA, entries: [.scenarios[] | {id: {file: .file, name: .id}, version: .version}]}'",
+    // set -o pipefail so a failure earlier in the pipe (an unreadable intent
+    // repo) is not masked by jq exiting 0 on whatever it received -- a
+    // command that never fails can never be read as "cannot be produced".
+    "command": "set -o pipefail && vellum suite extract $VELLUM_INTENT_REPO -o - | jq '{source: env.HARNESS_SHA, entries: [.scenarios[] | {id: {file: .file, name: .id}, version: .version}]}'",
   },
 }
 ```
@@ -316,17 +319,24 @@ what it produced; selection reads it again and compares:
 - an id the map never recorded is new, and runs;
 - an id whose version differs from the recorded one has changed, and runs;
 - an id with no version at all always runs — it is never read as unchanged;
-- an id the map recorded that the inventory no longer names is dropped, and
-  selects nothing on its own;
+- an id the map recorded that the inventory no longer names is dropped: that
+  alone forces nothing, though it can still be selected the ordinary way if
+  its recorded entry's own sources changed;
+- an id with no entry at all — recorded in the inventory but never actually
+  observed, a recorder crash or a shard the map never saw — runs, the same as
+  an id whose version changed;
 - a different `source` — the identity of whatever defines and executes these
   tests — is read the way a sentinel is: the whole suite runs, because a
   different harness can change what every test in it does without moving a
   single id or version.
 
 A command that fails, or whose output does not parse as this shape, is a full
-run, the same as an unusable map — never an empty selection. `covsel status`
-and `covsel explain` report how many of the inventory's tests are new or
-changed since the map was recorded.
+run, the same as an unusable map — never an empty selection. So is running
+with `inventory` unset against a map that was recorded with one set: the map
+claims a baseline this run has no way to check, and reading that as "nothing
+changed" would silently stop detecting every version bump the feature exists
+to catch. `covsel status` and `covsel explain` report how many of the
+inventory's tests are new or changed since the map was recorded.
 
 Any change matching `sentinels` forces a full run. A change to this file itself
 forces one when it moves a value covsel reads — a reworded comment or a

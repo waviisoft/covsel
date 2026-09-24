@@ -45,7 +45,11 @@ import {
 } from './schema.js';
 import { FileSelector } from './selector.js';
 import { LocalStore, type StoredMap } from './store.js';
-import { readTestInventory, testInventoryChange } from './test-inventory.js';
+import {
+  readTestInventory,
+  testInventoryChange,
+  type TestInventoryChange,
+} from './test-inventory.js';
 
 export interface GenericRecorderInit {
   command: string[];
@@ -490,6 +494,31 @@ export async function recordMap(init: RecordInit): Promise<RecordResult> {
   // such as a snapshot created on first run, leaves the tree dirty by the end,
   // and the map would never be anchored for as long as that suite exists.
   const dirty = isDirtyWorkTree(cwd);
+
+  // Read before anything is recorded, not after: the tests below the read may
+  // take real time, and an unpinned upstream can move mid-run. Read afterwards,
+  // a scenario that advanced from v1 to v2 during the recording would store v2
+  // against coverage that was measured while it still behaved like v1, so a
+  // future run reporting v2 unchanged would silently trust coverage recorded
+  // under a different version. Reading first also means a command that cannot
+  // be produced fails fast, before a long recording it would otherwise be
+  // thrown away.
+  let testInventory: TestInventory | undefined;
+  if (config.inventory !== undefined) {
+    const result = readTestInventory({ cwd, command: config.inventory.command });
+    if (!result.ok) {
+      return {
+        ok: false,
+        recorded: 0,
+        failures: [],
+        mapPath: store.path(),
+        testFiles,
+        error: `the test inventory could not be produced: ${result.reason}`,
+      };
+    }
+    testInventory = result.inventory;
+  }
+
   const entries: MapEntry[] = [];
   const failures: { file: string; reason: string }[] = [];
   const scopes: (readonly string[])[] = [];
@@ -609,28 +638,6 @@ export async function recordMap(init: RecordInit): Promise<RecordResult> {
       mapPath: store.path(),
       testFiles,
     };
-  }
-
-  // Read before the map is assembled, and failure refuses the map the same
-  // way an empty discovery does: the project asked covsel to track an
-  // external inventory, and a map recorded with no baseline for it would be
-  // indistinguishable from one recorded before the feature existed -- except
-  // that here, unlike there, nothing about the sources this recording just
-  // measured says so. Silence is what this whole mechanism exists to replace.
-  let testInventory: TestInventory | undefined;
-  if (config.inventory !== undefined) {
-    const result = readTestInventory({ cwd, command: config.inventory.command });
-    if (!result.ok) {
-      return {
-        ok: false,
-        recorded: entries.length,
-        failures: [],
-        mapPath: store.path(),
-        testFiles,
-        error: `the test inventory could not be produced: ${result.reason}`,
-      };
-    }
-    testInventory = result.inventory;
   }
 
   const recordedAt = init.recordedAt ?? new Date().toISOString();
@@ -823,13 +830,23 @@ export async function selectAffected(init: SelectInit): Promise<AffectedResult> 
   const store = new LocalStore({ cwd, dir: config.store.dir });
   const map = await store.read();
 
-  const fullRun = (reason: string): AffectedResult => ({
-    fullRun: true,
-    reason,
-    tests: testFiles,
-    selected: testFiles.map((file) => ({ file })),
-    discovered: testFiles.length,
-  });
+  // A full run means "run everything", and for a project with a test
+  // inventory that includes ids `discoverTestFiles` never finds -- so its own
+  // output must name them too, or a consumer driving a harness from this
+  // selection (`run.py $(covsel affected)`) runs zero scenarios on exactly the
+  // change that needs all of them. Seeded from whatever the map itself
+  // recorded, since that costs no subprocess and is always available; replaced
+  // below with a fresher live read once one succeeds, because that is the
+  // truer answer to "what exists right now" -- the harness-changed case most
+  // of all, where the ids that should run are the new harness's, not the
+  // stale ones the map recorded against the old one.
+  let fullRunInventoryIds: TestId[] = map?.testInventory?.entries.map((e) => e.id) ?? [];
+
+  const fullRun = (reason: string): AffectedResult => {
+    const selected = [...testFiles.map((file) => ({ file })), ...fullRunInventoryIds];
+    const tests = [...new Set(selected.map((t) => t.file))];
+    return { fullRun: true, reason, tests, selected, discovered: tests.length };
+  };
 
   // Discovery found nothing to choose between, so there is no selection to make
   // and an empty one would read as "nothing to run". A full run hands the runner
@@ -869,6 +886,11 @@ export async function selectAffected(init: SelectInit): Promise<AffectedResult> 
   const testInv = isUsableMap(map)
     ? testInventoryChange({ cwd, config, map })
     : undefined;
+  // Freshest wins: a live read is a truer answer than what the map recorded,
+  // and is present here whenever one was actually taken -- including the
+  // harness-changed fall-open below, whose whole point is that the recorded
+  // ids are the ones that just stopped being current.
+  if (testInv?.known !== undefined) fullRunInventoryIds = [...testInv.known];
   if (testInv?.fallOpen !== undefined) return fullRun(testInv.fallOpen);
 
   const policy = new FailOpenPolicy(config);
@@ -926,6 +948,25 @@ export async function selectAffected(init: SelectInit): Promise<AffectedResult> 
   const mapped = new Set(map!.entries.map((e) => e.test.file));
   const unmapped = testFiles.filter((f) => !mapped.has(f));
 
+  // The same gap `unmapped` guards against, for ids the inventory names rather
+  // than files discovery finds: a recorder that never yielded a unit for this
+  // id -- because it wasn't observed, crashed, or ran in a shard this map
+  // never saw -- must not read as "unchanged" merely because its version
+  // happens to match. Unlike `unmapped`, the exact id is pushed rather than
+  // the whole file: the inventory already names it precisely, so there is no
+  // need to force every sibling scenario in the same (virtual) file to run
+  // over one recording gap.
+  const entryUnitKeys = new Set(
+    map!.entries.map((e) => `${e.test.file}\0${e.test.name ?? ''}`),
+  );
+  const entryWholeFiles = new Set(
+    map!.entries.filter((e) => e.test.name === undefined).map((e) => e.test.file),
+  );
+  const unmappedInventory = (testInv?.known ?? []).filter((id) => {
+    const key = `${id.file}\0${id.name ?? ''}`;
+    return !entryUnitKeys.has(key) && !entryWholeFiles.has(id.file);
+  });
+
   // An entry that credits nothing is the same claim in a different shape, and
   // gets the same answer. It is not the rare test that genuinely executes no
   // code: far more often the recorder could not see what the test executed,
@@ -980,7 +1021,12 @@ export async function selectAffected(init: SelectInit): Promise<AffectedResult> 
   // their own granularity: a per-scenario id names one test, and forcing the
   // whole (virtual) file it sits in would over-select every sibling scenario
   // an inventory-aware recorder never claimed changed.
-  for (const u of [...units, ...byPackage, ...(testInv?.mandatory ?? [])]) {
+  for (const u of [
+    ...units,
+    ...byPackage,
+    ...(testInv?.mandatory ?? []),
+    ...unmappedInventory,
+  ]) {
     if (!discovered.has(u.file)) continue;
     if (wholeFile.has(u.file)) continue;
     const key = `${u.file} ${u.name ?? ''}`;
@@ -1281,12 +1327,26 @@ export interface StatusInit {
  * `blocked` is a reason that pre-empts the map's own verdict — there is nothing
  * to narrow to whatever the map says.
  */
+interface NextSelectionResult {
+  fullRun: boolean;
+  reason?: string;
+  /**
+   * The inventory comparison this computed, when it got far enough to compute
+   * one -- carried back so a caller that also wants to report drift (`status`,
+   * `explain`) can read it off here rather than asking the inventory command a
+   * second time. Absent whenever this returned before reaching that step
+   * (blocked, an untrusted base, a dependency fall-open, or a diff that could
+   * not be computed), since none of those computed one to share.
+   */
+  testInventory?: TestInventoryChange;
+}
+
 function nextSelection(
   cwd: string,
   config: CovselConfig,
   map: CoverageMap | undefined,
   blocked?: string,
-): { fullRun: boolean; reason?: string } {
+): NextSelectionResult {
   if (blocked !== undefined) return { fullRun: true, reason: blocked };
   const base = diffBase(cwd, map, undefined);
   if (base.kind === 'untrusted') return { fullRun: true, reason: base.reason };
@@ -1309,11 +1369,15 @@ function nextSelection(
       ? testInventoryChange({ cwd, config, map })
       : undefined;
     if (testInv?.fallOpen !== undefined) {
-      return { fullRun: true, reason: testInv.fallOpen };
+      return { fullRun: true, reason: testInv.fallOpen, testInventory: testInv };
     }
     return new FailOpenPolicy(config).evaluate(map, fileChanges) === 'full-run'
-      ? { fullRun: true, reason: fullRunReason(config, map, fileChanges, windowOf(base)) }
-      : { fullRun: false };
+      ? {
+          fullRun: true,
+          reason: fullRunReason(config, map, fileChanges, windowOf(base)),
+          ...(testInv !== undefined ? { testInventory: testInv } : {}),
+        }
+      : { fullRun: false, ...(testInv !== undefined ? { testInventory: testInv } : {}) };
   } catch {
     return { fullRun: true, reason: 'could not compute a git diff' };
   }
@@ -1433,24 +1497,21 @@ export async function computeStatus(init: StatusInit): Promise<StatusResult> {
   const nextIsFullRun = next.fullRun;
   const nextFullRunReason = next.reason;
 
-  // A separate read from the one `nextSelection` takes, for the same reason
-  // `status` is a diagnostic command rather than part of the hot selection
-  // path: it answers a different question (how much of the inventory drifted)
-  // and the failure and source-mismatch cases are already covered by
-  // `nextFullRunReason`, so nothing here needs to repeat them.
+  // Read off what `nextSelection` already computed, rather than asking the
+  // inventory command a second time: this used to spawn it again here, which
+  // doubled the timeout for one report and let a non-deterministic command
+  // disagree with itself between the two reads. The failure and
+  // source-mismatch cases are already covered by `nextFullRunReason`, so a
+  // `fallOpen` result carries nothing more for this report to add.
+  const result = next.testInventory;
   const testInventory =
-    config.inventory !== undefined
-      ? (() => {
-          const result = testInventoryChange({ cwd, config, map });
-          return result === undefined || result.fallOpen !== undefined
-            ? undefined
-            : {
-                source: result.source,
-                changedCount: result.mandatory.length,
-                totalCount: result.known.length,
-              };
-        })()
-      : undefined;
+    result === undefined || result.fallOpen !== undefined
+      ? undefined
+      : {
+          source: result.source,
+          changedCount: result.mandatory.length,
+          totalCount: result.known.length,
+        };
 
   return {
     mapPath: store.path(),
@@ -1936,23 +1997,24 @@ export async function explainPath(init: ExplainInit): Promise<ExplainResult> {
   // Restricted to this path's own ids, for the same reason `status`'s report
   // is map-wide: a fall-open case here (unreadable inventory, a moved
   // `source`) is already the reason on `next` above, so it is answered once
-  // rather than recomputed per path in a different shape.
-  const inventoryDrift =
-    wantTest && config.inventory !== undefined
-      ? (() => {
-          const result = testInventoryChange({ cwd, config, map });
-          if (result === undefined || result.fallOpen !== undefined) return undefined;
-          const here = result.known.filter((t) => t.file === rel);
-          if (here.length === 0) return undefined;
-          const mandatoryHere = new Set(
-            result.mandatory.filter((t) => t.file === rel).map((t) => t.name ?? ''),
-          );
-          return {
-            changedCount: here.filter((t) => mandatoryHere.has(t.name ?? '')).length,
-            totalCount: here.length,
-          };
-        })()
-      : undefined;
+  // rather than recomputed per path in a different shape. Read off what
+  // `next` already computed rather than asking the inventory command again --
+  // the same duplicate-spawn `status` used to make.
+  const inventoryDrift = (():
+    { changedCount: number; totalCount: number } | undefined => {
+    if (!wantTest) return undefined;
+    const result = next.testInventory;
+    if (result === undefined || result.fallOpen !== undefined) return undefined;
+    const here = result.known.filter((t) => t.file === rel);
+    if (here.length === 0) return undefined;
+    const mandatoryHere = new Set(
+      result.mandatory.filter((t) => t.file === rel).map((t) => t.name ?? ''),
+    );
+    return {
+      changedCount: here.filter((t) => mandatoryHere.has(t.name ?? '')).length,
+      totalCount: here.length,
+    };
+  })();
   return {
     ok: true,
     file: rel,

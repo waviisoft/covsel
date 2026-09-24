@@ -195,6 +195,22 @@ describe('readTestInventory', () => {
     expect(result.reason).toContain('vellum: intent repo not pinned');
   });
 
+  it('quotes only the last few lines of a failing command, capped in length', () => {
+    // A command that shells out to an authenticated checkout can echo a
+    // token or credential on failure, and this reason lands in CI logs and
+    // in `covsel status`/`explain` output -- quoting it in full turns a
+    // fail-open message into a leak.
+    const secret = 'x'.repeat(2000);
+    const command = failingScript(
+      `line one\nline two\nline three\nline four\nline five: ${secret}`,
+    );
+    const result = readTestInventory({ cwd: process.cwd(), command });
+    expect(result.ok).toBe(false);
+    if (result.ok) throw new Error('expected a failure');
+    expect(result.reason).not.toContain('line one');
+    expect(result.reason.length).toBeLessThan(600);
+  });
+
   it('is a full-run failure when the command cannot be run at all', () => {
     const result = readTestInventory({
       cwd: process.cwd(),

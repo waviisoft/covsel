@@ -6,8 +6,10 @@ import { afterEach, describe, expect, it } from 'vitest';
 import { commitAll, write } from './helpers/repo.js';
 import {
   createGenericRecorder,
+  OBSERVES_EVERYTHING,
   type CoverageMap,
   type CovselConfig,
+  type Recorder,
   recordMap,
   resolveConfig,
   selectAffected,
@@ -157,6 +159,36 @@ describe('recording a test inventory', () => {
     expect(result.error).toContain('could not be produced');
     expect(result.error).toContain('no intent repo pinned');
   });
+
+  it('reads the inventory before recording, so a failing command never runs the suite', async () => {
+    // An unpinned intent repo can move mid-recording, which would otherwise
+    // store a later version against coverage measured under an earlier one.
+    // Reading first also means a command that cannot be produced fails before
+    // a real recording -- proven here by a recorder that fails the test if
+    // it is ever asked to record anything.
+    const cwd = mkdtempSync(join(tmpdir(), 'covsel-testinv-order-'));
+    dirs.push(cwd);
+    write(cwd, 'package.json', '{\n  "name": "fixture",\n  "type": "module"\n}\n');
+    write(cwd, 'test/a.test.mjs', '// a\n');
+    write(cwd, '.gitignore', '.covsel/\n');
+    commitAll(cwd);
+    const config = resolveConfig({
+      testGlobs: ['test/**/*.test.mjs'],
+      inventory: { command: failingInventoryCommand('unreachable') },
+    });
+    const neverRecord: Recorder = {
+      observes: OBSERVES_EVERYTHING,
+      record: async () => {
+        throw new Error('the recorder should never have been asked to record');
+      },
+    };
+
+    const result = await recordMap({ cwd, config, recorder: neverRecord });
+
+    expect(result.ok).toBe(false);
+    expect(result.failures).toEqual([]); // not a per-file failure -- record() never ran
+    expect(result.error).toContain('could not be produced');
+  });
 });
 
 describe('selecting on an inventory change', () => {
@@ -215,6 +247,17 @@ describe('selecting on an inventory change', () => {
         source: HARNESS_V1,
         entries: [{ id: { file: 'spec:features/agenda.md', name: 's1' }, version: 'v1' }],
       },
+      // A real entry, covering a source nothing in this test changes -- an id
+      // with no entry at all is a recording gap (covered separately below)
+      // and always runs, which would otherwise mask what this test means to
+      // check: an unchanged version, with real coverage, stays unselected.
+      entries: [
+        ...map.entries,
+        {
+          test: { file: 'spec:features/agenda.md', name: 's1' },
+          files: [{ file: 'src/a.mjs', fileHash: 'sha256:whatever' }],
+        },
+      ],
     });
     const configNow = withInventory(
       config,
@@ -326,19 +369,15 @@ describe('selecting on an inventory change', () => {
 });
 
 /**
- * The map's own recorded inventory has to keep an inventory-sourced entry
- * eligible for the ordinary coverage-based selector even when *this run*
- * configures no `inventory` at all -- a config drifting out of step between
- * the job that recorded the map and the one selecting against it (a missing
- * env var, a reverted config field) must not silently drop a real,
- * coverage-based hit for a test this map genuinely has an entry and covered
- * sources for. That drop is not something `testInventoryChange` can catch on
- * its own, because with no `inventory` configured this run it is never asked
- * at all -- it is `commands.ts`'s own suite-membership sets (`inSuite`,
- * `discovered`, and the `unmeasured` fold into `wholeFile`) that have to know
- * about a map's recorded inventory independently of the current config.
+ * A map recorded against a test inventory claims a baseline this run has to
+ * be able to check. If `inventory` drifts out of step between the job that
+ * recorded the map and the one selecting against it -- a missing env var, a
+ * reverted config field -- this run cannot ask whether any id's version
+ * moved, and reading that as "nothing changed" would silently drop the whole
+ * point of the feature. It has to fall open instead, the same way an
+ * unreadable installed-package tree does for `dependencies`.
  */
-describe('an inventory-sourced entry survives ordinary selection on its own', () => {
+describe('a map recorded against an inventory, selected against none', () => {
   /** A repository with one product test, plus a hand-added virtual entry. */
   async function fixtureWithVirtualEntry(
     virtualEntry: CoverageMap['entries'][number],
@@ -356,36 +395,111 @@ describe('an inventory-sourced entry survives ordinary selection on its own', ()
     return { cwd, config };
   }
 
-  it('is selected on a real source-file change, though config sets no inventory', async () => {
+  it('is a full run, even with a real, unrelated source change alongside it', async () => {
     const { cwd, config } = await fixtureWithVirtualEntry({
       test: { file: 'spec:features/agenda.md', name: 's1' },
       files: [{ file: 'src/a.mjs', fileHash: 'sha256:whatever' }],
     });
-    write(cwd, 'src/a.mjs', 'export const a = 2;\n'); // the source it covers changed
-    // `config` here sets no `inventory` at all -- this run neither reads nor
-    // needs to read the current inventory for this to work.
+    write(cwd, 'src/a.mjs', 'export const a = 2;\n');
+    // `config` sets no `inventory` at all, though the map was recorded
+    // against one -- this run cannot ask whether s1's version moved.
 
     const result = await selectAffected({ cwd, config });
 
-    expect(result.fullRun).toBe(false);
-    expect(result.selected).toEqual(
-      expect.arrayContaining([{ file: 'spec:features/agenda.md', name: 's1' }]),
-    );
+    expect(result.fullRun).toBe(true);
+    expect(result.reason).toContain('configures none');
   });
 
-  it('always runs when it credits no source, though config sets no inventory', async () => {
+  it('names the inventory-sourced ids the map recorded in that full run', async () => {
     const { cwd, config } = await fixtureWithVirtualEntry({
       test: { file: 'spec:features/agenda.md', name: 's1' },
-      files: [], // the recorder could not see what this test executed
+      files: [],
     });
 
     const result = await selectAffected({ cwd, config });
 
+    expect(result.fullRun).toBe(true);
+    expect(result.selected).toEqual(
+      expect.arrayContaining([{ file: 'spec:features/agenda.md', name: 's1' }]),
+    );
+  });
+});
+
+describe('an inventory id with no recording at all', () => {
+  it('runs even though its version has not changed -- a recording gap, not agreement', async () => {
+    // The map's testInventory names s1 and s2 at the same version the current
+    // inventory reports; s2 was never observed (crashed, or ran in a shard
+    // this map never saw), so it has no entry. Silence must not read as
+    // "unchanged": s2 has to run until something actually records it.
+    const { cwd, config } = await fixture();
+    const map = readMap(cwd, config);
+    writeMap(cwd, config, {
+      ...map,
+      testInventory: {
+        source: HARNESS_V1,
+        entries: [
+          { id: { file: 'spec:features/agenda.md', name: 's1' }, version: 'v1' },
+          { id: { file: 'spec:features/agenda.md', name: 's2' }, version: 'v1' },
+        ],
+      },
+      entries: [
+        ...map.entries,
+        {
+          test: { file: 'spec:features/agenda.md', name: 's1' },
+          files: [{ file: 'src/a.mjs', fileHash: 'sha256:whatever' }],
+        },
+        // No entry for s2.
+      ],
+    });
+    const configNow = withInventory(
+      config,
+      inventoryCommand({
+        source: HARNESS_V1,
+        entries: [
+          { id: { file: 'spec:features/agenda.md', name: 's1' }, version: 'v1' },
+          { id: { file: 'spec:features/agenda.md', name: 's2' }, version: 'v1' },
+        ],
+      }),
+    );
+
+    const result = await selectAffected({ cwd, config: configNow });
+
     expect(result.fullRun).toBe(false);
-    // Whole-file, the same as an unmeasured *real* entry gets: a recorder that
-    // could not see this scenario has not earned trust for whatever else
-    // shares its (virtual) file, so the name is dropped and the file runs in
-    // full, not just the one scenario recorded blind.
+    expect(result.selected).toEqual(
+      expect.arrayContaining([{ file: 'spec:features/agenda.md', name: 's2' }]),
+    );
+    // s1 has a real entry and nothing it covers changed, so it stays out.
+    expect(result.selected).not.toEqual(
+      expect.arrayContaining([{ file: 'spec:features/agenda.md', name: 's1' }]),
+    );
+  });
+
+  it('is covered by a whole-file entry for the same (virtual) file, and does not need its own', async () => {
+    const { cwd, config } = await fixture();
+    const map = readMap(cwd, config);
+    writeMap(cwd, config, {
+      ...map,
+      testInventory: {
+        source: HARNESS_V1,
+        entries: [{ id: { file: 'spec:features/agenda.md', name: 's1' }, version: 'v1' }],
+      },
+      // Recorded at file granularity -- no `name` -- which already speaks for
+      // every scenario in this virtual file, s1 included.
+      entries: [...map.entries, { test: { file: 'spec:features/agenda.md' }, files: [] }],
+    });
+    const configNow = withInventory(
+      config,
+      inventoryCommand({
+        source: HARNESS_V1,
+        entries: [{ id: { file: 'spec:features/agenda.md', name: 's1' }, version: 'v1' }],
+      }),
+    );
+
+    const result = await selectAffected({ cwd, config: configNow });
+
+    expect(result.fullRun).toBe(false);
+    // Selected because the whole-file entry credits nothing (unmeasured), not
+    // because s1 was treated as unmapped on top of that.
     expect(result.selected).toEqual(
       expect.arrayContaining([{ file: 'spec:features/agenda.md' }]),
     );
