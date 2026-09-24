@@ -91,6 +91,14 @@ describe('BootDeltaCoverage', () => {
     writeFileSync(join(dir, name), JSON.stringify({ result: scripts }));
   }
 
+  // The common case for these tests: nobody has ever booted this (fake)
+  // process before, so there is no marker to read, and writing one is a
+  // no-op the test does not care about.
+  const noPriorMarker = {
+    readBootMarker: async () => undefined,
+    writeBootMarker: async () => {},
+  };
+
   afterEach(() => {
     rmSync(dir, { recursive: true, force: true });
   });
@@ -104,7 +112,7 @@ describe('BootDeltaCoverage', () => {
     const bdc = new BootDeltaCoverage({
       dir,
       pid,
-      startedAt: 0,
+      ...noPriorMarker,
       trigger: async () => {
         mkdirSync(dir, { recursive: true });
         writeDump(pid, 0, [{ url: 'file:///boot.js', functions: [] }]);
@@ -125,7 +133,7 @@ describe('BootDeltaCoverage', () => {
     const bdc = new BootDeltaCoverage({
       dir,
       pid,
-      startedAt: 0,
+      ...noPriorMarker,
       trigger: async () => {
         calls++;
         if (calls === 1) {
@@ -155,7 +163,7 @@ describe('BootDeltaCoverage', () => {
     const bdc = new BootDeltaCoverage({
       dir,
       pid,
-      startedAt: 0,
+      ...noPriorMarker,
       trigger: async () => {
         writeDump(pid, 0, scripts[call]);
         call++;
@@ -172,17 +180,17 @@ describe('BootDeltaCoverage', () => {
     expect(second.map((s) => s.url).sort()).toEqual(['file:///boot.js', 'file:///t2.js']);
   });
 
-  it('reads an already-existing dump as boot, rather than treating a delta off it as boot, when the process was already running', async () => {
-    // A previous recording already attached to this process and took its true
-    // boot dump before this session's own start() is ever called -- a server
-    // left running (`reuseExistingServer`, a retried worker) rather than one
-    // this session started itself.
+  it('reads the dump the marker names as boot, rather than triggering a second one, when the process was already booted', async () => {
+    // A previous recording already attached to this process, took its true
+    // boot dump, and recorded that dump's own filename as the process's
+    // marker -- a server left running (`reuseExistingServer`, a retried
+    // worker) rather than one this session started itself.
     dir = mkdtempSync(join(tmpdir(), 'covsel-bdc-'));
     const pid = 500;
     const url = 'file:///module.js';
-    const bootTs = Date.now();
+    const bootName = `coverage-${pid}-${Date.now()}-0.json`;
     writeFileSync(
-      join(dir, `coverage-${pid}-${bootTs}-0.json`),
+      join(dir, bootName),
       JSON.stringify({
         result: [
           {
@@ -204,11 +212,14 @@ describe('BootDeltaCoverage', () => {
     const bdc = new BootDeltaCoverage({
       dir,
       pid,
-      startedAt: bootTs - 5,
       // Nothing new happens in this session's own window -- every trigger call
       // reports the script with no functions, the way a post-reset delta omits
       // anything untouched.
       trigger: async () => writeDump(pid, 0, [{ url, functions: [] }]),
+      readBootMarker: async () => bootName,
+      writeBootMarker: async () => {
+        throw new Error('must not record a new marker when one is already set');
+      },
     });
     await bdc.start();
     const result = await bdc.endTest();
@@ -218,7 +229,7 @@ describe('BootDeltaCoverage', () => {
       script?.functions.map((fn) => [fn.functionName, fn.ranges[0]?.count]),
     );
     // `bootOnly` ran once, at the process's real startup, before this session
-    // ever attached -- it has to survive from the pre-existing dump start()
+    // ever attached -- it has to survive from the marker-named dump start()
     // read directly. Triggering a fresh "boot" dump of its own here would see
     // only the delta off that earlier one (nothing, since nothing new ran) and
     // lose it silently.
@@ -226,11 +237,30 @@ describe('BootDeltaCoverage', () => {
     expect(byName.get('neverCalled')).toBe(0);
   });
 
-  it('ignores a same-pid dump older than the process’s own start, rather than mistaking it for this process’s boot', async () => {
+  it('fails rather than silently re-booting, when the marker points at a boot dump the directory no longer has', async () => {
+    // The coverage directory can be cleared between recordings while the
+    // server itself stays up and keeps its marker -- e.g. a project resets
+    // `.covsel/` before every `covsel record` invocation. Falling back to a
+    // fresh trigger here would take a partial delta as boot, silently, which
+    // is exactly the bug the marker exists to prevent.
+    dir = mkdtempSync(join(tmpdir(), 'covsel-bdc-'));
+    const pid = 502;
+    const bdc = new BootDeltaCoverage({
+      dir,
+      pid,
+      trigger: async () => writeDump(pid, 0, [{ url: 'file:///boot.js', functions: [] }]),
+      readBootMarker: async () => `coverage-${pid}-1700000000000-0.json`,
+      writeBootMarker: async () => {},
+    });
+    await expect(bdc.start()).rejects.toThrow(AmbiguousCoverageError);
+  });
+
+  it('ignores a leftover dump from a dead process that reused this pid, when nothing marks it as boot', async () => {
     // The OS can reuse a pid after the process that held it exits. A leftover
-    // dump from that dead process, timestamped before the current one started,
-    // is not its boot shape -- reading it as such would credit every test with
-    // coverage from a process that no longer exists.
+    // dump from that dead process is not this one's boot shape, and nothing
+    // marks it as such (this process has no marker of its own yet) -- reading
+    // it anyway would credit every test with coverage from a process that no
+    // longer exists.
     dir = mkdtempSync(join(tmpdir(), 'covsel-bdc-'));
     const pid = 501;
     const staleUrl = 'file:///dead-process-module.js';
@@ -241,7 +271,7 @@ describe('BootDeltaCoverage', () => {
     const bdc = new BootDeltaCoverage({
       dir,
       pid,
-      startedAt: Date.now(),
+      ...noPriorMarker,
       trigger: async () => writeDump(pid, 0, [{ url: 'file:///boot.js', functions: [] }]),
     });
     await bdc.start();
@@ -289,7 +319,7 @@ describe('BootDeltaCoverage', () => {
     const bdc = new BootDeltaCoverage({
       dir,
       pid,
-      startedAt: 0,
+      ...noPriorMarker,
       trigger: async () => {
         writeDump(pid, 0, call === 0 ? bootScripts : deltaScripts);
         call++;
@@ -349,7 +379,7 @@ describe('BootDeltaCoverage', () => {
     const bdc = new BootDeltaCoverage({
       dir,
       pid,
-      startedAt: 0,
+      ...noPriorMarker,
       trigger: async () => {
         writeDump(pid, 0, call === 0 ? bootScripts : deltaScripts);
         call++;
@@ -378,7 +408,7 @@ describe('BootDeltaCoverage', () => {
     const bdc = new BootDeltaCoverage({
       dir,
       pid,
-      startedAt: 0,
+      ...noPriorMarker,
       trigger: async () => {
         calls++;
         if (calls === 1) writeDump(pid, 0, [{ url: 'file:///boot.js', functions: [] }]);
@@ -406,7 +436,7 @@ describe('BootDeltaCoverage', () => {
     const bdc = new BootDeltaCoverage({
       dir,
       pid,
-      startedAt: 0,
+      ...noPriorMarker,
       trigger: async () => {
         calls++;
         if (calls === 1) writeDump(pid, 0, [{ url: 'file:///boot.js', functions: [] }]);
@@ -427,7 +457,7 @@ describe('BootDeltaCoverage', () => {
     const bdc = new BootDeltaCoverage({
       dir,
       pid,
-      startedAt: 0,
+      ...noPriorMarker,
       trigger: async () => {
         // Dropped before it reached disk -- no dump at all, from the very
         // first call this session ever makes.
@@ -444,7 +474,7 @@ describe('BootDeltaCoverage', () => {
     const bdc = new BootDeltaCoverage({
       dir,
       pid: tracked,
-      startedAt: 0,
+      ...noPriorMarker,
       trigger: async () => {
         calls++;
         writeDump(tracked, 0, []);
@@ -463,7 +493,7 @@ describe('BootDeltaCoverage', () => {
     const bdc = new BootDeltaCoverage({
       dir,
       pid,
-      startedAt: 0,
+      ...noPriorMarker,
       trigger: async () => {
         writeDump(pid, 0, []);
         writeDump(pid, 1, []); // e.g. a worker thread inside the tracked process
@@ -489,7 +519,7 @@ describe('BootDeltaCoverage', () => {
     const bdc = new BootDeltaCoverage({
       dir,
       pid,
-      startedAt: 0,
+      ...noPriorMarker,
       trigger: async () => {
         calls++;
         if (calls === 1) {
@@ -527,7 +557,7 @@ describe('BootDeltaCoverage', () => {
     const bdc = new BootDeltaCoverage({
       dir,
       pid,
-      startedAt: 0,
+      ...noPriorMarker,
       trigger: async () => {
         const ts = Date.now();
         seen.push(ts);

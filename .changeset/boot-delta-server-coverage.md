@@ -42,6 +42,16 @@ config: set the env var on a `covsel record` invocation and it takes the boot
 dump before the first `startTest()` instead of diffing per-test CDP
 snapshots.
 
+A second recording can attach to a server an earlier one already booted —
+`reuseExistingServer: true`, a retried worker, one worker per project — and
+still get the same boot dump rather than mistaking its own first dump for a
+fresh boot: the server remembers, in its own memory, that it already booted
+and which dump proves it, so a later session reads that one back instead of
+capturing a partial delta and crediting it as if nothing had run before it.
+The coverage directory has to stay in place while a server is reused this
+way; a directory cleared between recordings disagrees with what the server
+remembers and fails the recording rather than silently rebooting.
+
 A dump this cannot attribute to the tracked process's own main thread alone —
 a worker thread or a child process that inherited `NODE_V8_COVERAGE`, or two
 overlapping windows — fails the recording rather than guessing which test it

@@ -1,7 +1,7 @@
 import { Session } from 'node:inspector/promises';
 import { stopCoverage, takeCoverage } from 'node:v8';
 
-import { BootDeltaCoverage } from './boot-delta-coverage.js';
+import { BOOT_MARKER_KEY, BootDeltaCoverage } from './boot-delta-coverage.js';
 import type { Observer, RawCoverage } from './interfaces.js';
 import type { ScriptCoverage } from './observer.js';
 import type { TestId } from './schema.js';
@@ -91,9 +91,17 @@ export class InspectorObserver implements Observer {
       const bootDelta = new BootDeltaCoverage({
         dir,
         pid: process.pid,
-        startedAt: Date.now() - process.uptime() * 1000,
         trigger: async () => {
           takeCoverage();
+        },
+        readBootMarker: async () => {
+          const marker = (globalThis as Record<symbol, unknown>)[
+            Symbol.for(BOOT_MARKER_KEY)
+          ];
+          return typeof marker === 'string' ? marker : undefined;
+        },
+        writeBootMarker: async (dumpName) => {
+          (globalThis as Record<symbol, unknown>)[Symbol.for(BOOT_MARKER_KEY)] = dumpName;
         },
       });
       await bootDelta.start();

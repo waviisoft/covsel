@@ -1,10 +1,12 @@
 import { spawn } from 'node:child_process';
-import { mkdtempSync, rmSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { createServer, type Server } from 'node:http';
 import type { AddressInfo } from 'node:net';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
+
+import { AmbiguousCoverageError } from '@covsel/core';
 
 import { RemoteBootDeltaSession, RemoteCoverageSession } from '../src/server-session.js';
 
@@ -265,6 +267,85 @@ describe('the boot-delta server window', () => {
     await expect(session.start()).rejects.toThrow(/--inspect/);
     await session.close();
   });
+
+  /**
+   * A real Node process running an app whose entry point imports a module
+   * with top-level-only code — nothing in it is ever called again after the
+   * process starts, the way a server's own config or route registration
+   * often is — so a window can tell whether it saw that code from boot or
+   * lost it.
+   */
+  async function reusableServerProcess(): Promise<{
+    inspectUrl: string;
+    coverageDir: string;
+  }> {
+    const coverageDir = mkdtempSync(join(tmpdir(), 'covsel-pw-ss-reuse-cov-'));
+    const appDir = mkdtempSync(join(tmpdir(), 'covsel-pw-ss-reuse-app-'));
+    dirs.push(coverageDir, appDir);
+    writeFileSync(join(appDir, 'config.mjs'), 'globalThis.__configLoaded = true;\n');
+    writeFileSync(
+      join(appDir, 'main.mjs'),
+      "import './config.mjs';\nsetInterval(() => JSON.parse('{\"a\":1}'), 5);\n",
+    );
+    const child = spawn(process.execPath, ['--inspect=0', join(appDir, 'main.mjs')], {
+      env: { ...process.env, NODE_V8_COVERAGE: coverageDir },
+      stdio: ['ignore', 'ignore', 'pipe'],
+    });
+    children.push(child);
+    const port = await new Promise<string>((resolve, reject) => {
+      let seen = '';
+      const timer = setTimeout(
+        () => reject(new Error(`no inspector announced itself: ${seen}`)),
+        20_000,
+      );
+      child.stderr?.on('data', (chunk: Buffer) => {
+        seen += chunk.toString();
+        const found = /ws:\/\/127\.0\.0\.1:(\d+)\//.exec(seen);
+        if (found?.[1] !== undefined) {
+          clearTimeout(timer);
+          resolve(found[1]);
+        }
+      });
+    });
+    return { inspectUrl: `http://127.0.0.1:${port}`, coverageDir };
+  }
+
+  it('credits a second session with code that only ran at the process’s real startup, when it attaches to an already-booted process', async () => {
+    // reuseExistingServer, a retried worker, or one worker per project can
+    // all attach a fresh session to a server an earlier recording already
+    // took a boot dump from. Both sessions have to see config.mjs, which
+    // only ever ran once, before either session existed.
+    const { inspectUrl, coverageDir } = await reusableServerProcess();
+
+    const session1 = new RemoteBootDeltaSession(inspectUrl, coverageDir);
+    await session1.start();
+    await session1.endTest();
+    await session1.close();
+
+    const session2 = new RemoteBootDeltaSession(inspectUrl, coverageDir);
+    await session2.start();
+    const scripts = await session2.endTest();
+
+    expect(scripts.some((s) => s.url.includes('config.mjs'))).toBe(true);
+  }, 30_000);
+
+  it('fails a second session, rather than silently re-booting, when the coverage directory is cleared while the server stays up', async () => {
+    // The server's own marker still says it already booted; a directory a
+    // project resets before every `covsel record` invocation must not be
+    // read as "this process has never been observed", or the second
+    // session's own first dump would be taken as boot -- a partial capture.
+    const { inspectUrl, coverageDir } = await reusableServerProcess();
+
+    const session1 = new RemoteBootDeltaSession(inspectUrl, coverageDir);
+    await session1.start();
+    await session1.close();
+
+    rmSync(coverageDir, { recursive: true, force: true });
+    mkdirSync(coverageDir, { recursive: true });
+
+    const session2 = new RemoteBootDeltaSession(inspectUrl, coverageDir);
+    await expect(session2.start()).rejects.toThrow(AmbiguousCoverageError);
+  }, 30_000);
 
   it('fails at once on a call made after the server already died, not only one in flight', async () => {
     // The close listener settling calls already in flight is only half the

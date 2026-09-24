@@ -221,6 +221,19 @@ Requires the server on Node ≥22.3 (`process.getBuiltinModule`) and a filesyste
 this process can read `coverageDir` from — true whenever the server and the
 recording run on the same host, which a local `webServer` always does.
 
+**A reused server keeps its boot dump, so `coverageDir` has to stay too.**
+`reuseExistingServer: true`, a retried worker, or one worker per project can
+all attach a fresh recording to a server an earlier one already booted; the
+fixture reads that earlier boot dump back rather than mistaking its own first
+dump for one, because the server itself remembers having booted already. If
+`coverageDir` is cleared between recordings while the server keeps running —
+resetting `.covsel/` before every `covsel record`, say — the server's memory
+of already being booted and the directory's contents disagree, and the
+recording fails rather than silently taking a partial dump as boot. Give a
+reused server's coverage directory its own path outside anything a project
+resets per run, or restart the server (which clears its memory along with the
+directory) when a genuinely fresh boot capture is wanted.
+
 **Concurrent or ambiguous attribution fails the recording.** A worker thread or
 a child Node process inherits `NODE_V8_COVERAGE` and writes its own dump into
 the same directory; there is no reliable way to say which test its execution
@@ -325,8 +338,10 @@ one afterwards. It fails, and writes nothing, when:
   configured — an unobserved server behind a scope that claims it is exactly the
   map that skips tests;
 - **a coverage dump could not be attributed**, with `coverageDir` set — more than
-  one dump in a window, or one from a pid the recording was not told to track (a
-  worker thread or a child process that inherited `NODE_V8_COVERAGE`); see above;
+  one dump in a window, one from a pid the recording was not told to track (a
+  worker thread or a child process that inherited `NODE_V8_COVERAGE`), or a
+  reused server whose remembered boot dump is missing from the directory; see
+  above;
 - **a test opened a further page** (a popup, or `context.newPage()`) — coverage
   cannot be attached to a page before its first scripts run, so what executed
   there is unknown rather than partly known. covsel observes the primary `page`

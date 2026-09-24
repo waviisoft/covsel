@@ -7,11 +7,21 @@
  * a module loaded at boot never runs. `start()` takes the boot dump: the very
  * first one ever taken for the process, which is the one that sees everything
  * compiled so far, with an un-run function reported at count 0 rather than
- * absent. A directory can already hold that dump when `start()` is called —
- * the process was already running, left up by an earlier recording — in
- * which case `start()` reads the existing one rather than triggering a second
- * dump that would only be a delta off it. Boot code runs before every window
- * and for every window, so it is unioned into each one's result.
+ * absent. A second session can attach to the same already-running process
+ * later — the target may be a server a previous recording already attached
+ * to and left running (`reuseExistingServer`, a retried worker) — so
+ * `start()` has the target remember, in its own memory, whether it has
+ * already been booted, rather than inferring it from the coverage directory
+ * or the clock: neither survives a laptop sleeping between recordings
+ * (`process.uptime()` pauses while asleep, the wall clock does not) or the
+ * directory being cleared while the process stays up, and both of those
+ * silently produce the exact bug this exists to prevent — a partial dump
+ * read as if it were the whole boot shape. A target that already has the
+ * marker set reads the dump it names as boot instead of triggering a second
+ * one that would only be a delta off it; if that dump has gone missing, the
+ * recording fails rather than silently falling back to a fresh, partial one.
+ * Boot code runs before every window and for every window, so it is unioned
+ * into each one's result.
  *
  * Every window after that is exactly what changed since the previous dump —
  * Node resets the counters on each `takeCoverage()` call, so windows never
@@ -44,28 +54,33 @@ import type { ScriptCoverage } from './observer.js';
 /** Asks the target to write its next coverage dump and resolves once it has. */
 export type CoverageDumpTrigger = () => Promise<void>;
 
+/**
+ * The global-symbol-registry key a target's boot marker is stored under —
+ * shared so an in-process reader and a remote `Runtime.evaluate` reader agree
+ * on the exact same property without either hardcoding a string the other
+ * could drift from.
+ */
+export const BOOT_MARKER_KEY = 'covsel.bootDump';
+
 export interface BootDeltaCoverageInit {
   /** Directory the target was started with `NODE_V8_COVERAGE` pointed at. */
   dir: string;
   /** The target's process id, so a dump from an untracked process or thread is caught. */
   pid: number;
-  /**
-   * An epoch-ms lower bound on when the target process started, such as
-   * `Date.now() - process.uptime() * 1000` evaluated in the target itself.
-   *
-   * A directory can already hold a dump for this pid before `start()` ever
-   * triggers one: the target may be a server a previous recording already
-   * attached to and left running (`reuseExistingServer`, a retried worker), and
-   * that dump — not the one this call is about to trigger — is the process's
-   * true boot shape. `start()` uses this to tell the two apart: a pre-existing
-   * dump timestamped at or after the process's own start is that earlier boot
-   * capture and is read as-is; one timestamped before it is a leftover from a
-   * dead process whose pid the OS reused, and is ignored the same as if the
-   * directory were empty.
-   */
-  startedAt: number;
   /** Triggers one `node:v8` `takeCoverage()` call in the target. */
   trigger: CoverageDumpTrigger;
+  /**
+   * Reads the boot dump's filename back from the target's own memory (e.g.
+   * `globalThis[Symbol.for('covsel.bootDump')]`), or `undefined` if this
+   * process has never taken one.
+   */
+  readBootMarker: () => Promise<string | undefined>;
+  /**
+   * Records the boot dump's filename in the target's own memory, once `start()`
+   * has taken it, so a later session attaching to this same process can read
+   * it back instead of mistaking its own first dump for boot.
+   */
+  writeBootMarker: (dumpName: string) => Promise<void>;
 }
 
 /** A dump this could not attribute to the tracked process's main thread alone. */
@@ -73,22 +88,31 @@ export class AmbiguousCoverageError extends Error {}
 
 const DUMP_NAME = /^coverage-(\d+)-(\d+)-(\d+)\.json$/;
 
-/**
- * A pre-existing dump for the tracked process's main thread, timestamped no
- * earlier than it started — evidence that `start()` is not this process's
- * first-ever coverage capture. `startedAt` is only a lower bound (evaluated
- * strictly after the process actually started), so a dump timestamped a touch
- * before it is still within measurement jitter rather than necessarily a
- * different, pid-reusing process; `STALE_TOLERANCE_MS` is that allowance, wide
- * enough to absorb it and narrow enough to still reject a genuinely old
- * leftover, which is realistically much older than that.
- */
-const STALE_TOLERANCE_MS = 2000;
-
 /** The epoch-ms a dump's own filename was written with, or `undefined` for a non-dump name. */
 function dumpTimestamp(name: string): number | undefined {
   const match = DUMP_NAME.exec(name);
   return match === null ? undefined : Number(match[2]);
+}
+
+/**
+ * The latest timestamp among the tracked process's own already-existing
+ * main-thread dumps, so a session that reads a marker-named boot dump still
+ * waits past whatever the process's *other* prior dumps already used, not
+ * only past boot's own — an earlier session's later test windows leave dumps
+ * newer than its boot capture, and colliding with one of those is exactly as
+ * real a risk as colliding with boot's.
+ */
+function maxOwnDumpTs(files: Iterable<string>, pid: number): number | undefined {
+  let max: number | undefined;
+  for (const name of files) {
+    const match = DUMP_NAME.exec(name);
+    if (match === null) continue;
+    const [, filePid, ts, threadId] = match;
+    if (filePid !== String(pid) || threadId !== '0') continue;
+    const timestamp = Number(ts);
+    if (max === undefined || timestamp > max) max = timestamp;
+  }
+  return max;
 }
 
 /**
@@ -106,25 +130,6 @@ function dumpTimestamp(name: string): number | undefined {
 async function waitPast(ts: number | undefined): Promise<void> {
   if (ts === undefined) return;
   while (Date.now() <= ts) await delay(1);
-}
-
-function earliestPriorBoot(
-  files: Iterable<string>,
-  pid: number,
-  startedAt: number,
-): string | undefined {
-  let earliest: { name: string; ts: number } | undefined;
-  for (const name of files) {
-    const match = DUMP_NAME.exec(name);
-    if (match === null) continue;
-    const [, filePid, ts, threadId] = match;
-    if (filePid !== String(pid) || threadId !== '0') continue;
-    const timestamp = Number(ts);
-    if (timestamp < startedAt - STALE_TOLERANCE_MS) continue;
-    if (earliest === undefined || timestamp < earliest.ts)
-      earliest = { name, ts: timestamp };
-  }
-  return earliest?.name;
 }
 
 /**
@@ -193,19 +198,22 @@ function ownDump(added: string[], pid: number): string {
   if (dump === undefined) {
     // A window with genuinely nothing new still gets a dump -- Node writes one
     // with an empty `result` rather than skipping the write. No dump at all
-    // means the trigger's call was dropped before it reached disk, which is a
-    // known but rare failure mode of calling `takeCoverage()` with no yield at
-    // all after a previous call -- indistinguishable from here whether the
-    // counters were reset without being written, or will show up folded into
-    // the next call instead. Reading it as "this window ran nothing" would
-    // silently under-report; failing is the only reading that does not guess.
+    // most likely means two dumps landed in the same millisecond: the
+    // filename is coverage-<pid>-<ms>-0.json, so the second write silently
+    // overwrites the first, and the overwritten name is already in `seen` --
+    // indistinguishable from here whether this window's own write was the one
+    // lost or folded into the next one instead. Reading it as "this window ran
+    // nothing" would silently under-report; failing is the only reading that
+    // does not guess.
     throw new AmbiguousCoverageError(
       `a coverage window produced no dump for the tracked process at all, where a ` +
         'window with nothing new is still expected to write one (with an empty ' +
-        'result). The trigger’s call may have been dropped before it reached disk ' +
-        '— see `CoverageDumpTrigger` — so there is no telling whether this window ' +
-        'really ran nothing or its dump went missing, and recording it as empty ' +
-        'either way would guess.',
+        'result). The most likely cause is a same-millisecond filename collision — ' +
+        'two dumps landing in the same coverage-<pid>-<ms>-0.json name, with the ' +
+        'second silently overwriting the first rather than the trigger genuinely ' +
+        'failing to write — but either way there is no telling whether this ' +
+        'window ran nothing or its dump went missing, and recording it as empty ' +
+        'would guess.',
     );
   }
   return dump;
@@ -339,8 +347,9 @@ function unionWithBoot(
 export class BootDeltaCoverage {
   private readonly dir: string;
   private readonly pid: number;
-  private readonly startedAt: number;
   private readonly trigger: CoverageDumpTrigger;
+  private readonly readBootMarker: () => Promise<string | undefined>;
+  private readonly writeBootMarker: (dumpName: string) => Promise<void>;
   private seen = new Set<string>();
   private boot: ScriptCoverage[] = [];
   private started = false;
@@ -351,27 +360,40 @@ export class BootDeltaCoverage {
   constructor(init: BootDeltaCoverageInit) {
     this.dir = init.dir;
     this.pid = init.pid;
-    this.startedAt = init.startedAt;
     this.trigger = init.trigger;
+    this.readBootMarker = init.readBootMarker;
+    this.writeBootMarker = init.writeBootMarker;
   }
 
   /**
    * Take the boot dump: everything compiled before the first window, un-run
-   * included. When the directory already holds a dump for this process — it was
-   * already running when this call was made — that earlier dump, not one this
-   * triggers now, is the true boot shape; triggering one of its own here would
-   * capture only a delta since that earlier one and read it as if nothing had
-   * run before it.
+   * included. If the target's own marker says a previous session already took
+   * one, that dump — not one this triggers now, which would only be a delta
+   * off it — is the true boot shape, and this reads it directly; a marker
+   * pointing at a dump the directory no longer has fails the recording rather
+   * than silently falling back to a fresh, partial capture.
    */
   async start(): Promise<void> {
     if (this.started) return;
     this.seen = dumpFiles(this.dir, true);
-    const prior = earliestPriorBoot(this.seen, this.pid, this.startedAt);
-    if (prior === undefined) {
-      this.boot = await this.nextDump();
+    const marker = await this.readBootMarker();
+    if (marker === undefined) {
+      const first = await this.nextDump();
+      this.boot = first.scripts;
+      await this.writeBootMarker(first.name);
     } else {
-      this.boot = readScripts(join(this.dir, prior));
-      this.lastDumpTs = dumpTimestamp(prior);
+      if (!this.seen.has(marker)) {
+        throw new AmbiguousCoverageError(
+          `this process already recorded a boot dump (${marker}) during an earlier ` +
+            "session, but the coverage directory no longer has it. The directory can't " +
+            'be cleared while a server is reused across recordings — the process ' +
+            'remembers it already booted, and without that file there is nothing to ' +
+            're-derive its boot shape from, so this fails rather than triggering a ' +
+            'fresh dump and reading a partial capture as if it were the whole thing.',
+        );
+      }
+      this.boot = readScripts(join(this.dir, marker));
+      this.lastDumpTs = maxOwnDumpTs(this.seen, this.pid);
     }
     this.started = true;
   }
@@ -388,10 +410,10 @@ export class BootDeltaCoverage {
       throw new Error('BootDeltaCoverage not started; call start() first');
     }
     const delta = await this.nextDump();
-    return unionWithBoot(this.boot, delta);
+    return unionWithBoot(this.boot, delta.scripts);
   }
 
-  private async nextDump(): Promise<ScriptCoverage[]> {
+  private async nextDump(): Promise<{ name: string; scripts: ScriptCoverage[] }> {
     if (this.inFlight) {
       throw new AmbiguousCoverageError(
         'a coverage window was still open when the next one started — two tests ' +
@@ -408,7 +430,7 @@ export class BootDeltaCoverage {
       this.seen = now;
       const dump = ownDump(added, this.pid);
       this.lastDumpTs = dumpTimestamp(dump);
-      return readScripts(join(this.dir, dump));
+      return { name: dump, scripts: readScripts(join(this.dir, dump)) };
     } finally {
       this.inFlight = false;
     }

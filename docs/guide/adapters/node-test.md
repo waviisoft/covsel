@@ -28,6 +28,14 @@ safe direction as everything else here. A dump this cannot attribute to the
 process being recorded -- a worker thread or child process that inherited the
 env var -- fails the recording rather than guessing.
 
+That crediting relies on the whole file having finished loading by the time
+its first test starts, which is true for an ordinary file but not one with a
+top-level `await` ahead of a later `test()` call -- node:test can start
+running earlier tests while such a file is still being evaluated, so code
+after that await is not necessarily credited to a test that runs before it
+finishes loading. This is not new to boot-delta mode; the same file's
+per-test CDP diffing has the identical gap.
+
 ## Setup
 
 Nothing to install beyond covsel -- the shim ships with the adapter and uses only

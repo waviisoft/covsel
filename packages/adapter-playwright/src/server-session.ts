@@ -23,7 +23,7 @@
  * The project opts in by starting its server with `--inspect`. Nothing of covsel
  * runs inside it either way.
  */
-import { BootDeltaCoverage, type ScriptCoverage } from '@covsel/core';
+import { BOOT_MARKER_KEY, BootDeltaCoverage, type ScriptCoverage } from '@covsel/core';
 
 /** What Node's inspector publishes about the target it will accept. */
 interface InspectorTarget {
@@ -289,12 +289,13 @@ export class RemoteBootDeltaSession {
     if (this.bootDelta) return;
     await this.link.connect();
     await this.link.post('Runtime.enable');
-    const { pid, startedAt } = await this.bootInfo();
+    const pid = await this.pid();
     const bootDelta = new BootDeltaCoverage({
       dir: this.coverageDir,
       pid,
-      startedAt,
       trigger: () => this.trigger(),
+      readBootMarker: () => this.readBootMarker(),
+      writeBootMarker: (dumpName) => this.writeBootMarker(dumpName),
     });
     await bootDelta.start();
     this.bootDelta = bootDelta;
@@ -311,35 +312,62 @@ export class RemoteBootDeltaSession {
     this.link.close();
   }
 
-  /**
-   * The target's own process id and an epoch-ms lower bound on when it started,
-   * read once, over the same connection so both describe the same process at
-   * the same moment. The pid tells the tracked process's own coverage dumps
-   * apart from a worker or child's in the same directory; the start time tells
-   * a dump the process already held before this session attached — left
-   * running by an earlier recording — apart from one from a different,
-   * long-dead process whose pid the OS happened to reuse.
-   */
-  private async bootInfo(): Promise<{ pid: number; startedAt: number }> {
+  /** The target's own process id, so a worker or child's dump in the same directory is told apart from it. */
+  private async pid(): Promise<number> {
     const result = (await this.link.post('Runtime.evaluate', {
-      expression:
-        '({ pid: process.pid, startedAt: Date.now() - process.uptime() * 1000 })',
+      expression: 'process.pid',
       returnByValue: true,
     })) as { result?: { value?: unknown } };
-    const value = result.result?.value as
-      { pid?: unknown; startedAt?: unknown } | undefined;
-    if (typeof value?.pid !== 'number' || typeof value.startedAt !== 'number') {
+    const value = result.result?.value;
+    if (typeof value !== 'number') {
       throw new Error(
-        "covsel could not read the server's process id and start time over the " +
-          'inspector (`Runtime.evaluate` returned something other than the ' +
-          'expected numbers). The boot-delta server window needs the pid to tell ' +
-          "the tracked process's own coverage dumps apart from a worker or child " +
-          'process that inherited the same `NODE_V8_COVERAGE` directory, and the ' +
-          'start time to tell an already-running process’s earlier boot dump ' +
-          'apart from a stale one left by a different process that reused its pid.',
+        "covsel could not read the server's process id over the inspector " +
+          '(`Runtime.evaluate` of `process.pid` returned something other than a ' +
+          'number). The boot-delta server window needs it to tell the tracked ' +
+          "process's own coverage dumps apart from a worker or child process " +
+          'that inherited the same `NODE_V8_COVERAGE` directory.',
       );
     }
-    return { pid: value.pid, startedAt: value.startedAt };
+    return value;
+  }
+
+  /**
+   * Reads the boot dump's filename back from the server's own memory — set by
+   * `writeBootMarker` the first time any session ever booted this process —
+   * rather than inferring "already booted" from the coverage directory or the
+   * clock, neither of which survive the server sleeping between recordings or
+   * the directory being cleared while it stays up.
+   */
+  private async readBootMarker(): Promise<string | undefined> {
+    const result = await this.evaluate(
+      `globalThis[Symbol.for(${JSON.stringify(BOOT_MARKER_KEY)})]`,
+    );
+    return typeof result === 'string' ? result : undefined;
+  }
+
+  private async writeBootMarker(dumpName: string): Promise<void> {
+    await this.evaluate(
+      `globalThis[Symbol.for(${JSON.stringify(BOOT_MARKER_KEY)})] = ${JSON.stringify(dumpName)}`,
+    );
+  }
+
+  /** One `Runtime.evaluate` call, surfacing the evaluated expression's own exception rather than a generic failure. */
+  private async evaluate(expression: string): Promise<unknown> {
+    const result = (await this.link.post('Runtime.evaluate', {
+      expression,
+      returnByValue: true,
+    })) as {
+      result?: { value?: unknown };
+      exceptionDetails?: { text?: string; exception?: { description?: string } };
+    };
+    const details = result.exceptionDetails;
+    if (details !== undefined) {
+      throw new Error(
+        'covsel could not evaluate an expression on the server over the inspector: ' +
+          `${details.exception?.description ?? details.text ?? 'the evaluated expression threw'}.`,
+      );
+    }
+    return result.result?.value;
   }
 
   /**
