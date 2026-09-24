@@ -1,5 +1,444 @@
 # @covsel/core
 
+## 0.2.0
+
+### Minor Changes
+
+- 5a63880: Add `@covsel/adapter-harness`: selection for a test harness in any language that
+  drives a Node application from outside -- over HTTP, a browser, an MCP client,
+  anything -- recorded from the application server's own inspector.
+
+  The test process is never Node, so neither the generic adapter's
+  `NODE_V8_COVERAGE` wrap nor any per-runner adapter can see what a Python harness,
+  a Go test binary, or a Gherkin runner in another language executes. This
+  adapter records the application code such a harness exercises **on the
+  server**, reusing the Playwright adapter's server-window mechanism --
+  now shared from `@covsel/core` as `RemoteCoverageSession`, so a second adapter
+  could reuse it without depending on another adapter, which this repo's own
+  conventions forbid.
+
+  Two ways to find test boundaries, both supported:
+
+  - **One invocation per test.** covsel runs the harness once per discovered id,
+    needing nothing from it. Slow -- every invocation pays the harness's own
+    start-up cost -- but works for a harness nobody has touched.
+  - **The boundary protocol, one invocation.** Set `harness.boundary`, and covsel
+    starts an HTTP server, sets `COVSEL_BOUNDARY`, and spawns the harness's plain,
+    unfiltered command. A cooperating harness posts `/begin` and `/end` around
+    each test and waits for covsel's acknowledgement, so the full run CI already
+    does can also be the recording -- the only way recording costs no extra
+    runner-minutes. The protocol is documented as a spec any language can
+    implement, with a reference client (`covsel_boundary.py`) in
+    `examples/harness-basic`.
+
+  covsel does not guess the harness's selection flag. `harness.run` names it as a
+  template appended to the base command, with `{id}` (repeated once per selected
+  test) or `{ids}` (one comma-joined token) marking where the id goes:
+
+  ```json
+  {
+    "adapter": "harness",
+    "harness": {
+      "run": "--only {id}",
+      "server": { "observes": ["src/server/**", "src/routes/**"] }
+    }
+  }
+  ```
+
+  An empty selection never runs the bare command -- core already refused that for
+  every adapter, and this one's `runSelection` does too, since nothing stops a
+  future caller from reaching it directly.
+
+  Fail-open rules carry over unchanged: a test the run never reported, a red test,
+  an unreachable inspector, or a boundary-protocol violation (two tests
+  overlapping, an `end` naming a test that was not open) all fail the whole
+  recording. A skipped test is recorded as covering nothing, never whatever the
+  server happened to do during its window. A test that never reports `/end` --
+  a stuck harness or application, not a slow test -- fails the recording after
+  `harness.boundary.testTimeoutMs` (ten minutes by default) rather than hanging
+  `covsel record` forever, and the watchdog now kills the harness's whole process
+  group, not only its direct child, so a harness that is itself a shell wrapper
+  or task runner cannot outlive it; per-test mode gets the same bound.
+
+  Two documented limits: server work that finishes after the response it belongs
+  to has already gone out is not attributed to any test unless the new, opt-in
+  `harness.server.settleMs` gives it a little longer to happen inside the window
+  -- a mitigation, not a guarantee, since covsel cannot detect such work from
+  outside the harness. And `{ids}` mode cannot express an id containing a comma
+  (it would be indistinguishable from separate ids once joined) -- `expand`
+  refuses eagerly and points at `{id}` mode instead, which has no such limit.
+  The boundary server also now requires a per-recording token (embedded in the
+  URL it hands the harness) and a JSON content type on both endpoints, so a
+  stray or forged request -- notably from a page a browser-driving harness loads,
+  which needs no CORS preflight for a `text/plain` POST -- cannot corrupt a
+  window's timing.
+
+  The harness's own code (step definitions, page objects, a spec pinned from
+  another repository) is not observed either, and a change there can change
+  what a test does with no application change at all. `@covsel/core`'s new
+  `inventory.command` (see its own changeset) gives that a narrower answer than
+  a blanket sentinel: a command that reports each scenario's id and an opaque
+  version lets covsel select just the scenario whose version moved, instead of
+  running the whole suite on every change to whatever defines it -- and this
+  adapter's recorders declare the new `Recorder.recordsInventoryIds`, so a
+  scenario that is _entirely_ inventory-defined -- not a file in this repository
+  at all, the ordinary shape for an acceptance suite pinned from elsewhere --
+  can be recorded and selected exactly like an ordinary test file, rather than
+  needing its own anchor file the way it would with any other adapter.
+  `examples/harness-basic`'s `spec:mul` scenario demonstrates it end to end: an
+  unchanged scenario skipped, one whose own version moved selected on its own,
+  a brand new id run, and a moved harness identity running the whole suite.
+
+  Three small additions elsewhere make this possible without coupling adapters
+  to each other or hardcoding a fixed CLI convention:
+
+  - `CovselConfig` gains `harness`, an object opaque to core and owned entirely by
+    `@covsel/adapter-harness` -- but still compared like every other field, so a
+    project that changes its selection flag or its server's `observes` without a
+    new recording does not go on trusting a map recorded under the old meaning of
+    either.
+  - `SelectionRunInit` (what a `runSelection` capability is called with) gains an
+    optional `config`, for an adapter whose native narrowing is itself
+    project-configurable rather than a fixed convention every project shares.
+    Every caller in this codebase now supplies it.
+  - `Recorder` gains `recordsInventoryIds`, declared only by a recorder whose
+    `record`/`recordRun` already treat every id as an opaque string handed to
+    its own runner rather than a path it reads or executes -- never automatic,
+    since asking a generic runner-wrapping adapter (or Vitest's, Jest's,
+    Mocha's) to record a virtual id would fail its underlying command rather
+    than skip it safely. `recordMap`/`selectAffected`/`covsel status` all
+    refused a suite with nothing matching `testGlobs` outright before this,
+    even with a real inventory to record from -- the gap the test inventory left
+    for whichever adapter actually needed it to decide how it closes.
+
+- 64d9b0c: Block-level server coverage, for a server started with `NODE_V8_COVERAGE`.
+
+  The Playwright adapter's server window and `InspectorObserver` could only ever
+  see block granularity for code a server loaded _during_ a test's own window.
+  Anything imported at boot — which for a typical server is nearly every route
+  and page module — kept only file granularity, because coverage collection
+  started fresh with each test and had no way to tell an un-run function from
+  one nobody had ever tracked.
+
+  Start the server with `NODE_V8_COVERAGE` pointed at a directory (alongside
+  `--inspect`, still), and pass the same directory as `coverageDir`:
+
+  ```ts
+  export const test = base.extend(
+    covselFixtures({
+      browser: { observes: ['src/**'] },
+      server: {
+        observes: ['server/**'],
+        inspectUrl: 'http://127.0.0.1:9229',
+        coverageDir: '/abs/path/to/.covsel/server-cov',
+      },
+    }),
+  );
+  ```
+
+  V8 then collects precise coverage from the moment the process starts, so the
+  first dump — taken before the first test — sees every function boot loaded,
+  including the ones that never ran, at a real zero count. That "boot" delta is
+  merged into every later test's own delta, keeping block granularity for
+  boot-loaded code the same way it already worked for code loaded on demand.
+  Leaving `coverageDir` unset keeps today's behavior: a session opened fresh
+  inside each test, file-granular for anything loaded at boot.
+
+  `InspectorObserver` picks the same mechanism up automatically, from
+  `process.env.NODE_V8_COVERAGE` on the process it is observing, with no
+  config: set the env var on a `covsel record` invocation and it takes the boot
+  dump before the first `startTest()` instead of diffing per-test CDP
+  snapshots.
+
+  A second recording can attach to a server an earlier one already booted —
+  `reuseExistingServer: true`, a retried worker, one worker per project — and
+  still get the same boot dump rather than mistaking its own first dump for a
+  fresh boot: the server remembers, in its own memory, that it already booted
+  and which dump proves it, so a later session reads that one back instead of
+  capturing a partial delta and crediting it as if nothing had run before it.
+  The coverage directory has to stay in place while a server is reused this
+  way; a directory cleared between recordings disagrees with what the server
+  remembers and fails the recording rather than silently rebooting.
+
+  A dump this cannot attribute to the tracked process's own main thread alone —
+  a worker thread or a child process that inherited `NODE_V8_COVERAGE`, or two
+  overlapping windows — fails the recording rather than guessing which test it
+  belongs to, the same standard the per-test session already held itself to.
+  That only catches a worker or child that actually writes a dump during the
+  recording, which a short-lived one does on exit; one that outlives the
+  recording never does, so its own execution goes unrecorded rather than
+  failing loudly — the same gap the fallback, and the per-test session before
+  it, already had for anything outside the process being observed.
+
+- 2c18c09: Credit a module a test imported but never called into, without re-selecting on
+  every signature change.
+
+  `istanbulCoverage` dropped any file whose report entry showed no statement,
+  function, or branch hit. A module of nothing but declarations — imports,
+  `interface`, `type`, `function` — executes nothing when it loads, so every
+  counter is zero and it was dropped. The test imported it, the module ran to
+  completion at load, and the map recorded no relationship at all.
+
+  That is the fail-closed direction, and it was reachable. A module gaining a
+  top-level side effect — registering something, patching a prototype, installing
+  a polyfill — changes what every importer does while selecting none of them. The
+  sharpest form is a module that starts throwing on import: the suite is broken and
+  `covsel affected` reports nothing to run.
+
+  The generic `NODE_V8_COVERAGE` recorder never behaved this way, since V8 reports
+  the script wrapper with a count. The two paths disagreeing about the same fixture
+  is what surfaced it.
+
+  **Parity alone would have cost most of the precision**, which is why this is more
+  than deleting a line. Crediting a loaded file with the module block means
+  crediting the whole top level with function bodies blanked — and that moves
+  whenever a signature is added, renamed, or re-typed, which is the common edit. On
+  this repository, a pull request that added functions to `commands.ts` selected 30
+  of 47 test files; under module-block crediting, every test importing the core
+  barrel would have been selected too, for a change that could not have altered any
+  of them.
+
+  So a file a test only imported is credited with a new `<load>` block instead: a
+  fingerprint over what loading actually does — the module specifiers it pulls in,
+  and its top-level executable statements. Not the bindings taken from each
+  specifier, which are resolved before anything runs; not function declarations,
+  interfaces, or type aliases, which do nothing until something invokes them.
+
+  The property that follows is the one that matters: **a module with no load-time
+  behaviour has an empty fingerprint, and an empty fingerprint never changes.** Its
+  importers stay unselected until someone gives it top-level behaviour, at which
+  point it changes exactly once and selects them. Adding, renaming, or re-signing
+  functions does not touch it. A re-export counts, because `export * from './x'`
+  loads that module just as an import does.
+
+  A file the test genuinely called into still gets the module block, because it
+  executes code there and a signature change can reach it.
+
+  This applies to both recording paths, since both funnel through
+  `selectExecutedBlocks` — so the generic recorder also stops over-selecting on
+  signature changes to modules its tests only imported.
+
+  `extractBlocks` now emits a `<load>` block for every file, after `<module>`, so
+  `blockHashesOf` and the change detection built on it pick it up with no schema
+  change.
+
+- 8d96eb6: Answer `covsel doctor` from Jest, Mocha, Cucumber and Playwright, not only Vitest.
+
+  `covsel doctor` compares covsel's idea of the suite against the runner's own, and
+  an adapter that cannot ask its runner leaves that check unmade — reported as
+  `unavailable`, which is honest but is not a guard. Four more adapters can now
+  answer, so four more projects get one:
+
+  | Runner     | Asked with                  |
+  | ---------- | --------------------------- |
+  | Jest       | `--listTests --json`        |
+  | Mocha      | `--dry-run --reporter json` |
+  | Cucumber   | `--dry-run --format json`   |
+  | Playwright | `--list --reporter=json`    |
+
+  `node --test` still has no listing mode and the generic wrap still cannot know
+  what it is wrapping, so both continue to omit the capability rather than guess.
+
+  The handling every listing shares now lives in `@covsel/core` — the spawn and its
+  timeout, the strict "this was not a listing" checks, the refusal to answer a
+  command that narrows the run, and the normalisation to repo-relative POSIX paths.
+  That handling is load-bearing rather than incidental: a listing that half-works is
+  worse than one that fails, because a partial set compares against covsel's full
+  discovery as drift and sends someone editing `testGlobs` over a question the
+  runner was never asked. Getting it identically right in five hand-written places
+  is how the five stop agreeing.
+
+  Each runner keeps what is genuinely its own. Mocha and Cucumber have no list mode
+  at all, so they answer from a dry run, which loads the files without executing
+  the tests; Mocha's enumerates _tests_, so a spec file holding none is invisible to
+  it — able to miss a file rather than invent one, which is the right way round.
+  Playwright reports paths relative to its own `rootDir` and nests its suites one
+  layer per project, so its specs are walked rather than read off the top level.
+
+  `listTests` is now also checked by `assertAdapter`, alongside `runSelection`, so
+  a third-party adapter shipping something that is not callable is rejected by name
+  up front instead of failing at the call.
+
+- 07f570a: Read `sourceGlobs` as the paths they name, not as basenames anywhere in the tree.
+
+  `makeMatcher` gives a slash-less glob a second chance against a path's basename
+  at any depth, so that a sentinel like `package.json` also catches a workspace's
+  own manifest. That reasoning holds for `sentinels`, where matching more runs more
+  tests. It did not hold for `sourceGlobs`, which shared the same matcher.
+
+  A project writing `sourceGlobs: ["index.js"]` to mean _the package entry point_
+  silently got every `index.js` in the repository — examples, fixtures, scripts —
+  recorded as covered source. Measured on `expressjs/express` with
+  `sourceGlobs: ["lib/**/*.js", "index.js"]`: a map reporting **29 covered sources
+  for a library that has 7**, the other 22 being example apps that ship to nobody.
+
+  No test was ever skipped by it — the effect is over-selection, which is the safe
+  direction. What it cost was the map as a diagnostic and part of the saving:
+  `covsel status` reporting 29 sources with no way to see where they came from, and
+  editing an example app selecting tests that cannot depend on it.
+
+  `sourceGlobs` are now matched literally, repo-relative. Write `"**/index.js"` for
+  the recursive reading — it already worked and says what it means.
+
+  `testGlobs` keeps the widening, and the asymmetry is the point: a source glob
+  matching too much costs precision, while a test glob matching too little leaves
+  the tests it missed unrun. `"*.test.js"` meaning "only at the root" would be a
+  skipped test rather than a wide map.
+
+  **This changes what an existing config means** for any project whose
+  `sourceGlobs` contain a slash-less pattern that was matching nested files. Their
+  next recording will credit fewer sources; a map recorded before the upgrade keeps
+  describing what it described, since the config value itself has not moved.
+
+  `covsel status` also gained a breakdown of covered sources by top-level
+  directory, biggest first, printed when they span more than one. The source count
+  is the number people read to judge whether their globs say what they meant, and
+  on its own it cannot answer that — the express map read `29` with nothing to say
+  where the other 22 came from. It is the second half of the same problem: a
+  project whose sources come from somewhere it did not intend can now see so at a
+  glance, whatever put them there. Also in `status --format json`, as
+  `coveredSourcesByDir`.
+
+- 3edd43b: Let a project name the tests its runner will not run, with `testIgnore`.
+
+  covsel finds test files by walking the tree with `testGlobs`. The runner it wraps
+  finds them by reading its own configuration. When the runner excludes something
+  -- a browser suite kept out of the default config and run by a second one -- the
+  two disagree, and covsel tries to record a test the runner refuses to run.
+
+  That is worse than it sounds, because a recording that fails writes **no map at
+  all**: a partial map cannot be trusted, so one unrunnable file stops the project
+  selecting anything, and every pull request falls open to a full run until someone
+  works out why. It is the failure covsel's own `covsel map` workflow hit the day
+  its Playwright conformance suite arrived.
+
+  - `testIgnore` is a glob list of test files to leave alone. They are never
+    discovered, never recorded, and never selected. It subtracts from `testGlobs`
+    rather than narrowing them, because "every test except this one" is not
+    something a glob set can say.
+  - It applies to discovery alone. A file named here is still a test file
+    everywhere that asks what a path _is_, so it cannot be credited as a source of
+    its own coverage.
+  - It wins over `alwaysRun`. The two claims conflict and only one can hold: a file
+    the runner will not run cannot be run whatever else the config asks for.
+  - `covsel status` reports how many files it removed, in both the report and
+    `--format json` (`ignoredTestCount`), because an exclusion that grows silently
+    is a suite shrinking without anyone deciding to. It is a claim that skips tests
+    when it is wrong, so it says itself back to you.
+  - It is part of the recorded configuration, so changing it forces a full run
+    rather than quietly selecting against a map recorded over a different set of
+    tests. The first run after upgrading is a full one for the same reason.
+
+  A project that names nothing discovers exactly what it did before.
+
+- 237fe2e: Let a project supply its own test inventory, for tests whose definitions live
+  outside this repository's diff.
+
+  covsel decides a test changed from a git diff of `testGlobs`, which assumes the
+  test's definition is a file this repository tracks. That breaks for a
+  spec-driven project pinning a scenario suite from another repository, a contract
+  test pulled from a broker, or any suite whose definitions live somewhere a diff
+  of this repository cannot see -- until now the only safe answer was to make the
+  pin file a sentinel, forcing a full run on every pin move however small.
+
+  - `inventory.command` names a shell command that prints covsel's own inventory
+    JSON: every test's id (a virtual `file`, since it need not be a path in this
+    repository, plus an optional `name`) and, where its owner tracks one, an
+    opaque `version`.
+  - An id new to the inventory, one whose version differs from the recorded one,
+    one with no version at all, and one with no entry recorded for it at all
+    (never observed, a recorder crash, a shard the map never saw) all run
+    regardless of the diff -- an id with no version is never read as unchanged.
+  - An id the map recorded that the inventory no longer names is dropped: that
+    alone forces nothing, though it can still be selected the ordinary way if
+    its recorded entry's own sources changed.
+  - The inventory's `source` -- the identity of whatever defines and executes
+    these tests -- is read the way a sentinel is: a change to it runs the whole
+    suite, because a different harness can change every test in it without moving
+    a single id or version.
+  - A command that fails, or whose output does not parse as covsel's inventory
+    shape, is a full run -- never an empty selection, the same reading an
+    unusable map already gets. So is running with `inventory` unset against a
+    map that was recorded with one set: the map claims a baseline this run
+    cannot check.
+  - The map records the inventory it was recorded against (schema v6 --
+    `MAP_SCHEMA_VERSION` bump, so every map recorded before this is re-recorded
+    once). `covsel status` and `covsel explain <path>` report how many of the
+    current inventory's ids are new or changed since the recording.
+
+  A project that sets no `inventory` is unaffected: added or changed test files
+  are still detected the ordinary way, from a diff of `testGlobs`.
+
+- cfc2565: Add `covsel doctor`, which compares the test files covsel discovers against the
+  files your runner itself collects and exits non-zero when the two disagree.
+
+  Your runner's `include`/`testMatch` and covsel's `testGlobs` are two lists that
+  have to say the same thing, and nothing kept them in step. The two ways they can
+  drift fail very differently. A file the runner collects and covsel does not
+  discover is recorded by nothing and selected by nothing: it runs today because
+  your full-run job runs it, and it stops running the day selection decides what
+  runs — on a green job, with no line anywhere saying the suite got smaller. A file
+  covsel discovers and the runner does not collect is the reverse, and is what
+  leaves a project with no map at all.
+
+  `covsel doctor -- <command>` reports both directions separately, naming the field
+  that repairs each: `testGlobs` to discover more, `testIgnore` to subtract a file
+  your runner deliberately excludes.
+
+  Asking the runner is a new optional adapter capability, `listTests`. The Vitest
+  adapter implements it; a runner with no listing mode omits it, and `covsel doctor`
+  then says the check did not run rather than reporting that nothing is wrong.
+  `--require` turns that into a non-zero exit. The answer is only ever compared
+  against covsel's own discovery, never used in place of it: a listing covsel
+  cannot verify would be a new way for the suite to shrink silently.
+
+### Patch Changes
+
+- 8f3646b: Say what a full-run reason measured the change against.
+
+  `sentinel changed: covsel.config.js` is about two states, and it named one. The
+  reader has to supply the other, and the obvious guess — _changed in my branch_ —
+  is wrong exactly when the message matters most. The window is the commit the map
+  records against the working tree, so on a pull request it includes everything
+  merged to the default branch since the recording. A branch that never touched
+  `covsel.config.js` gets told `covsel.config.js` changed, and the author's first
+  move is to search a diff that does not contain it.
+
+  The three reasons that name a changed file now end with the window they were
+  measured over:
+
+  ```diff
+  -sentinel changed: pnpm-lock.yaml
+  +sentinel changed: pnpm-lock.yaml (measured since the map was recorded at a1b2c3d4e5f6)
+  ```
+
+  With an explicit `--since`, no recording happened at that ref, so the sentence
+  changes to match: `(measured since origin/main)`.
+
+  The qualifier is appended rather than woven into the phrase. Weaving it splits
+  what a reader and a `grep` both key on — `sentinel changed: pnpm-lock.yaml`
+  becoming `sentinel changed since …: pnpm-lock.yaml` — which moves the answer to
+  make room for the note about how the question was asked. Trailing, the answer
+  stays where it has always been.
+
+  The reasons that describe the map itself (`no usable map recorded`, an
+  incompatible schema, a map with no entries) are unchanged, since none of them is
+  about a file having moved. Neither is the config-field comparison, which already
+  names its own two states.
+
+  `covsel status` and `covsel explain` now separate that reason with `--` instead
+  of wrapping it in parentheses, which is the separator `covsel affected` has
+  always used:
+
+  ```diff
+  -next:       full run (sentinel changed: package.json)
+  +next:       full run -- sentinel changed: package.json (measured since the map was recorded at a1b2c3d4e5f6)
+  ```
+
+  Brackets around a reason that now ends in brackets of its own read as
+  `full run (sentinel changed: package.json (measured since …))`. The three
+  commands that report the same verdict say it the same way instead.
+
 ## 0.1.0
 
 ### Minor Changes

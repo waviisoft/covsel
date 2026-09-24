@@ -1,6 +1,6 @@
 {
   "name": "@covsel/adapter-harness",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "covsel adapter for an external test harness, in any language, driving a Node application from outside — recorded from the app server's inspector",
   "license": "MIT",
   "author": "WAVIISoft, LLC",
