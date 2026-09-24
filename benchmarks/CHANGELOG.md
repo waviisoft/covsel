@@ -1,5 +1,20 @@
 # @covsel/benchmarks
 
+## 0.0.2
+
+### Patch Changes
+
+- Updated dependencies [5a63880]
+- Updated dependencies [64d9b0c]
+- Updated dependencies [2c18c09]
+- Updated dependencies [8d96eb6]
+- Updated dependencies [8f3646b]
+- Updated dependencies [07f570a]
+- Updated dependencies [3edd43b]
+- Updated dependencies [237fe2e]
+- Updated dependencies [cfc2565]
+  - @covsel/core@0.2.0
+
 ## 0.0.1
 
 ### Patch Changes

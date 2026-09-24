@@ -1,6 +1,6 @@
 {
   "name": "@covsel/adapter-node-test",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "node:test adapter for covsel: per-test selection via the inspector snapshot-diff observer",
   "license": "MIT",
   "author": "WAVIISoft, LLC",
