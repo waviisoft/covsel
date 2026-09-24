@@ -1,5 +1,7 @@
 import { Session } from 'node:inspector/promises';
+import { stopCoverage, takeCoverage } from 'node:v8';
 
+import { BOOT_MARKER_KEY, BootDeltaCoverage } from './boot-delta-coverage.js';
 import type { Observer, RawCoverage } from './interfaces.js';
 import type { ScriptCoverage } from './observer.js';
 import type { TestId } from './schema.js';
@@ -66,11 +68,46 @@ function deltaScripts(
  */
 export class InspectorObserver implements Observer {
   private session: Session | undefined;
+  private bootDelta: BootDeltaCoverage | undefined;
   private readonly baselines = new Map<string, Map<string, ScriptCoverage>>();
 
-  /** Connect the inspector session and begin precise coverage. Idempotent. */
+  /**
+   * Begin observing. Idempotent.
+   *
+   * When this process was started with `NODE_V8_COVERAGE`, V8 has been
+   * collecting precise coverage since bootstrap, so this takes the boot dump
+   * instead: block-level detail for whatever this process loaded before its
+   * first test, un-run functions included — the same mechanism the
+   * Playwright adapter's server window uses for a target started the same
+   * way. Without it, coverage has not been running before this call, and
+   * there is nothing to see boot with; this falls back to today's per-test
+   * inspector session, diffing a snapshot taken at each test's start against
+   * one taken at its end.
+   */
   async start(): Promise<void> {
-    if (this.session) return;
+    if (this.session ?? this.bootDelta) return;
+    const dir = process.env.NODE_V8_COVERAGE;
+    if (dir !== undefined && dir !== '') {
+      const bootDelta = new BootDeltaCoverage({
+        dir,
+        pid: process.pid,
+        trigger: async () => {
+          takeCoverage();
+        },
+        readBootMarker: async () => {
+          const marker = (globalThis as Record<symbol, unknown>)[
+            Symbol.for(BOOT_MARKER_KEY)
+          ];
+          return typeof marker === 'string' ? marker : undefined;
+        },
+        writeBootMarker: async (dumpName) => {
+          (globalThis as Record<symbol, unknown>)[Symbol.for(BOOT_MARKER_KEY)] = dumpName;
+        },
+      });
+      await bootDelta.start();
+      this.bootDelta = bootDelta;
+      return;
+    }
     const session = new Session();
     session.connect();
     await session.post('Profiler.enable');
@@ -92,10 +129,12 @@ export class InspectorObserver implements Observer {
 
   async startTest(id: TestId): Promise<void> {
     await this.start();
+    if (this.bootDelta) return; // coverage has run since boot; nothing to baseline
     this.baselines.set(keyOf(id), await this.snapshot());
   }
 
   async endTest(id: TestId): Promise<RawCoverage> {
+    if (this.bootDelta) return { scripts: await this.bootDelta.endTest() };
     const key = keyOf(id);
     const before = this.baselines.get(key) ?? new Map<string, ScriptCoverage>();
     const after = await this.snapshot();
@@ -103,8 +142,13 @@ export class InspectorObserver implements Observer {
     return { scripts: deltaScripts(before, after) };
   }
 
-  /** Stop precise coverage and disconnect the session. */
+  /** Stop coverage collection and disconnect. */
   async stop(): Promise<void> {
+    if (this.bootDelta) {
+      stopCoverage();
+      this.bootDelta = undefined;
+      return;
+    }
     if (!this.session) return;
     await this.session.post('Profiler.stopPreciseCoverage');
     this.session.disconnect();

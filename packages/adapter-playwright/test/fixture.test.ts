@@ -1,3 +1,4 @@
+import { type ChildProcess, spawn } from 'node:child_process';
 import {
   existsSync,
   mkdirSync,
@@ -13,7 +14,12 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { resolveConfig, toMapperConfig } from '@covsel/core';
 
 import { write } from '../../core/test/helpers/repo.js';
-import type { CovselFixtures, CovselFixturesOptions, PageLike } from '../src/fixture.js';
+import type {
+  CovselFixtures,
+  CovselFixturesOptions,
+  PageLike,
+  ServerSessionHandle,
+} from '../src/fixture.js';
 import type { ObservedTest } from '../src/protocol.js';
 
 /**
@@ -476,5 +482,244 @@ describe('the server window', () => {
     expect(browser && 'files' in browser ? browser.files.map((f) => f.file) : []).toEqual(
       ['src/cart.ts'],
     );
+  });
+});
+
+/**
+ * A route module a server imports at boot: some top-level work, two handlers a
+ * request can reach, and one nobody ever calls. Written into the temp project's
+ * own tree, not run from the test's own file, so the mapper resolves its `file://`
+ * URL back to a repo-relative source the way it would for a real server.
+ */
+const BOOT_DELTA_SERVER = `import { createServer } from 'node:http';
+
+function bootWork() {
+  return 'ran at boot';
+}
+bootWork();
+
+function neverCalled() {
+  return 'dead code';
+}
+
+function handleA() {
+  return 'a';
+}
+
+function handleB() {
+  return 'b';
+}
+
+const server = createServer((req, res) => {
+  const url = new URL(req.url, 'http://localhost');
+  if (url.pathname === '/a') handleA();
+  else if (url.pathname === '/b') handleB();
+  res.end('ok');
+});
+
+server.listen(0, '127.0.0.1', () => {
+  process.stdout.write(\`LISTENING \${server.address().port}\\n\`);
+});
+`;
+
+/**
+ * The boot-delta server window, against a real Node process: everything the
+ * legacy per-test session cannot see, because it never observes anything before
+ * its first test starts.
+ *
+ * This drives `covselServerSession` and `covselCoverage` directly, the way
+ * Playwright's own fixture resolution would — the worker fixture opened once,
+ * handed into two per-test fixture runs — because that dependency is exactly
+ * what makes boot-delta mode different from the legacy session opened fresh
+ * inside `openServer` above.
+ */
+describe('the server window in boot-delta mode', () => {
+  const children: ChildProcess[] = [];
+  afterEach(() => {
+    for (const child of children.splice(0)) child.kill();
+  });
+
+  /** Wait for a value a background handler will eventually set. */
+  async function waitFor<T>(get: () => T | undefined, label: string): Promise<T> {
+    const deadline = Date.now() + 20_000;
+    while (Date.now() < deadline) {
+      const value = get();
+      if (value !== undefined) return value;
+      await new Promise((resolve) => setTimeout(resolve, 50));
+    }
+    throw new Error(`timed out waiting for ${label}`);
+  }
+
+  /** A real Node process, its own route module, `--inspect` and `NODE_V8_COVERAGE` both open. */
+  async function bootDeltaServer(
+    cwd: string,
+  ): Promise<{ inspectUrl: string; httpUrl: string; coverageDir: string }> {
+    write(cwd, 'server/routes.mjs', BOOT_DELTA_SERVER);
+    const coverageDir = temp('covsel-pw-bootdelta-cov-');
+    const child = spawn(process.execPath, ['--inspect=0', 'server/routes.mjs'], {
+      cwd,
+      env: { ...process.env, NODE_V8_COVERAGE: coverageDir },
+      stdio: ['ignore', 'pipe', 'pipe'],
+    });
+    children.push(child);
+    let inspectPort: string | undefined;
+    let httpPort: string | undefined;
+    child.stderr.on('data', (chunk: Buffer) => {
+      const found = /ws:\/\/127\.0\.0\.1:(\d+)\//.exec(chunk.toString());
+      if (found?.[1] !== undefined) inspectPort = found[1];
+    });
+    child.stdout.on('data', (chunk: Buffer) => {
+      const found = /LISTENING (\d+)/.exec(chunk.toString());
+      if (found?.[1] !== undefined) httpPort = found[1];
+    });
+    const [port, httpP] = await Promise.all([
+      waitFor(() => inspectPort, 'the inspector port'),
+      waitFor(() => httpPort, 'the http port'),
+    ]);
+    return {
+      inspectUrl: `http://127.0.0.1:${port}`,
+      httpUrl: `http://127.0.0.1:${httpP}`,
+      coverageDir,
+    };
+  }
+
+  it('credits boot to both tests and keeps block granularity for the rest', async () => {
+    const cwd = temp('covsel-pw-cwd-');
+    const { inspectUrl, httpUrl, coverageDir } = await bootDeltaServer(cwd);
+    const outDir = temp('covsel-pw-out-');
+
+    const { covselFixtures } = await load({
+      COVSEL_OUT: outDir,
+      COVSEL_CWD: cwd,
+      COVSEL_BLOCKS: '1',
+      COVSEL_CONFIG: JSON.stringify(toMapperConfig(resolveConfig({}))),
+    });
+    const options: CovselFixturesOptions = {
+      browser: { observes: ['src/**'] },
+      server: { observes: ['server/**'], inspectUrl, coverageDir },
+    };
+    const fixtures = covselFixtures(options);
+    const serverEntry = fixtures.covselServerSession;
+    const coverageEntry = fixtures.covselCoverage;
+    if (serverEntry === undefined || coverageEntry === undefined) {
+      throw new Error('expected both fixtures during a recording');
+    }
+    const [serverFn] = serverEntry;
+    const [coverageFn] = coverageEntry;
+    const page = fakePage({ coverage: coverageOf([]) });
+
+    async function runOne(
+      name: string,
+      path: string,
+      handle: ServerSessionHandle | undefined,
+    ): Promise<void> {
+      await coverageFn(
+        { page, ...(handle !== undefined ? { covselServerSession: handle } : {}) },
+        async () => {
+          await fetch(`${httpUrl}${path}`);
+        },
+        { file: join(cwd, 'e2e/server.spec.ts'), titlePath: [name] },
+      );
+    }
+
+    await serverFn(
+      {},
+      async (handle) => {
+        await runOne('test-a', '/a', handle);
+        await runOne('test-b', '/b', handle);
+      },
+      { parallelIndex: 0 },
+    );
+
+    const [recordA, recordB] = written(outDir);
+    const serverWindowOf = (r: ObservedTest | undefined) => {
+      const w = r?.windows[1];
+      return w && 'blocks' in w ? w : undefined;
+    };
+    const a = serverWindowOf(recordA);
+    const b = serverWindowOf(recordB);
+    if (a === undefined || b === undefined) {
+      throw new Error(
+        `expected both server windows to succeed: ${JSON.stringify([recordA, recordB])}`,
+      );
+    }
+
+    expect(a.files.map((f) => f.file)).toEqual(['server/routes.mjs']);
+    expect(b.files.map((f) => f.file)).toEqual(['server/routes.mjs']);
+
+    // Boot ran before either test and is credited to both; each test's own
+    // handler is a block the other test does not have; the handler nobody
+    // calls contributes nothing to either -- which is what tells this apart
+    // from a file-granular fallback.
+    const aHashes = a.blocks.map((blk) => blk.blockHash);
+    const bHashes = b.blocks.map((blk) => blk.blockHash);
+    const common = aHashes.filter((h) => bHashes.includes(h));
+    expect(common.length).toBeGreaterThan(0);
+    expect(aHashes.filter((h) => !bHashes.includes(h))).toHaveLength(1);
+    expect(bHashes.filter((h) => !aHashes.includes(h))).toHaveLength(1);
+    expect(aHashes).toHaveLength(common.length + 1);
+    expect(bHashes).toHaveLength(common.length + 1);
+  }, 30_000);
+
+  it('fails the window when a second worker reuses the same boot-delta session', async () => {
+    const cwd = temp('covsel-pw-cwd-');
+    const { covselFixtures } = await load({
+      COVSEL_OUT: temp('covsel-pw-out-'),
+      COVSEL_CWD: cwd,
+      COVSEL_BLOCKS: '1',
+      COVSEL_CONFIG: JSON.stringify(toMapperConfig(resolveConfig({}))),
+    });
+    const options: CovselFixturesOptions = {
+      browser: { observes: ['src/**'] },
+      server: {
+        observes: ['server/**'],
+        inspectUrl: 'http://127.0.0.1:1',
+        coverageDir: '/tmp',
+      },
+    };
+    const [serverFn] = covselFixtures(options).covselServerSession ?? [];
+    if (serverFn === undefined) throw new Error('expected the worker fixture');
+
+    let handle: ServerSessionHandle | undefined;
+    await serverFn(
+      {},
+      async (h) => {
+        handle = h;
+      },
+      { parallelIndex: 1 },
+    );
+
+    expect(handle && 'failed' in handle ? handle.failed : '').toMatch(/--workers=1/);
+  });
+
+  it('fails the window when the boot-delta server could not be reached', async () => {
+    const cwd = temp('covsel-pw-cwd-');
+    const { covselFixtures } = await load({
+      COVSEL_OUT: temp('covsel-pw-out-'),
+      COVSEL_CWD: cwd,
+      COVSEL_BLOCKS: '1',
+      COVSEL_CONFIG: JSON.stringify(toMapperConfig(resolveConfig({}))),
+    });
+    const options: CovselFixturesOptions = {
+      browser: { observes: ['src/**'] },
+      server: {
+        observes: ['server/**'],
+        inspectUrl: 'http://127.0.0.1:1',
+        coverageDir: '/tmp',
+      },
+    };
+    const [serverFn] = covselFixtures(options).covselServerSession ?? [];
+    if (serverFn === undefined) throw new Error('expected the worker fixture');
+
+    let handle: ServerSessionHandle | undefined;
+    await serverFn(
+      {},
+      async (h) => {
+        handle = h;
+      },
+      { parallelIndex: 0 },
+    );
+
+    expect(handle && 'failed' in handle ? handle.failed : '').toMatch(/--inspect/);
   });
 });

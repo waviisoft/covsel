@@ -31,7 +31,9 @@ import { join, relative } from 'node:path';
 
 import {
   type MapperConfig,
+  RemoteBootDeltaSession,
   RemoteCoverageSession,
+  type ScriptCoverage,
   UnmappableScriptError,
   V8FileMapper,
 } from '@covsel/core';
@@ -89,6 +91,12 @@ export interface TestInfoLike {
   parallelIndex?: number;
 }
 
+/** Playwright's `workerInfo`, as much of it as this uses. */
+export interface WorkerInfoLike {
+  /** Which parallel slot this worker is; 0 when the run has only one. */
+  parallelIndex?: number;
+}
+
 /** Node's own default when `--inspect` is given no port. */
 const DEFAULT_INSPECT_URL = 'http://127.0.0.1:9229';
 
@@ -104,6 +112,23 @@ export interface CovselServerWindow {
    * default port, which `--inspect` with no argument uses.
    */
   readonly inspectUrl?: string;
+  /**
+   * Directory the server was started with `NODE_V8_COVERAGE` pointed at.
+   *
+   * When set, the server window is one boot dump plus one delta per test read
+   * from that directory over the inspector, instead of a fresh per-test
+   * session — which keeps block granularity for modules the server loads at
+   * boot, not just for ones a test loads on demand. Requires the server on
+   * Node ≥22.3 (`process.getBuiltinModule`) and a filesystem this process can
+   * read the directory from, true whenever the server and the recording share
+   * a host, which a local `webServer` always does.
+   *
+   * Left unset, the server window falls back to a session opened fresh inside
+   * each test and closed at its end, the same as before this existed — coverage
+   * was not running before that session started, so a module the server loaded
+   * at boot keeps only file granularity.
+   */
+  readonly coverageDir?: string;
 }
 
 /** What to observe, beyond the browser. */
@@ -130,16 +155,27 @@ export interface CovselFixturesOptions {
 /** The auto-fixture, in the tuple form `test.extend` takes. */
 export type CovselFixture = [
   (
-    args: { page: PageLike },
+    args: { page: PageLike; covselServerSession?: ServerSessionHandle },
     use: (value: void) => Promise<void>,
     testInfo: TestInfoLike,
   ) => Promise<void>,
   { auto: true },
 ];
 
-/** What `covselFixtures()` returns: the fixture, or nothing outside a recording. */
+/** The worker-scoped server session fixture, in the tuple form `test.extend` takes. */
+export type CovselServerSessionFixture = [
+  (
+    args: Record<string, never>,
+    use: (value: ServerSessionHandle | undefined) => Promise<void>,
+    workerInfo: WorkerInfoLike,
+  ) => Promise<void>,
+  { scope: 'worker' },
+];
+
+/** What `covselFixtures()` returns: the fixtures, or nothing outside a recording. */
 export interface CovselFixtures {
   covselCoverage?: CovselFixture;
+  covselServerSession?: CovselServerSessionFixture;
 }
 
 /**
@@ -210,19 +246,14 @@ async function openServer(
   }
 }
 
-/** Take what the server ran during the test, and map it back to its sources. */
-async function closeServer(
-  session: RemoteCoverageSession,
+/**
+ * Map what the server ran to its sources — the tail both server sessions share,
+ * once each has its own scripts in hand.
+ */
+async function mapServerScripts(
+  scripts: ScriptCoverage[],
   config: CovselServerWindow,
 ): Promise<{ window: ObservedWindow | FailedWindow; allowedUnmappable: string[] }> {
-  let scripts;
-  try {
-    scripts = await session.take();
-  } catch (err) {
-    return { window: { failed: reason(err) }, allowedUnmappable: [] };
-  } finally {
-    await session.close();
-  }
   const { mapper: m, wantBlocks } = mapper();
   const raw = { scripts };
   try {
@@ -243,6 +274,133 @@ async function closeServer(
       allowedUnmappable: m.takeAllowedUnmappable(),
     };
   }
+}
+
+/** Take what the server ran during the test, and map it back to its sources. */
+async function closeServer(
+  session: RemoteCoverageSession,
+  config: CovselServerWindow,
+): Promise<{ window: ObservedWindow | FailedWindow; allowedUnmappable: string[] }> {
+  let scripts: ScriptCoverage[];
+  try {
+    scripts = await session.take();
+  } catch (err) {
+    return { window: { failed: reason(err) }, allowedUnmappable: [] };
+  } finally {
+    await session.close();
+  }
+  return mapServerScripts(scripts, config);
+}
+
+/** This test's boot-delta server window: its own delta unioned with boot. */
+async function closeServerBootDelta(
+  session: RemoteBootDeltaSession,
+  config: CovselServerWindow,
+): Promise<{ window: ObservedWindow | FailedWindow; allowedUnmappable: string[] }> {
+  let scripts: ScriptCoverage[];
+  try {
+    scripts = await session.endTest();
+  } catch (err) {
+    return { window: { failed: reason(err) }, allowedUnmappable: [] };
+  }
+  return mapServerScripts(scripts, config);
+}
+
+/** What the worker-scoped boot-delta session fixture yields. */
+export type ServerSessionHandle =
+  { readonly session: RemoteBootDeltaSession } | FailedWindow;
+
+/** True when a handle carries a usable session rather than a failure. */
+function hasSession(
+  handle: ServerSessionHandle,
+): handle is { readonly session: RemoteBootDeltaSession } {
+  return 'session' in handle;
+}
+
+/**
+ * The server's boot-delta coverage session, opened once per worker rather than
+ * once per test.
+ *
+ * Boot has to be read before the first test, and every later window is a delta
+ * off the one collection this keeps running — reopening it per test the way the
+ * legacy session does would lose the running counters and reset `takeCoverage`'s
+ * baseline along with them. Only instantiated when `server.coverageDir` is
+ * configured; a recording without it, or without a server window at all, never
+ * pays for this beyond the one no-op below.
+ */
+function serverSessionFixture(
+  options: CovselFixturesOptions,
+): CovselServerSessionFixture {
+  return [
+    // Playwright inspects a fixture function's own source to work out which
+    // fixtures it depends on, and requires the first parameter to be written as
+    // an object destructuring pattern even when nothing is destructured from it
+    // -- a plain identifier here fails at fixture resolution, before any test
+    // runs.
+    // eslint-disable-next-line no-empty-pattern
+    async ({}, use, workerInfo): Promise<void> => {
+      const coverageDir = options.server?.coverageDir;
+      if (coverageDir === undefined) {
+        await use(undefined);
+        return;
+      }
+      if ((workerInfo.parallelIndex ?? 0) !== 0) {
+        await use({
+          failed:
+            'this worker is not the one the server window is collected from — the ' +
+            'boot-delta session opens once, against the one server process every ' +
+            'worker drives, and a second worker’s tests executing there at the ' +
+            'same time would be credited to whichever worker happened to read the ' +
+            'next dump. Record with `--workers=1`. Only the recording is serial; the ' +
+            'selected runs afterwards are not.',
+        });
+        return;
+      }
+      const session = new RemoteBootDeltaSession(
+        options.server?.inspectUrl ?? DEFAULT_INSPECT_URL,
+        coverageDir,
+      );
+      let handle: ServerSessionHandle;
+      try {
+        await session.start();
+        handle = { session };
+      } catch (err) {
+        await session.close();
+        handle = { failed: reason(err) };
+      }
+      await use(handle);
+      if (hasSession(handle)) await handle.session.close();
+    },
+    { scope: 'worker' },
+  ];
+}
+
+/** Resolve this test's server window, whichever mode produced its session. */
+async function resolveServerWindow(
+  config: CovselServerWindow,
+  legacy: { session: RemoteCoverageSession } | FailedWindow | undefined,
+  bootDelta: ServerSessionHandle | undefined,
+): Promise<{ window: ObservedWindow | FailedWindow; allowedUnmappable: string[] }> {
+  if (config.coverageDir !== undefined) {
+    if (bootDelta === undefined) {
+      return {
+        window: {
+          failed: 'the boot-delta server session was not opened for this worker',
+        },
+        allowedUnmappable: [],
+      };
+    }
+    if (!hasSession(bootDelta)) return { window: bootDelta, allowedUnmappable: [] };
+    return closeServerBootDelta(bootDelta.session, config);
+  }
+  if (legacy === undefined) {
+    return {
+      window: { failed: 'the server window was not opened for this test' },
+      allowedUnmappable: [],
+    };
+  }
+  if ('failed' in legacy) return { window: legacy, allowedUnmappable: [] };
+  return closeServer(legacy.session, config);
 }
 
 /**
@@ -271,10 +429,16 @@ export function covselFixtures(options: CovselFixturesOptions = {}): CovselFixtu
   const outDir = process.env[OUT_DIR_ENV];
   if (outDir === undefined || outDir === '') return {};
   const out = join(outDir, `${process.pid}.jsonl`);
+  // Boot-delta mode's session is worker-scoped and needs no per-test opening;
+  // legacy mode's is opened fresh inside each test, exactly as before this
+  // existed. Which one a given server window uses is decided once here, from
+  // configuration, rather than duplicated at every call site below.
+  const bootDeltaMode = options.server?.coverageDir !== undefined;
 
   return {
+    covselServerSession: serverSessionFixture(options),
     covselCoverage: [
-      async ({ page }, use, testInfo): Promise<void> => {
+      async ({ page, covselServerSession }, use, testInfo): Promise<void> => {
         // Counted rather than observed: a page that appears after this test
         // started is one whose first scripts had already run by the time covsel
         // could have attached to it, so what it executed is unknown rather than
@@ -302,10 +466,11 @@ export function covselFixtures(options: CovselFixturesOptions = {}): CovselFixtu
           }
         }
 
-        // Opened before the test body and taken after it, so what comes back is
-        // what this test made the server do.
-        const server =
-          options.server === undefined
+        // Legacy mode only: opened before the test body and taken after it, so
+        // what comes back is what this test made the server do. Boot-delta
+        // mode's session is already running, from `covselServerSession`.
+        const legacyServer =
+          options.server === undefined || bootDeltaMode
             ? undefined
             : await openServer(options.server, testInfo);
 
@@ -317,11 +482,12 @@ export function covselFixtures(options: CovselFixturesOptions = {}): CovselFixtu
             scoped(closed.window, options.browser?.observes),
           ];
           const allowedUnmappable = [...closed.allowedUnmappable];
-          if (server !== undefined && options.server !== undefined) {
-            const serverWindow =
-              'failed' in server
-                ? { window: server, allowedUnmappable: [] }
-                : await closeServer(server.session, options.server);
+          if (options.server !== undefined) {
+            const serverWindow = await resolveServerWindow(
+              options.server,
+              legacyServer,
+              covselServerSession,
+            );
             windows.push(serverWindow.window);
             allowedUnmappable.push(...serverWindow.allowedUnmappable);
           }

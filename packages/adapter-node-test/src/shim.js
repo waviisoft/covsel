@@ -34,7 +34,19 @@ const mapper = new V8FileMapper({
 
 const units = [];
 
-await observer.start();
+// No call to observer.start() here: this shim runs as a `--import` preload,
+// before the test file itself is loaded, so starting here would take the
+// boot dump too early and miss the test file's own top-level code (its
+// imports, its describe() registrations) -- crediting that code to only
+// whichever test's window happened to catch it instead of to all of them.
+// startTest() below already calls start() itself, and for an ordinary test
+// file node:test does not run its first beforeEach until the whole file has
+// finished loading, which is what makes that the right moment to take the
+// boot dump. A file with a top-level await ahead of a later test() call is
+// the exception: node:test can start running earlier tests while such a
+// file is still being evaluated, so code after that await is not
+// necessarily loaded yet by the first beforeEach either -- the same gap
+// this shim already had before boot-delta mode existed.
 
 beforeEach(async (t) => {
   await observer.startTest({ file, name: t.name });
