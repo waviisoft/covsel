@@ -24,7 +24,6 @@
  * without the harness's cooperation at all.
  */
 import { randomBytes } from 'node:crypto';
-import { spawn, type ChildProcess } from 'node:child_process';
 import { createServer, type IncomingMessage, type ServerResponse } from 'node:http';
 
 import {
@@ -38,6 +37,7 @@ import {
 
 import { DEFAULT_TEST_TIMEOUT_MS, type HarnessConfig } from './config.js';
 import { BOUNDARY_ENV, isBeginMessage, isEndMessage } from './protocol.js';
+import { spawnDetached } from './spawn-detached.js';
 
 export interface BoundaryRecorderInit {
   /** Base command, e.g. `['python3', 'harness/run.py', '--format', 'json']`. */
@@ -50,11 +50,6 @@ export interface BoundaryRecorderInit {
 /** Small, fixed, and unrelated to test duration -- this bounds only how long a
  * tiny JSON request body may take to arrive, not how long a test runs. */
 const BODY_TIMEOUT_MS = 30_000;
-
-/** How long a killed process group is given to exit on SIGTERM before the
- * escalation to SIGKILL -- long enough for ordinary cleanup, short enough
- * that a stuck harness's watchdog still resolves promptly. */
-const KILL_GRACE_MS = 2_000;
 
 function readJsonBody(req: IncomingMessage): Promise<unknown> {
   return new Promise((resolve, reject) => {
@@ -85,6 +80,15 @@ function readJsonBody(req: IncomingMessage): Promise<unknown> {
 }
 
 function respond(res: ServerResponse, status: number, body: unknown): void {
+  // A client that is already gone by the time a handler gets around to
+  // responding -- the harness process that sent this request can legitimately
+  // have exited already, mid-`await`, elsewhere in this same module -- turns
+  // a write here into a write to an already-destroyed socket. Node reports
+  // that asynchronously as an `error` event on `res`, and an `EventEmitter`
+  // with no listener for one throws instead of merely failing this one
+  // response, which would crash covsel's whole process over a reply nothing
+  // was left to receive. Swallowed here, once, rather than at every call site.
+  res.once('error', () => undefined);
   res.writeHead(status, { 'content-type': 'application/json' }).end(JSON.stringify(body));
 }
 
@@ -149,20 +153,23 @@ export function createBoundaryRecorder(init: BoundaryRecorderInit): Recorder {
       const units: RecordedUnit[] = [];
       const protocolErrors: string[] = [];
       let slot: Window | undefined;
-      let harness: ReturnType<typeof runHarness> | undefined;
+      let harness: ReturnType<typeof spawnDetached> | undefined;
 
       const httpServer = createServer((req, res) => {
         handleRequest(req, res).catch((err: unknown) => {
           if (!res.headersSent) {
-            respond(res, 400, {
-              error: err instanceof Error ? err.message : 'malformed request',
-            });
+            const message = err instanceof Error ? err.message : 'malformed request';
+            protocolErrors.push(`covsel rejected a request to ${req.url}: ${message}.`);
+            respond(res, 400, { error: message });
           }
         });
       });
 
       async function handleBegin(res: ServerResponse, body: unknown): Promise<void> {
         if (!isBeginMessage(body)) {
+          protocolErrors.push(
+            'covsel rejected a "begin" whose body was not {"id": string}.',
+          );
           respond(res, 400, { error: 'malformed /begin body, expected {"id": string}' });
           return;
         }
@@ -176,22 +183,44 @@ export function createBoundaryRecorder(init: BoundaryRecorderInit): Recorder {
           respond(res, 409, { error: `${slot.id} is still open` });
           return;
         }
+        const id = body.id;
         // Reserved synchronously, before the `await` below, so a second
         // `/begin` racing this one sees `slot !== undefined` immediately.
-        slot = { state: 'pending', id: body.id };
+        // Captured in its own variable too, not just read back through
+        // `slot`, so the identity check below tells "still my reservation"
+        // apart from "something else happens to have put a same-shaped
+        // pending entry back" -- see that check's own comment.
+        const reservation: Window = { state: 'pending', id };
+        slot = reservation;
         const session = new RemoteCoverageSession(server.inspectUrl, sessionInit);
         try {
           await session.start();
         } catch (err) {
-          slot = undefined;
+          if (slot === reservation) slot = undefined;
           protocolErrors.push(
-            `covsel could not open a coverage window for ${body.id}: ` +
+            `covsel could not open a coverage window for ${id}: ` +
               `${err instanceof Error ? err.message : String(err)}`,
           );
           respond(res, 502, { error: 'could not open a coverage window' });
           return;
         }
-        const id = body.id;
+        // The harness can exit (or be killed) while the `await` above was
+        // still in flight -- the outer `finally` then already cleared this
+        // exact reservation and, if the recording is failing at all, has
+        // already recorded why. Resurrecting a brand new open window and
+        // watchdog here regardless would leak both: nothing left running
+        // would ever call `/end` or time this one out, so it would sit open
+        // -- and its watchdog's timer with it -- for as long as the process
+        // lives. Checked by identity, not just state, so a *different*
+        // `/begin` that legitimately reserved the slot again in the
+        // meantime is never mistaken for this one.
+        if (slot !== reservation) {
+          await session.close().catch(() => undefined);
+          respond(res, 409, {
+            error: `covsel could not open ${id}'s coverage window in time -- the recording is already ending`,
+          });
+          return;
+        }
         // A safety net against a genuinely stuck harness or application, not a
         // budget for a slow test -- see `testTimeoutMs`'s own doc comment. Firing
         // it kills the harness so the recording can fail cleanly instead of
@@ -211,6 +240,10 @@ export function createBoundaryRecorder(init: BoundaryRecorderInit): Recorder {
 
       async function handleEnd(res: ServerResponse, body: unknown): Promise<void> {
         if (!isEndMessage(body)) {
+          protocolErrors.push(
+            'covsel rejected an "end" whose body was not ' +
+              '{"id": string, "outcome": "passed" | "failed" | "skipped"}.',
+          );
           respond(res, 400, {
             error: 'malformed /end body, expected {"id": string, "outcome": string}',
           });
@@ -293,10 +326,18 @@ export function createBoundaryRecorder(init: BoundaryRecorderInit): Recorder {
         res: ServerResponse,
       ): Promise<void> {
         if (req.method !== 'POST') {
+          protocolErrors.push(
+            `covsel rejected a ${req.method ?? 'unknown-method'} request to ` +
+              `${req.url} -- only POST is accepted.`,
+          );
           respond(res, 404, { error: 'not found' });
           return;
         }
         if (!hasJsonContentType(req)) {
+          protocolErrors.push(
+            `covsel rejected a request to ${req.url} for missing or wrong ` +
+              'content-type -- it must be application/json.',
+          );
           respond(res, 400, { error: 'expected content-type: application/json' });
           return;
         }
@@ -306,6 +347,10 @@ export function createBoundaryRecorder(init: BoundaryRecorderInit): Recorder {
         } else if (req.url === endPath) {
           await handleEnd(res, body);
         } else {
+          protocolErrors.push(
+            `covsel rejected a request to ${req.url} -- it did not carry this ` +
+              "recording's own token.",
+          );
           respond(res, 404, { error: 'not found' });
         }
       }
@@ -326,7 +371,7 @@ export function createBoundaryRecorder(init: BoundaryRecorderInit): Recorder {
       });
 
       try {
-        harness = runHarness(bin, rest, {
+        harness = spawnDetached(bin, rest, {
           cwd: init.cwd,
           env: { ...process.env, [BOUNDARY_ENV]: boundaryUrl },
         });
@@ -375,81 +420,6 @@ export function createBoundaryRecorder(init: BoundaryRecorderInit): Recorder {
     },
     unmappableAllowed(): string[] {
       return mapper.takeAllowedUnmappable();
-    },
-  };
-}
-
-interface HarnessRunResult {
-  status: number | null;
-  signal: NodeJS.Signals | null;
-  stdout: string;
-  stderr: string;
-}
-
-interface HarnessRun {
-  result: Promise<HarnessRunResult>;
-  /** Kill the harness -- used by a window's watchdog to fail a stuck recording
-   * cleanly instead of waiting on it forever. */
-  kill(): void;
-}
-
-/**
- * Send a signal to a process group, treating "it is already gone" as success
- * rather than an error -- the group can legitimately have exited between the
- * watchdog firing and this call, and that is not a failure to report.
- */
-function killProcessGroup(pid: number, signal: NodeJS.Signals): void {
-  try {
-    process.kill(-pid, signal);
-  } catch (err) {
-    if ((err as NodeJS.ErrnoException).code !== 'ESRCH') throw err;
-  }
-}
-
-/**
- * Spawned asynchronously rather than with `spawnSync`, because the boundary
- * server has to keep answering `/begin` and `/end` on this same event loop
- * while the harness runs -- a synchronous spawn would block it for the
- * duration of the whole suite, and every request the harness sent would queue
- * behind a process that is waiting for one of them to be answered.
- *
- * Spawned detached, in its own process group, so `kill()` can signal the
- * whole tree rather than only the direct child: a harness that is itself a
- * shell wrapper, a task runner, or anything else that forks its own children
- * would otherwise leave them running after `child.kill()`, and the watchdog
- * that is supposed to stop a stuck harness would not actually stop it.
- */
-function runHarness(
-  bin: string,
-  args: string[],
-  options: { cwd: string; env: NodeJS.ProcessEnv },
-): HarnessRun {
-  const child: ChildProcess = spawn(bin, args, {
-    ...options,
-    stdio: ['ignore', 'pipe', 'pipe'],
-    detached: true,
-  });
-  let stdout = '';
-  let stderr = '';
-  child.stdout?.on('data', (c: Buffer) => (stdout += c));
-  child.stderr?.on('data', (c: Buffer) => (stderr += c));
-  let escalate: NodeJS.Timeout | undefined;
-  const result = new Promise<HarnessRunResult>((resolve, reject) => {
-    child.on('error', reject);
-    child.on('close', (status, signal) => {
-      if (escalate !== undefined) clearTimeout(escalate);
-      resolve({ status, signal, stdout, stderr });
-    });
-  });
-  return {
-    result,
-    kill: () => {
-      const pid = child.pid;
-      // `spawn` itself failed to produce a process at all -- nothing to kill,
-      // and `child.on('error', ...)` above already reports that failure.
-      if (pid === undefined) return;
-      killProcessGroup(pid, 'SIGTERM');
-      escalate = setTimeout(() => killProcessGroup(pid, 'SIGKILL'), KILL_GRACE_MS);
     },
   };
 }

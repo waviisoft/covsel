@@ -82,11 +82,15 @@ and which one an adapter uses depends on the runner:
   [external harness](/guide/adapters/harness) adapter). A harness in any
   language — not Node at all — that drives your application over HTTP, a
   browser, or anything else has no process-level dump for covsel to read at
-  either boundary, and all the application code it exercises runs in your
-  **server**. Its adapter opens a per-test inspector session against that
-  server, either around one harness invocation per test or, for a harness
-  that speaks a small [boundary protocol](/guide/adapters/boundary-protocol),
-  around a single invocation that doubles as the recording.
+  either boundary. Its adapter opens a per-test inspector session against
+  your **server** and observes only what runs there, either around one
+  harness invocation per test or, for a harness that speaks a small
+  [boundary protocol](/guide/adapters/boundary-protocol), around a single
+  invocation that doubles as the recording. For a harness that drives a
+  browser, that is not all the application code the harness exercises: code
+  that runs only in the browser is never covered by this adapter at all, and
+  a project has to keep it out of the scope it declares -- see the harness
+  adapter's own page for how.
 
 All four produce the same thing: the set of source files a test executed. The
 rest of covsel is identical regardless of which path recorded the map.

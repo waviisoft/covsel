@@ -11,8 +11,6 @@
  * this recorder only ever connects to it, exactly as the Playwright adapter's
  * server window does, and never starts or stops it.
  */
-import { spawnSync } from 'node:child_process';
-
 import {
   type CovselConfig,
   type MapperConfig,
@@ -23,6 +21,7 @@ import {
 } from '@covsel/core';
 
 import { DEFAULT_TEST_TIMEOUT_MS, type HarnessConfig } from './config.js';
+import { spawnDetached } from './spawn-detached.js';
 
 function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
@@ -57,17 +56,33 @@ export function createPerTestRecorder(init: PerTestRecorderInit): Recorder {
       await session.start();
 
       const args = run.expand([testFile]);
-      // `timeout` is the only bound this mode has on a hanging harness
-      // process at all -- unlike the boundary protocol's own per-window
-      // watchdog, there is no cooperating harness here to time out a single
-      // test, only the whole invocation, so this is what stands between a
-      // stuck process and a `covsel record` that never returns.
-      const res = spawnSync(bin, [...rest, ...args], {
-        cwd: init.cwd,
-        encoding: 'utf8',
-        maxBuffer: 64 * 1024 * 1024,
-        timeout: testTimeoutMs,
+      // Spawned detached, in its own process group, exactly the way the
+      // boundary protocol's own harness invocation is -- a bare `spawnSync`
+      // `timeout` only signals the direct child, never anything it forks, so
+      // a harness that is itself a wrapper script or task runner would leave
+      // those children running (reparented to init) after the timeout fired.
+      // There is no cooperating harness in this mode to time out a single
+      // test against, only the whole invocation, so this timeout -- and the
+      // whole-process-group kill behind it -- is what stands between a stuck
+      // process and a `covsel record` that never returns.
+      const harness = spawnDetached(bin, [...rest, ...args], { cwd: init.cwd });
+      const timedOut = { current: false };
+      const watchdog = setTimeout(() => {
+        timedOut.current = true;
+        harness.kill();
+      }, testTimeoutMs);
+      // Awaited via `.catch` rather than a `try`/`catch` around the whole
+      // block, so a spawn failure (e.g. the binary does not exist) still
+      // falls through to take and close the coverage session below exactly
+      // as before -- a session opened for a test that never actually ran is
+      // still a session that has to be closed, not one left dangling because
+      // the error that explains why is thrown first.
+      let spawnError: unknown;
+      const outcome = await harness.result.catch((err: unknown) => {
+        spawnError = err;
+        return { status: null, signal: null, stdout: '', stderr: '' };
       });
+      clearTimeout(watchdog);
 
       // An explicit, opt-in mitigation for server work that outlives this
       // invocation's own exit -- see `settleMs`'s own doc comment on
@@ -83,14 +98,20 @@ export function createPerTestRecorder(init: PerTestRecorderInit): Recorder {
         await session.close();
       }
 
-      if (res.error) throw res.error;
-      if (res.status !== 0) {
-        const output = `${res.stdout ?? ''}${res.stderr ?? ''}`.trim();
+      if (spawnError) throw spawnError;
+      if (timedOut.current) {
         throw new Error(
-          `the harness exited with ${res.status ?? 'signal'} while running ` +
-            `${testFile}. A test that did not pass cannot be recorded: it may ` +
-            `have stopped before running the part of itself that its coverage ` +
-            `is really about.\n${output}`,
+          `${testFile} did not finish within ${testTimeoutMs}ms -- treating the ` +
+            'harness as stuck rather than waiting on it forever.',
+        );
+      }
+      if (outcome.status !== 0) {
+        const output = `${outcome.stdout}${outcome.stderr}`.trim();
+        throw new Error(
+          `the harness exited with ${outcome.status ?? `signal ${String(outcome.signal)}`} ` +
+            `while running ${testFile}. A test that did not pass cannot be recorded: ` +
+            `it may have stopped before running the part of itself that its ` +
+            `coverage is really about.\n${output}`,
         );
       }
 

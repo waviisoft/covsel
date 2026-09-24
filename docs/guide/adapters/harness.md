@@ -45,20 +45,40 @@ a static asset. Declaring such a path anyway (`"observes": ["src/**"]` when
 server) is not a smaller scope than the truth, it is a _wrong_ one: it claims
 the recording saw code it never ran through, so an edit there would show "no
 affected tests" instead of falling open to a full run — exactly the failure
-this adapter exists to avoid. Keep client-side code out of `observes`
-entirely, e.g.:
+this adapter exists to avoid.
+
+**A `!`-prefixed negation pattern does not exclude anything here.** The globs
+in `observes` (like every other glob list covsel reads) are matched with
+[picomatch](https://github.com/micromatch/picomatch) one pattern at a time,
+each one purely additive — there is no negation pass that removes a later
+match from an earlier one. `picomatch(["src/**", "!src/public/**"])` still
+matches `src/public/app.js`; the `!src/public/**` entry does not subtract
+anything from `src/**`; it is simply another (unlikely to ever match) pattern
+in the list. The only way to keep browser-executed code out of `observes` is
+to never write a pattern broad enough to reach it in the first place: list
+the server-side directories your `observes` actually needs by name, e.g. for
+a project shaped like
+
+```
+src/
+  server/      # runs on the server -- observe it
+  routes/      # runs on the server -- observe it
+  public/      # served to, and executed by, the browser -- never observe it
+```
 
 ```json
 {
   "harness": {
-    "server": { "observes": ["src/**"] }
+    "server": { "observes": ["src/server/**", "src/routes/**"] }
   }
 }
 ```
 
-with `src/public/**` (or wherever your project serves browser-executed code
-from) left out on purpose, so a change there always falls open to a full run
-rather than being silently — and wrongly — claimed as covered.
+`src/public/**` is simply never named, so a change there always falls open to
+a full run rather than being silently — and wrongly — claimed as covered.
+Structure `observes` this way for your own project: a list of non-overlapping
+directories or globs that only ever reach server-side code, never a broad
+pattern you then try to narrow with an exclusion.
 
 The harness's own code — step definitions, page objects, whatever drives the
 protocol — is not observed either. A change there can change what a test
@@ -82,7 +102,10 @@ with a placeholder for the id (or ids) to run.
   `--only a --only b`.
 - **`{ids}`** takes the whole selection as one comma-joined token instead:
   `--select a,b`. Use it for a harness whose flag takes a list rather than
-  repeating.
+  repeating. It cannot express an id that itself contains a comma — joined,
+  it would be indistinguishable from several separate ids — and refuses to
+  run rather than guess; a suite with an id shaped like that has to use
+  `{id}` instead, which has no such limit.
 
 Use exactly one of the two. An empty selection never runs the bare command —
 covsel refuses that before it ever reaches the adapter, because a bare
@@ -128,12 +151,16 @@ no anchor file at all and demonstrates every one of these end to end.
 ## Record → affected → run
 
 **A full run's completeness depends on your harness's own bare invocation.**
-When nothing is affected — or when a change forces a full run — covsel invokes
-the command you gave it with no `--only`/`--select` args at all, exactly as
-you would run it by hand; the adapter's own selection narrowing never enters
-into that path. That means a full run is only actually complete when your
-harness's _default_, no-arguments invocation runs every scenario your
-inventory names, including any virtual (non-file) ones — if your harness's
+When a change forces a full run, covsel invokes the command you gave it with
+no `--only`/`--select` args at all, exactly as you would run it by hand; the
+adapter's own selection narrowing never enters into that path. An empty
+selection is different and is not a full run: covsel refuses to invoke the
+bare command for it at all (see `harness.run`'s own note above), because
+running the unfiltered command for "nothing affected" would be a full run
+silently standing in for the opposite. That means a full run is only actually
+complete when your harness's _default_, no-arguments invocation runs every
+scenario your inventory names, including any virtual (non-file) ones — if
+your harness's
 bare command runs some narrower default suite, a "full run" covsel triggers
 would silently be narrower than the suite covsel believes it recorded.
 Confirm this about your own harness before relying on selection here.

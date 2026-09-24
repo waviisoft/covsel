@@ -1,11 +1,66 @@
 import { resolveConfig } from '@covsel/core';
+import { spawn } from 'node:child_process';
 import { readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { afterEach, describe, expect, it } from 'vitest';
 
 import { createBoundaryRecorder } from '../src/boundary-server.js';
 import { resolveHarnessConfig } from '../src/config.js';
+import { KILL_GRACE_MS } from '../src/spawn-detached.js';
 import { startInspectedApp, type InspectedApp } from './inspected-app.js';
+
+const DANGLING_HANDLE_FIXTURE = fileURLToPath(
+  new URL('./fixtures/dangling-handle-check.mjs', import.meta.url),
+);
+const PENDING_BEGIN_RACE_FIXTURE = fileURLToPath(
+  new URL('./fixtures/pending-begin-race-check.mjs', import.meta.url),
+);
+
+/** Spawn `fixture` with `[inspectUrl, cwd]` and resolve once it exits on its
+ * own, or reject once `boundMs` passes without that -- used by both
+ * dangling-handle checks below, which differ only in which fixture and what
+ * they additionally assert once the process has actually exited. */
+async function runDanglingHandleFixture(
+  fixture: string,
+  inspectUrl: string,
+  cwd: string,
+  boundMs: number,
+): Promise<{ code: number | null; stdout: string }> {
+  const child = spawn(process.execPath, [fixture, inspectUrl, cwd], {
+    stdio: ['ignore', 'pipe', 'pipe'],
+  });
+  let stdout = '';
+  child.stdout.on('data', (c: Buffer) => (stdout += c));
+  child.stderr.on('data', (c: Buffer) => {
+    // Surfaced for a human debugging a failure here, never asserted on --
+    // this check cares only about whether the process exits, not what it
+    // prints along the way.
+    process.stderr.write(c);
+  });
+  const exited = new Promise<number | null>((resolve) => {
+    child.on('close', (code) => resolve(code));
+  });
+  // A safety net for the test itself, not the assertion -- without it, a
+  // regression here would hang this test (and the whole suite) rather than
+  // failing it.
+  let killed = false;
+  const killer = setTimeout(() => {
+    killed = true;
+    child.kill('SIGKILL');
+  }, boundMs);
+  const start = Date.now();
+  const code = await exited;
+  clearTimeout(killer);
+  if (killed) {
+    throw new Error(
+      `${fixture} did not exit on its own within ${boundMs}ms -- something is ` +
+        'still keeping its process alive.',
+    );
+  }
+  expect(Date.now() - start).toBeLessThan(boundMs);
+  return { code, stdout };
+}
 
 /**
  * The fail-open properties the boundary protocol promises, exercised against
@@ -200,15 +255,49 @@ describe('boundary protocol fail-open behaviour', () => {
     });
     const start = Date.now();
     await expect(rec.recordRun!([])).rejects.toThrow(/still open/);
-    // Well under `testTimeoutMs`'s ten-minute default -- if the session the
-    // harness left open were never closed, nothing here would still prove a
-    // hang (the promise above already resolved), but this is the same shape
-    // of check `covsel record`'s own process exit would fail if a leaked
-    // handle kept the event loop alive.
+    // Well under `testTimeoutMs`'s ten-minute default. This alone does not
+    // prove the session was actually closed, only that *something* let this
+    // promise settle -- vitest's own process has plenty else keeping its
+    // event loop alive regardless, so a leaked handle right here would not
+    // show up as a hang. The check below, in a process with nothing else of
+    // its own to stay alive for, is what actually proves that.
     expect(Date.now() - start).toBeLessThan(5_000);
   }, 20_000);
 
-  it('rejects a request to a path without the recording’s own token', async () => {
+  it('leaves nothing dangling: a real process running recordRun exits on its own after the harness exits mid-test', async () => {
+    app = await startInspectedApp();
+    // A separate OS process, not vitest's own -- see `dangling-handle-check`'s
+    // own doc comment for why only this actually proves the B4 regression
+    // (`covsel record` never exiting) rather than a proxy for it.
+    const { code, stdout } = await runDanglingHandleFixture(
+      DANGLING_HANDLE_FIXTURE,
+      app.inspectUrl,
+      app.cwd,
+      8_000,
+    );
+    expect(stdout).toMatch(/recordRun rejected as expected/);
+    expect(code).toBe(0);
+  }, 20_000);
+
+  it('does not resurrect an open window and watchdog when the harness exits while /begin’s own coverage window is still opening', async () => {
+    app = await startInspectedApp();
+    // See `pending-begin-race-check.mjs`'s own doc comment for the race this
+    // reproduces and why it needs a real, separate process to prove: before
+    // the fix, `handleBegin` resurrects a live session and a fresh watchdog
+    // well after `recordRun` has already returned, and only a process with
+    // nothing else of its own to stay alive for can show that either one
+    // would keep it running.
+    const { code, stdout } = await runDanglingHandleFixture(
+      PENDING_BEGIN_RACE_FIXTURE,
+      app.inspectUrl,
+      app.cwd,
+      3_000,
+    );
+    expect(stdout).toMatch(/recordRun rejected as expected/);
+    expect(code).toBe(0);
+  }, 20_000);
+
+  it('rejects a request to a path without the recording’s own token, and fails the recording so the rejection is not silently lost', async () => {
     app = await startInspectedApp();
     const { harness, config: cfg } = recorder(app.inspectUrl);
     const rec = createBoundaryRecorder({
@@ -222,10 +311,15 @@ describe('boundary protocol fail-open behaviour', () => {
       config: cfg,
       harness,
     });
-    await expect(rec.recordRun!([])).resolves.toEqual([]);
+    // The request itself is still rejected (the harness script's own exit
+    // code, checked above via its process exit, proves that) -- but a
+    // request that carries no valid token at all is not something a
+    // cooperating harness ever legitimately sends, so it now names the whole
+    // recording untrustworthy rather than being silently swallowed.
+    await expect(rec.recordRun!([])).rejects.toThrow(/boundary protocol was violated/);
   }, 20_000);
 
-  it('rejects a request with the wrong content-type', async () => {
+  it('rejects a request with the wrong content-type, and fails the recording so the rejection is not silently lost', async () => {
     app = await startInspectedApp();
     const { harness, config: cfg } = recorder(app.inspectUrl);
     const rec = createBoundaryRecorder({
@@ -239,7 +333,7 @@ describe('boundary protocol fail-open behaviour', () => {
       config: cfg,
       harness,
     });
-    await expect(rec.recordRun!([])).resolves.toEqual([]);
+    await expect(rec.recordRun!([])).rejects.toThrow(/boundary protocol was violated/);
   }, 20_000);
 
   it('binds to loopback only, never 0.0.0.0 or an unbound host', async () => {
@@ -302,13 +396,22 @@ describe('boundary protocol fail-open behaviour', () => {
     const { harness, config: cfg } = recorder(app.inspectUrl);
     const rec = createBoundaryRecorder({
       command: miniHarness(
-        `${POST_HELPER}post('/end',{id:'not-open',outcome:'passed'});`,
+        `${POST_HELPER}` +
+          // "a" is begun and still open when "end" names a DIFFERENT test --
+          // the actual mismatch this test exists to exercise, not merely "no
+          // test was open at all" (which the "no matching open test" branch
+          // would also satisfy trivially, without ever exercising this path).
+          `post('/begin',{id:'a'})` +
+          `.then(()=>post('/end',{id:'b',outcome:'passed'}));`,
       ),
       cwd: app.cwd,
       config: cfg,
       harness,
     });
-    await expect(rec.recordRun!([])).rejects.toThrow(/no matching open test/);
+    // Names which test was actually open ("a"), not just that "b" did not
+    // match -- the whole point of a mismatch error over a generic "nothing
+    // was open" one.
+    await expect(rec.recordRun!([])).rejects.toThrow(/no matching open test \(a was\)/);
   }, 20_000);
 
   it('kills a stuck harness’s whole process tree, not just the process it spawned directly', async () => {
@@ -332,6 +435,39 @@ describe('boundary protocol fail-open behaviour', () => {
     await expect(rec.recordRun!([])).rejects.toThrow(/did not report "end"/);
     const childPid = Number(readFileSync(childPidFile, 'utf8'));
     await waitUntil(() => isProcessGone(childPid), 5_000);
+  }, 20_000);
+
+  it('escalates to SIGKILL, after KILL_GRACE_MS, when a stuck harness ignores SIGTERM', async () => {
+    app = await startInspectedApp();
+    const { harness, config: cfg } = recorder(app.inspectUrl, { testTimeoutMs: 200 });
+    const pidFile = join(app.cwd, 'harness.pid');
+    const rec = createBoundaryRecorder({
+      command: miniHarness(
+        `require('node:fs').writeFileSync(${JSON.stringify(pidFile)},String(process.pid));` +
+          // Traps SIGTERM and does nothing with it -- only SIGKILL can stop
+          // this process, so its actually exiting is only possible through
+          // the escalation this test exists to prove fires at all.
+          `process.on('SIGTERM',()=>{});` +
+          `${POST_HELPER}` +
+          `post('/begin',{id:'a'}).then(()=>setInterval(()=>{},1000));`,
+      ),
+      cwd: app.cwd,
+      config: cfg,
+      harness,
+    });
+    const start = Date.now();
+    await expect(rec.recordRun!([])).rejects.toThrow(/did not report "end"/);
+    const elapsed = Date.now() - start;
+    // `recordRun` cannot settle until the harness process actually exits --
+    // and with SIGTERM ignored, the only way that happens is the escalation
+    // to SIGKILL after `KILL_GRACE_MS`. Settling at all, and only after
+    // roughly that long, is what proves the escalation fired rather than the
+    // harness exiting some other way (which a SIGTERM-only kill, wrongly
+    // never escalating, would just hang on -- and this test's own 20s bound
+    // would catch that as a timeout instead).
+    expect(elapsed).toBeGreaterThanOrEqual(KILL_GRACE_MS);
+    const pid = Number(readFileSync(pidFile, 'utf8'));
+    expect(isProcessGone(pid)).toBe(true);
   }, 20_000);
 
   describe('settleMs', () => {

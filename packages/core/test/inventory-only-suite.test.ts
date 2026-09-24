@@ -18,11 +18,10 @@ import {
 /**
  * A suite that is entirely inventory-defined -- every scenario a virtual id,
  * none a file `testGlobs` matches at all. This is the ordinary shape for an
- * acceptance suite an external harness drives (covsel/covsel#122's own
- * motivating case), and the gap #126 explicitly left for that adapter to
- * close rather than guessing at: `recordMap`/`selectAffected` used to refuse
- * outright, before ever consulting the inventory, whenever `discoverTestFiles`
- * found nothing.
+ * acceptance suite an external harness drives, whose scenarios live in
+ * another repository or a test-management system rather than as files here:
+ * `recordMap`/`selectAffected` used to refuse outright, before ever
+ * consulting the inventory, whenever `discoverTestFiles` found nothing.
  *
  * The fix is gated behind `Recorder.recordsInventoryIds`, never automatic:
  * the last test below is the control proving a recorder that does not declare
