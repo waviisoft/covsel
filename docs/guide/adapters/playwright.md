@@ -226,6 +226,17 @@ a child Node process inherits `NODE_V8_COVERAGE` and writes its own dump into
 the same directory; there is no reliable way to say which test its execution
 belongs to, so a window that sees one fails rather than guessing.
 
+That guard only fires once such a dump actually appears — a short-lived child
+does, because Node writes one on exit even with nothing in it calling
+`takeCoverage()` itself. A worker or child that outlives the recording instead
+(a cluster worker, a long-running queue processor) never writes one during it,
+so there is nothing for the guard to see: whatever it executed is simply
+absent from every test's coverage, silently, the same gap the fallback below
+already has for a worker thread or child process it cannot reach over the
+inspector at all. Route server-side work the recording needs to see through
+the main thread, or accept that a long-lived worker's own code needs a
+recording of its own.
+
 If the server shells out to another Node process (spawning a worker, running a
 build step, whatever), keep that child off the recording's directory before
 spawning it:

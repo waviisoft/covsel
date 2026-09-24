@@ -1,5 +1,4 @@
 import { Session } from 'node:inspector/promises';
-import { setTimeout as delay } from 'node:timers/promises';
 import { stopCoverage, takeCoverage } from 'node:v8';
 
 import { BootDeltaCoverage } from './boot-delta-coverage.js';
@@ -92,12 +91,9 @@ export class InspectorObserver implements Observer {
       const bootDelta = new BootDeltaCoverage({
         dir,
         pid: process.pid,
+        startedAt: Date.now() - process.uptime() * 1000,
         trigger: async () => {
           takeCoverage();
-          // A call with no yield at all after the previous one can be
-          // silently dropped (see CoverageDumpTrigger) — a real timer is
-          // cheap insurance a test's own duration will always dwarf anyway.
-          await delay(0);
         },
       });
       await bootDelta.start();

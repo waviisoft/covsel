@@ -265,4 +265,67 @@ describe('the boot-delta server window', () => {
     await expect(session.start()).rejects.toThrow(/--inspect/);
     await session.close();
   });
+
+  it('fails at once on a call made after the server already died, not only one in flight', async () => {
+    // The close listener settling calls already in flight is only half the
+    // guard: without also clearing the socket, a call made *after* the crash
+    // -- this window's own trigger, not one racing the process's death --
+    // still thinks it is connected and waits out the full timeout on a send
+    // that is a silent no-op.
+    const { inspectUrl, coverageDir } = await bootDeltaProcess();
+    const session = new RemoteBootDeltaSession(inspectUrl, coverageDir, {
+      timeoutMs: 3_000,
+    });
+    await session.start();
+
+    for (const child of children.splice(0)) child.kill();
+    await new Promise((done) => setTimeout(done, 200)); // let the close event land
+
+    const started = Date.now();
+    await expect(session.endTest()).rejects.toThrow();
+    expect(Date.now() - started).toBeLessThan(2_000);
+  }, 30_000);
+
+  it('surfaces the evaluated exception, not a generic "no dump", when the trigger call itself throws', async () => {
+    // `process.getBuiltinModule` is undefined before Node 22.3, so calling
+    // `.takeCoverage()` on it throws inside the evaluated expression --
+    // reported by CDP as `exceptionDetails` on an otherwise-successful reply,
+    // not as a protocol error. Standing in for that unsupported version by
+    // overriding the same builtin to throw, rather than pinning an old Node
+    // binary in the test matrix.
+    const coverageDir = mkdtempSync(join(tmpdir(), 'covsel-pw-ss-bootdelta-'));
+    dirs.push(coverageDir);
+    const child = spawn(
+      process.execPath,
+      [
+        '--inspect=0',
+        '-e',
+        "process.getBuiltinModule = () => { throw new Error('simulated missing getBuiltinModule'); }; setInterval(() => {}, 1000);",
+      ],
+      {
+        env: { ...process.env, NODE_V8_COVERAGE: coverageDir },
+        stdio: ['ignore', 'ignore', 'pipe'],
+      },
+    );
+    children.push(child);
+    const port = await new Promise<string>((resolve, reject) => {
+      let seen = '';
+      const timer = setTimeout(
+        () => reject(new Error(`no inspector announced itself: ${seen}`)),
+        20_000,
+      );
+      child.stderr?.on('data', (chunk: Buffer) => {
+        seen += chunk.toString();
+        const found = /ws:\/\/127\.0\.0\.1:(\d+)\//.exec(seen);
+        if (found?.[1] !== undefined) {
+          clearTimeout(timer);
+          resolve(found[1]);
+        }
+      });
+    });
+
+    const session = new RemoteBootDeltaSession(`http://127.0.0.1:${port}`, coverageDir);
+    await expect(session.start()).rejects.toThrow(/simulated missing getBuiltinModule/);
+    await session.close();
+  }, 30_000);
 });

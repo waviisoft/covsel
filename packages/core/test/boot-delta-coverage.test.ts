@@ -79,10 +79,15 @@ describe('InspectorObserver in boot-delta mode', () => {
 
 describe('BootDeltaCoverage', () => {
   let dir: string;
-  let counter = 0;
 
+  // A real timestamp, not a synthetic one with a uniquifier tacked on: the
+  // class itself now waits for the clock to move past the previous dump
+  // before triggering the next (see the "waits for the clock" test below), so
+  // two dumps this helper writes for the same pid and thread never collide on
+  // one filename as long as both went through that wait -- and a tacked-on
+  // suffix would only corrupt the timestamp field the wait itself reads.
   function writeDump(pid: number, threadId: number, scripts: unknown[] = []): void {
-    const name = `coverage-${pid}-${Date.now()}${counter++}-${threadId}.json`;
+    const name = `coverage-${pid}-${Date.now()}-${threadId}.json`;
     writeFileSync(join(dir, name), JSON.stringify({ result: scripts }));
   }
 
@@ -99,6 +104,7 @@ describe('BootDeltaCoverage', () => {
     const bdc = new BootDeltaCoverage({
       dir,
       pid,
+      startedAt: 0,
       trigger: async () => {
         mkdirSync(dir, { recursive: true });
         writeDump(pid, 0, [{ url: 'file:///boot.js', functions: [] }]);
@@ -119,6 +125,7 @@ describe('BootDeltaCoverage', () => {
     const bdc = new BootDeltaCoverage({
       dir,
       pid,
+      startedAt: 0,
       trigger: async () => {
         calls++;
         if (calls === 1) {
@@ -148,6 +155,7 @@ describe('BootDeltaCoverage', () => {
     const bdc = new BootDeltaCoverage({
       dir,
       pid,
+      startedAt: 0,
       trigger: async () => {
         writeDump(pid, 0, scripts[call]);
         call++;
@@ -162,6 +170,84 @@ describe('BootDeltaCoverage', () => {
     // (calls 1 and 2) contributes exactly its own script, never the other's.
     expect(first.map((s) => s.url).sort()).toEqual(['file:///boot.js', 'file:///t1.js']);
     expect(second.map((s) => s.url).sort()).toEqual(['file:///boot.js', 'file:///t2.js']);
+  });
+
+  it('reads an already-existing dump as boot, rather than treating a delta off it as boot, when the process was already running', async () => {
+    // A previous recording already attached to this process and took its true
+    // boot dump before this session's own start() is ever called -- a server
+    // left running (`reuseExistingServer`, a retried worker) rather than one
+    // this session started itself.
+    dir = mkdtempSync(join(tmpdir(), 'covsel-bdc-'));
+    const pid = 500;
+    const url = 'file:///module.js';
+    const bootTs = Date.now();
+    writeFileSync(
+      join(dir, `coverage-${pid}-${bootTs}-0.json`),
+      JSON.stringify({
+        result: [
+          {
+            url,
+            functions: [
+              {
+                functionName: 'neverCalled',
+                ranges: [{ startOffset: 0, endOffset: 10, count: 0 }],
+              },
+              {
+                functionName: 'bootOnly',
+                ranges: [{ startOffset: 20, endOffset: 30, count: 1 }],
+              },
+            ],
+          },
+        ],
+      }),
+    );
+    const bdc = new BootDeltaCoverage({
+      dir,
+      pid,
+      startedAt: bootTs - 5,
+      // Nothing new happens in this session's own window -- every trigger call
+      // reports the script with no functions, the way a post-reset delta omits
+      // anything untouched.
+      trigger: async () => writeDump(pid, 0, [{ url, functions: [] }]),
+    });
+    await bdc.start();
+    const result = await bdc.endTest();
+
+    const [script] = result;
+    const byName = new Map(
+      script?.functions.map((fn) => [fn.functionName, fn.ranges[0]?.count]),
+    );
+    // `bootOnly` ran once, at the process's real startup, before this session
+    // ever attached -- it has to survive from the pre-existing dump start()
+    // read directly. Triggering a fresh "boot" dump of its own here would see
+    // only the delta off that earlier one (nothing, since nothing new ran) and
+    // lose it silently.
+    expect(byName.get('bootOnly')).toBe(1);
+    expect(byName.get('neverCalled')).toBe(0);
+  });
+
+  it('ignores a same-pid dump older than the process’s own start, rather than mistaking it for this process’s boot', async () => {
+    // The OS can reuse a pid after the process that held it exits. A leftover
+    // dump from that dead process, timestamped before the current one started,
+    // is not its boot shape -- reading it as such would credit every test with
+    // coverage from a process that no longer exists.
+    dir = mkdtempSync(join(tmpdir(), 'covsel-bdc-'));
+    const pid = 501;
+    const staleUrl = 'file:///dead-process-module.js';
+    writeFileSync(
+      join(dir, `coverage-${pid}-${Date.now() - 60_000}-0.json`),
+      JSON.stringify({ result: [{ url: staleUrl, functions: [] }] }),
+    );
+    const bdc = new BootDeltaCoverage({
+      dir,
+      pid,
+      startedAt: Date.now(),
+      trigger: async () => writeDump(pid, 0, [{ url: 'file:///boot.js', functions: [] }]),
+    });
+    await bdc.start();
+    const result = await bdc.endTest();
+    expect(result.map((s) => s.url)).not.toContain(staleUrl);
+    expect(result.map((s) => s.url)).toContain('file:///boot.js');
   });
 
   it('merges a window delta into boot’s shape for the same script, rather than handing both to the mapper as separate entries', async () => {
@@ -203,6 +289,7 @@ describe('BootDeltaCoverage', () => {
     const bdc = new BootDeltaCoverage({
       dir,
       pid,
+      startedAt: 0,
       trigger: async () => {
         writeDump(pid, 0, call === 0 ? bootScripts : deltaScripts);
         call++;
@@ -224,6 +311,66 @@ describe('BootDeltaCoverage', () => {
     expect(byName.get('calledLater')).toBe(1);
   });
 
+  it('credits a branch this window took even when V8 collapsed it into its enclosing range', async () => {
+    dir = mkdtempSync(join(tmpdir(), 'covsel-bdc-'));
+    const pid = 4242;
+    const url = 'file:///branchy.js';
+    // Boot's shape: a function with one branch inside it, neither run yet.
+    const bootScripts = [
+      {
+        url,
+        functions: [
+          {
+            functionName: 'withBranch',
+            ranges: [
+              { startOffset: 0, endOffset: 100, count: 0 },
+              { startOffset: 10, endOffset: 20, count: 0 }, // the branch
+            ],
+          },
+        ],
+      },
+    ];
+    // This window's delta: the function ran 3 times, and the branch ran every
+    // time too -- so V8 leaves the branch's own range out of the delta rather
+    // than repeat a count identical to the range around it, reporting only
+    // the enclosing range.
+    const deltaScripts = [
+      {
+        url,
+        functions: [
+          {
+            functionName: 'withBranch',
+            ranges: [{ startOffset: 0, endOffset: 100, count: 3 }],
+          },
+        ],
+      },
+    ];
+    let call = 0;
+    const bdc = new BootDeltaCoverage({
+      dir,
+      pid,
+      startedAt: 0,
+      trigger: async () => {
+        writeDump(pid, 0, call === 0 ? bootScripts : deltaScripts);
+        call++;
+      },
+    });
+    await bdc.start();
+    const merged = await bdc.endTest();
+
+    const [script] = merged;
+    const byRange = new Map(
+      script?.functions
+        .flatMap((fn) => fn.ranges)
+        .map((r) => [`${r.startOffset}:${r.endOffset}`, r.count]),
+    );
+    // A plain fallback to boot's own count for a range missing from the delta
+    // would read the branch as never taken this window -- 0, boot's count --
+    // when it in fact ran every time the function did.
+    expect(byRange.get('10:20')).toBe(3);
+    expect(byRange.get('0:100')).toBe(3);
+  });
+
   it('treats a window whose dump has an empty result as empty, not an error', async () => {
     dir = mkdtempSync(join(tmpdir(), 'covsel-bdc-'));
     const pid = 4242;
@@ -231,6 +378,7 @@ describe('BootDeltaCoverage', () => {
     const bdc = new BootDeltaCoverage({
       dir,
       pid,
+      startedAt: 0,
       trigger: async () => {
         calls++;
         if (calls === 1) writeDump(pid, 0, [{ url: 'file:///boot.js', functions: [] }]);
@@ -258,6 +406,7 @@ describe('BootDeltaCoverage', () => {
     const bdc = new BootDeltaCoverage({
       dir,
       pid,
+      startedAt: 0,
       trigger: async () => {
         calls++;
         if (calls === 1) writeDump(pid, 0, [{ url: 'file:///boot.js', functions: [] }]);
@@ -269,6 +418,24 @@ describe('BootDeltaCoverage', () => {
     await expect(bdc.endTest()).rejects.toThrow(AmbiguousCoverageError);
   });
 
+  it('fails start() itself, not only a later window, when the very first trigger produces no dump at all', async () => {
+    // The same dropped-write failure mode as above, but caught at the boot
+    // dump itself rather than at a window after it -- start()'s own trigger
+    // call goes through the same ownDump() check as endTest()'s.
+    dir = mkdtempSync(join(tmpdir(), 'covsel-bdc-'));
+    const pid = 4343;
+    const bdc = new BootDeltaCoverage({
+      dir,
+      pid,
+      startedAt: 0,
+      trigger: async () => {
+        // Dropped before it reached disk -- no dump at all, from the very
+        // first call this session ever makes.
+      },
+    });
+    await expect(bdc.start()).rejects.toThrow(AmbiguousCoverageError);
+  });
+
   it('fails a window that sees a dump from a pid it was not told to track', async () => {
     dir = mkdtempSync(join(tmpdir(), 'covsel-bdc-'));
     const tracked = 100;
@@ -277,6 +444,7 @@ describe('BootDeltaCoverage', () => {
     const bdc = new BootDeltaCoverage({
       dir,
       pid: tracked,
+      startedAt: 0,
       trigger: async () => {
         calls++;
         writeDump(tracked, 0, []);
@@ -295,6 +463,7 @@ describe('BootDeltaCoverage', () => {
     const bdc = new BootDeltaCoverage({
       dir,
       pid,
+      startedAt: 0,
       trigger: async () => {
         writeDump(pid, 0, []);
         writeDump(pid, 1, []); // e.g. a worker thread inside the tracked process
@@ -308,9 +477,19 @@ describe('BootDeltaCoverage', () => {
     const pid = 400;
     let calls = 0;
     let release: (() => void) | undefined;
+    // Signals once the *second* trigger call has actually begun waiting, not
+    // just been scheduled -- a window now waits for the clock to clear the
+    // previous dump's own millisecond before it triggers at all (see "waits
+    // for the clock" above), so this test cannot assume that call happens in
+    // the same synchronous turn as starting the window it belongs to.
+    let hanging: (() => void) | undefined;
+    const isHanging = new Promise<void>((resolve) => {
+      hanging = resolve;
+    });
     const bdc = new BootDeltaCoverage({
       dir,
       pid,
+      startedAt: 0,
       trigger: async () => {
         calls++;
         if (calls === 1) {
@@ -319,6 +498,7 @@ describe('BootDeltaCoverage', () => {
         }
         // The first endTest()'s trigger hangs, so a second one started before
         // it resolves cannot be told apart from a genuinely concurrent test.
+        hanging?.();
         await new Promise<void>((resolve) => {
           release = resolve;
         });
@@ -329,7 +509,38 @@ describe('BootDeltaCoverage', () => {
 
     const first = bdc.endTest();
     await expect(bdc.endTest()).rejects.toThrow(AmbiguousCoverageError);
+    await isHanging;
     release?.();
     await first;
+  });
+
+  it('waits for the clock to move past the previous dump before triggering the next, so two never collide on one filename', async () => {
+    // The real filename Node writes has no uniquifier beyond the millisecond
+    // -- coverage-<pid>-<timestamp-ms>-<threadId>.json -- so a trigger that
+    // fires again inside the same millisecond as the one before it would
+    // silently overwrite that dump rather than produce a second, distinct
+    // file. A trigger this fast and this synchronous is exactly the case a
+    // real timer yield is not reliable insurance against.
+    dir = mkdtempSync(join(tmpdir(), 'covsel-bdc-'));
+    const pid = 700;
+    const seen: number[] = [];
+    const bdc = new BootDeltaCoverage({
+      dir,
+      pid,
+      startedAt: 0,
+      trigger: async () => {
+        const ts = Date.now();
+        seen.push(ts);
+        writeFileSync(
+          join(dir, `coverage-${pid}-${ts}-0.json`),
+          JSON.stringify({ result: [] }),
+        );
+      },
+    });
+    await bdc.start();
+    await bdc.endTest();
+    await bdc.endTest();
+
+    expect(new Set(seen).size).toBe(3);
   });
 });

@@ -98,6 +98,54 @@ describe('node:test per-test recording', () => {
   });
 });
 
+describe('node:test per-test recording, boot + delta mode', () => {
+  it('credits a test file’s own top-level code to every test in it, not just the first', async () => {
+    const coverageDir = mkdtempSync(join(tmpdir(), 'covsel-nodetest-cov-'));
+    const bootDeltaCwd = mkdtempSync(join(tmpdir(), 'covsel-pertest-bootdelta-'));
+    try {
+      const files: Record<string, string> = {
+        'src/sideeffect.mjs': "export const loaded = 'yes';\n",
+        'suite.test.mjs': [
+          "import assert from 'node:assert/strict';",
+          "import { test } from 'node:test';",
+          "import { loaded } from './src/sideeffect.mjs';",
+          "test('first', () => {",
+          "  assert.equal(loaded, 'yes');",
+          '});',
+          "test('second', () => {",
+          "  assert.equal(loaded, 'yes');",
+          '});',
+          '',
+        ].join('\n'),
+        'package.json':
+          '{\n  "name": "fixture",\n  "private": true,\n  "type": "module"\n}\n',
+      };
+      for (const [rel, content] of Object.entries(files)) {
+        const abs = join(bootDeltaCwd, rel);
+        mkdirSync(join(abs, '..'), { recursive: true });
+        writeFileSync(abs, content);
+      }
+
+      const recorder = createNodeTestRecorder({
+        command: ['node', '--test'],
+        cwd: bootDeltaCwd,
+        config,
+        env: { NODE_V8_COVERAGE: coverageDir },
+      });
+      if (typeof recorder.record !== 'function') throw new Error('expected record()');
+      const units = await recorder.record('suite.test.mjs');
+
+      const first = units.find((u) => u.test.name === 'first');
+      const second = units.find((u) => u.test.name === 'second');
+      expect(first?.files.map((f) => f.file)).toContain('src/sideeffect.mjs');
+      expect(second?.files.map((f) => f.file)).toContain('src/sideeffect.mjs');
+    } finally {
+      rmSync(coverageDir, { recursive: true, force: true });
+      rmSync(bootDeltaCwd, { recursive: true, force: true });
+    }
+  }, 30_000);
+});
+
 describe('node:test per-test selection', () => {
   it('editing one source selects only the test that ran it', async () => {
     write('src/math.mjs', `${MATH}// edit\n`);

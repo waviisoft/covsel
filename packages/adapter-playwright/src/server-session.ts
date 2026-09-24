@@ -171,8 +171,13 @@ class InspectorLink {
     // closed one is a no-op -- so without this every call in flight, and every
     // call after it, waits out the full timeout. The window fails either way;
     // this is the difference between failing at once and a recording that looks
-    // hung for as many timeouts as there are tests left.
+    // hung for as many timeouts as there are tests left. Clearing `this.socket`
+    // here, not only in the explicit `close()`, is what makes a call *after* the
+    // crash fail at once too -- `connected` and the `undefined` check in `post`
+    // both read it, and a server restart drops the socket without either of
+    // this session's own callers ever calling `close()` themselves.
     socket.addEventListener('close', () => {
+      this.socket = undefined;
       this.settleAll(new Error('the inspector connection closed'));
     });
     await new Promise<void>((resolve, reject) => {
@@ -284,10 +289,11 @@ export class RemoteBootDeltaSession {
     if (this.bootDelta) return;
     await this.link.connect();
     await this.link.post('Runtime.enable');
-    const pid = await this.pid();
+    const { pid, startedAt } = await this.bootInfo();
     const bootDelta = new BootDeltaCoverage({
       dir: this.coverageDir,
       pid,
+      startedAt,
       trigger: () => this.trigger(),
     });
     await bootDelta.start();
@@ -305,35 +311,61 @@ export class RemoteBootDeltaSession {
     this.link.close();
   }
 
-  /** The target's own process id, read once, so a worker or child's dump in the same directory is told apart from it. */
-  private async pid(): Promise<number> {
+  /**
+   * The target's own process id and an epoch-ms lower bound on when it started,
+   * read once, over the same connection so both describe the same process at
+   * the same moment. The pid tells the tracked process's own coverage dumps
+   * apart from a worker or child's in the same directory; the start time tells
+   * a dump the process already held before this session attached — left
+   * running by an earlier recording — apart from one from a different,
+   * long-dead process whose pid the OS happened to reuse.
+   */
+  private async bootInfo(): Promise<{ pid: number; startedAt: number }> {
     const result = (await this.link.post('Runtime.evaluate', {
-      expression: 'process.pid',
+      expression:
+        '({ pid: process.pid, startedAt: Date.now() - process.uptime() * 1000 })',
       returnByValue: true,
     })) as { result?: { value?: unknown } };
-    const value = result.result?.value;
-    if (typeof value !== 'number') {
+    const value = result.result?.value as
+      { pid?: unknown; startedAt?: unknown } | undefined;
+    if (typeof value?.pid !== 'number' || typeof value.startedAt !== 'number') {
       throw new Error(
-        "covsel could not read the server's process id over the inspector " +
-          '(`Runtime.evaluate` of `process.pid` returned something other than a ' +
-          'number). The boot-delta server window needs it to tell the tracked ' +
-          "process's own coverage dumps apart from a worker or child process " +
-          'that inherited the same `NODE_V8_COVERAGE` directory.',
+        "covsel could not read the server's process id and start time over the " +
+          'inspector (`Runtime.evaluate` returned something other than the ' +
+          'expected numbers). The boot-delta server window needs the pid to tell ' +
+          "the tracked process's own coverage dumps apart from a worker or child " +
+          'process that inherited the same `NODE_V8_COVERAGE` directory, and the ' +
+          'start time to tell an already-running process’s earlier boot dump ' +
+          'apart from a stale one left by a different process that reused its pid.',
       );
     }
-    return value;
+    return { pid: value.pid, startedAt: value.startedAt };
   }
 
   /**
    * `process.getBuiltinModule` rather than `require`/`import`: the server may be
    * ESM or CJS, and this has to work in either without depending on what the
    * evaluated expression's scope happens to have in it. Requires the server on
-   * Node >=22.3.
+   * Node >=22.3 -- on an older one `getBuiltinModule` is `undefined` and calling
+   * `.takeCoverage()` on it throws inside the evaluated expression itself,
+   * which CDP reports as `exceptionDetails` on an otherwise-successful reply
+   * rather than as a protocol-level error `post` would already surface, so this
+   * has to check for it explicitly rather than assume a resolved call means the
+   * dump was actually taken.
    */
   private async trigger(): Promise<void> {
-    await this.link.post('Runtime.evaluate', {
+    const result = (await this.link.post('Runtime.evaluate', {
       expression: "process.getBuiltinModule('node:v8').takeCoverage()",
       returnByValue: true,
-    });
+    })) as { exceptionDetails?: { text?: string; exception?: { description?: string } } };
+    const details = result.exceptionDetails;
+    if (details !== undefined) {
+      throw new Error(
+        'covsel could not trigger a coverage dump on the server over the inspector: ' +
+          `${details.exception?.description ?? details.text ?? 'the evaluated expression threw'}. ` +
+          '`process.getBuiltinModule` needs the server on Node >=22.3 -- an older ' +
+          'version is the most likely cause of an exception here.',
+      );
+    }
   }
 }

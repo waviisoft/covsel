@@ -46,3 +46,8 @@ A dump this cannot attribute to the tracked process's own main thread alone —
 a worker thread or a child process that inherited `NODE_V8_COVERAGE`, or two
 overlapping windows — fails the recording rather than guessing which test it
 belongs to, the same standard the per-test session already held itself to.
+That only catches a worker or child that actually writes a dump during the
+recording, which a short-lived one does on exit; one that outlives the
+recording never does, so its own execution goes unrecorded rather than
+failing loudly — the same gap the fallback, and the per-test session before
+it, already had for anything outside the process being observed.
