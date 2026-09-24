@@ -89,7 +89,7 @@ describe('per-test recording fail-open behaviour', () => {
     const rec = createPerTestRecorder({
       // Never exits on its own -- there is no cooperating harness in this
       // mode to time a single test out against, only the whole invocation,
-      // so `spawnSync`'s own `timeout` is the only thing that can stop this.
+      // so `harness.testTimeoutMs` is the only thing that can stop this.
       command: [process.execPath, '-e', 'setInterval(() => {}, 1000)', '--'],
       cwd: app.cwd,
       config,

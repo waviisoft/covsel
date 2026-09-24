@@ -12,9 +12,9 @@ anything -- recorded from the application server's own inspector.
 
 The test process is never Node, so neither the generic adapter's
 `NODE_V8_COVERAGE` wrap nor any per-runner adapter can see what a Python harness,
-a Go test binary, or a Gherkin runner in another language executes. All the
-application code such a harness exercises runs in the **server**, and this
-adapter records that, reusing the Playwright adapter's server-window mechanism --
+a Go test binary, or a Gherkin runner in another language executes. This
+adapter records the application code such a harness exercises **on the
+server**, reusing the Playwright adapter's server-window mechanism --
 now shared from `@covsel/core` as `RemoteCoverageSession`, so a second adapter
 could reuse it without depending on another adapter, which this repo's own
 conventions forbid.
@@ -42,7 +42,7 @@ test) or `{ids}` (one comma-joined token) marking where the id goes:
   "adapter": "harness",
   "harness": {
     "run": "--only {id}",
-    "server": { "observes": ["src/**"] }
+    "server": { "observes": ["src/server/**", "src/routes/**"] }
   }
 }
 ```
@@ -110,5 +110,5 @@ to each other or hardcoding a fixed CLI convention:
   Mocha's) to record a virtual id would fail its underlying command rather
   than skip it safely. `recordMap`/`selectAffected`/`covsel status` all
   refused a suite with nothing matching `testGlobs` outright before this,
-  even with a real inventory to record from -- the gap #126 explicitly left
+  even with a real inventory to record from -- the gap the test inventory left
   for whichever adapter actually needed it to decide how it closes.
